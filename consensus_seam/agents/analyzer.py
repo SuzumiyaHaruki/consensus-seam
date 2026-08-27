@@ -14,6 +14,8 @@ from ..tools import analyzer_tools
 
 
 class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
+    """Agent 1：只读发现能力、边界、缺口和代码证据。"""
+
     agent_name = "analyzer"
     prompt_name = "agent1.md"
     output_type = CapabilityReport
@@ -35,6 +37,8 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
         feedback: dict[str, Any] | None = None,
         invocation_id: str | None = None,
     ) -> CapabilityReport:
+        # target 是机器关联键，不能扩展为“仓库名 + 说明”。放进 post-
+        # validation 后，名称错误会触发 attempt2，而不是直接终止运行。
         def validate_target(report: CapabilityReport) -> None:
             if report.target != project.manifest.name:
                 raise ValueError(
@@ -42,6 +46,8 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
                     f"project {project.manifest.name!r}"
                 )
 
+        # agent_manifest 已剔除隐藏命令、fixture 和实验标签；Analyzer 只获得
+        # 通用能力规范、协议简介和目标源码的只读工具。
         payload = {
             "project": project.agent_manifest(),
             "resolved_repository": str(project.repository),

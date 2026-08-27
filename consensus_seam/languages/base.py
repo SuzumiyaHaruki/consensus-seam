@@ -12,6 +12,12 @@ from ..models import CommandExecution
 
 
 class LanguageBackend(ABC):
+    """目标语言适配层。
+
+    Workflow/Verifier 只依赖这些方法；当前 v0.1 仅提供 GoBackend。公共命令
+    执行放在基类，符号、格式化等语言语义由子类实现。
+    """
+
     @abstractmethod
     def build(self, repo: Path, command: str) -> CommandExecution:
         raise NotImplementedError
@@ -39,7 +45,11 @@ class LanguageBackend(ABC):
         *,
         timeout_seconds: float = 600,
     ) -> CommandExecution:
-        """Execute a manifest command without an implicit shell."""
+        """不经过 shell 执行 manifest 命令并捕获结构化结果。
+
+        shlex 只把受版本控制的字符串拆成 argv，不支持管道、重定向或命令
+        替换。缺少可执行文件和超时也转换为普通返回码供 Verifier 路由。
+        """
 
         started = time.monotonic()
         try:

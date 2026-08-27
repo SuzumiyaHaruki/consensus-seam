@@ -13,6 +13,8 @@ from .capability import CapabilityCheck
 
 
 class DeterministicVerifier:
+    """用真实命令裁决候选行为，而不是相信 Agent 的自述。"""
+
     def __init__(self, backend: LanguageBackend) -> None:
         self.backend = backend
 
@@ -24,9 +26,12 @@ class DeterministicVerifier:
         capability_checks: Iterable[CapabilityCheck] = (),
         required_capabilities: Iterable[str] = (),
     ) -> VerificationReport:
+        """依次执行 build、原测试、能力检查，并在首个失败处返回。"""
+
         relative_working_directory = project.working_directory.relative_to(project.repository)
         working_directory = patched_worktree / relative_working_directory
 
+        # fail-fast 保留最直接失败原因，也避免在不可构建候选上产生次生噪声。
         build = self.backend.build(working_directory, project.manifest.build.command)
         if not build.passed:
             code = FailureCode.BUILD_FAILED
@@ -52,6 +57,8 @@ class DeterministicVerifier:
         required = set(required_capabilities)
         selected_checks = [check for check in checks if check.capability in required]
         missing: list[str] = []
+        # 已实现能力必须具备规范要求的 FailureCode 集合。缺少 oracle 不是
+        # “没有失败”，而是无法证明语义的 SEMANTIC_AMBIGUITY。
         for capability in sorted(required):
             expected_codes = CAPABILITY_CHECK_CODES.get(capability, frozenset())
             actual_codes = {
@@ -73,6 +80,7 @@ class DeterministicVerifier:
             )
 
         executions = []
+        # 保持 manifest 顺序执行；首个失败决定路由和反馈内容。
         for check in selected_checks:
             execution = self.backend.test(working_directory, check.command)
             executions.append(execution)

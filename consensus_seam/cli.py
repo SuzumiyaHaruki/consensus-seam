@@ -17,6 +17,12 @@ from .workflow import ConsensusWorkflow
 
 
 def _read_api_key_file(path: Path) -> str:
+    """读取单行 API Key。
+
+    Key 文件允许放在仓库外部；这里只返回内存中的字符串，后续不会把
+    Key 写入 run-config、统计文件或工具审计。
+    """
+
     try:
         value = path.expanduser().read_text(encoding="utf-8").strip()
     except OSError as exc:
@@ -29,6 +35,12 @@ def _read_api_key_file(path: Path) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构造三个工作流共用的命令行参数。
+
+    analyze/patch/run 的差别由 Workflow 方法决定，项目路径、模型配置和
+    凭据加载方式保持一致，避免三个入口出现行为漂移。
+    """
+
     parser = argparse.ArgumentParser(prog="consensus-seam")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command, description in (
@@ -63,10 +75,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """CLI 边界：解析配置、选择 Runtime、执行工作流并输出 JSON。
+
+    返回码约定：0 表示工作流正常完成；1 表示得到 FAILED/PARTIAL；2 表示
+    配置、凭据、模型调用或框架内部异常。异常只输出类型和消息，不输出
+    traceback，便于脚本稳定解析。
+    """
+
     args = build_parser().parse_args(argv)
     try:
         project = load_project(args.project)
         api_key: str | None = None
+        # --responses 用于可重复的单元/集成实验；真实调用才创建 DeepSeek
+        # transport 和带工具循环的 Runtime。
         if args.responses is not None:
             runtime = FakeLLMClient.from_json_file(args.responses)
         else:
@@ -92,6 +113,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             runs_root=args.runs_root.resolve(),
             model_profile=args.model_profile,
         )
+        # 子命令名称受 argparse choices 限制，因此这里的动态分派不会调用
+        # 任意对象属性。
         result = getattr(workflow, args.command)(project)
         print(result.model_dump_json(indent=2))
         return 0 if result.outcome.value not in {"FAILED", "PARTIAL"} else 1

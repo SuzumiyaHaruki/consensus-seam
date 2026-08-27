@@ -10,10 +10,12 @@ from .models import PatchMetrics
 
 
 class WorkspaceError(RuntimeError):
-    """Raised when an isolated Git worktree cannot be prepared or inspected."""
+    """无法安全创建或检查隔离 Git worktree 时抛出。"""
 
 
 def _git(repo: Path, *args: str) -> str:
+    """无 shell 执行 Git，并把非零退出统一转换为 WorkspaceError。"""
+
     completed = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
@@ -26,7 +28,11 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def git_audit_state(repository: Path) -> dict[str, object]:
-    """Return the committed revision and whether tracked/untracked changes exist."""
+    """返回提交 ID 与 tracked/untracked dirty 状态。
+
+    非 Git 目录返回 None，而不是把“无法验证”误当成 clean；正式实验会据此
+    拒绝启动。
+    """
 
     repo = repository.resolve()
     try:
@@ -39,13 +45,19 @@ def git_audit_state(repository: Path) -> dict[str, object]:
 
 @dataclass(frozen=True)
 class GitWorktree:
+    """Agent 2 的 detached 工作区句柄。"""
+
     original_repository: Path
     path: Path
 
     @classmethod
     def create(cls, original_repository: Path, destination: Path) -> "GitWorktree":
+        """从目标 HEAD 创建 detached worktree，绝不修改原仓库。"""
+
         repository = original_repository.resolve()
         top_level = Path(_git(repository, "rev-parse", "--show-toplevel").strip()).resolve()
+        # 目前 metrics/保护逻辑以仓库根为基准；若 manifest 指向子目录，
+        # diff 范围会变得含糊，因此显式要求 repository 是 Git top-level。
         if top_level != repository:
             raise WorkspaceError(
                 f"manifest repository must be the Git top level: {repository} != {top_level}"
@@ -58,12 +70,14 @@ class GitWorktree:
         return cls(repository, destination)
 
     def diff(self) -> str:
-        # Intent-to-add makes new, non-ignored files visible in a regular patch.
+        """返回相对 HEAD 的完整 patch，并让新文件出现在 diff 中。"""
+
+        # intent-to-add 只记录索引意图，不把文件内容正式 stage/commit。
         _git(self.path, "add", "--intent-to-add", "--", ".")
         return _git(self.path, "diff", "--binary", "--no-ext-diff", "HEAD", "--")
 
     def modified_existing_go_tests(self) -> list[str]:
-        """Return tracked Go tests changed from HEAD; newly created tests are allowed."""
+        """返回被修改的已有 Go 测试；新增测试允许存在。"""
 
         tracked = {
             line
@@ -76,6 +90,8 @@ class GitWorktree:
         return sorted(tracked & changed)
 
     def patch_metrics(self) -> PatchMetrics:
+        """仅依据 Git 状态和 numstat 计算补丁侵入性指标。"""
+
         self.diff()
         statuses: dict[str, str] = {}
         for line in _git(self.path, "diff", "--name-status", "HEAD", "--").splitlines():

@@ -8,6 +8,8 @@ from ..models import AgentModelConfig
 
 
 class ToolExecutor(Protocol):
+    """Runtime 所依赖的最小工具注册/执行协议。"""
+
     @property
     def definitions(self) -> list[dict[str, Any]]:
         """Return OpenAI-compatible function tool definitions."""
@@ -17,6 +19,8 @@ class ToolExecutor(Protocol):
 
 
 class AgentRuntime(Protocol):
+    """Agent 与具体模型供应商之间的抽象边界。"""
+
     def run(
         self,
         system_prompt: str,
@@ -32,6 +36,8 @@ class AgentRuntime(Protocol):
 
 
 class ChatCompletionClient(Protocol):
+    """OpenAI-compatible Chat Completions transport 的最小接口。"""
+
     def create_chat_completion(
         self,
         *,
@@ -44,8 +50,8 @@ class ChatCompletionClient(Protocol):
 
 
 class AgentRuntimeError(RuntimeError):
-    """Raised when the configured LLM adapter cannot return a response."""
+    """模型 transport 或工具循环无法返回有效响应时抛出。"""
 
 
-# Backward-compatible name for callers that imported the old exception.
+# 保留异常别名只影响 import 兼容性，不恢复已删除的旧文本客户端行为。
 LLMClientError = AgentRuntimeError

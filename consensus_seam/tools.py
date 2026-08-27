@@ -15,15 +15,21 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from .languages.go import GoBackend
 
 
+# 返回给模型的单次工具结果上限，防止一次读取占满上下文。
 MAX_TOOL_OUTPUT = 64000
+# Agent 2 单次写文件/patch 的 UTF-8 上限；字符数校验之后还会再检查字节数。
 MAX_WRITE_BYTES = 2 * 1024 * 1024
 
 
 class ToolInput(BaseModel):
+    """所有工具参数的严格基类，拒绝模型创造未声明参数。"""
+
     model_config = ConfigDict(extra="forbid")
 
 
 class ScopedPathInput(ToolInput):
+    """带角色 scope 的相对路径参数。"""
+
     scope: str = Field(min_length=1, max_length=100)
     path: str = Field(default=".", min_length=1, max_length=4096)
 
@@ -38,6 +44,7 @@ class ReadFileInput(ScopedPathInput):
 
     @model_validator(mode="after")
     def bounded_range(self) -> "ReadFileInput":
+        # 每次最多 500 行，鼓励 Agent 精确读取符号附近而非反复全文加载。
         if self.end is not None and self.end < self.start:
             raise ValueError("end must not precede start")
         if self.end is not None and self.end - self.start + 1 > 500:
@@ -85,12 +92,16 @@ class WriteFileInput(ToolInput):
 
 @dataclass(frozen=True)
 class LocalTool:
+    """一个工具的名称、描述、输入 Schema 与本地 handler。"""
+
     name: str
     description: str
     input_model: type[ToolInput]
     handler: Callable[[ToolInput], Any]
 
     def definition(self) -> dict[str, Any]:
+        """转换成 OpenAI-compatible function tool 定义。"""
+
         return {
             "type": "function",
             "function": {
@@ -102,6 +113,8 @@ class LocalTool:
 
 
 class ToolRegistry:
+    """某个 Agent 角色可见的工具白名单。"""
+
     def __init__(self, tools: list[LocalTool]) -> None:
         self._tools = {tool.name: tool for tool in tools}
         if len(self._tools) != len(tools):
@@ -112,6 +125,12 @@ class ToolRegistry:
         return [tool.definition() for tool in self._tools.values()]
 
     def execute(self, name: str, raw_arguments: str) -> str:
+        """解析参数、执行 handler，并统一返回有界 JSON。
+
+        工具错误被转换为 ok=false 返回给模型，使模型可以修正路径或 patch；
+        未列出的异常仍向上抛出，避免吞掉框架编程错误。
+        """
+
         tool = self._tools.get(name)
         if tool is None:
             return self._bounded_json({"ok": False, "error": f"unknown tool: {name}"})
@@ -135,6 +154,8 @@ class ToolRegistry:
 
     @staticmethod
     def _bounded_json(payload: dict[str, Any]) -> str:
+        """按 UTF-8 字节数截断响应，并保留原始大小供审计。"""
+
         serialized = json.dumps(payload, ensure_ascii=False)
         original_bytes = len(serialized.encode("utf-8"))
         if original_bytes <= MAX_TOOL_OUTPUT:
@@ -160,6 +181,12 @@ class ToolRegistry:
 
 
 class LocalToolFactory:
+    """根据角色 scope 和写权限构造工具集合。
+
+    scope 名称（source/worktree/original/patched）由 Controller 创建，模型只
+    能在已注册根目录中选择，不能自行提供任意绝对路径。
+    """
+
     def __init__(
         self,
         scopes: dict[str, Path],
@@ -174,6 +201,8 @@ class LocalToolFactory:
         self.allowed_checks = allowed_checks or set()
 
     def read_only_registry(self, *, include_checks: bool) -> ToolRegistry:
+        """创建 Analyzer/Reviewer 使用的只读工具集。"""
+
         tools = [
             LocalTool(
                 "list_files",
@@ -232,6 +261,8 @@ class LocalToolFactory:
         return ToolRegistry(tools)
 
     def transformer_registry(self) -> ToolRegistry:
+        """在只读工具基础上增加受限 patch 与文件写入。"""
+
         if self.writable_scope is None:
             raise ValueError("transformer tools require a writable scope")
         tools = list(self.read_only_registry(include_checks=True)._tools.values())
@@ -254,15 +285,25 @@ class LocalToolFactory:
         return ToolRegistry(tools)
 
     def _scope_help(self, description: str) -> str:
+        """把当前角色允许的 scope 写进工具描述，减少无效调用。"""
+
         return f"{description} Allowed scopes: {', '.join(sorted(self.scopes))}."
 
     def _root(self, scope: str) -> Path:
+        """把模型给出的 scope 映射为 Controller 预注册根目录。"""
+
         try:
             return self.scopes[scope]
         except KeyError as exc:
             raise ValueError(f"unknown scope {scope!r}; expected one of {sorted(self.scopes)}") from exc
 
     def _resolve(self, scope: str, path: str, *, writable: bool = False) -> Path:
+        """解析相对路径并执行 containment/写权限校验。
+
+        resolve 会展开符号链接，再用 relative_to 验证最终目标仍位于根目录；
+        因此 `..` 或指向仓库外的 symlink 都不能越界。
+        """
+
         root = self._root(scope)
         relative = Path(path)
         if relative.is_absolute() or ".git" in relative.parts:
@@ -277,6 +318,8 @@ class LocalToolFactory:
         return resolved
 
     def _list_files(self, value: ToolInput) -> dict[str, Any]:
+        """确定性列出文件，跳过 .git 且不跟随目录符号链接。"""
+
         args = ListFilesInput.model_validate(value)
         root = self._root(args.scope)
         start = self._resolve(args.scope, args.path)
@@ -299,6 +342,8 @@ class LocalToolFactory:
         return {"files": files, "truncated": truncated}
 
     def _read_file(self, value: ToolInput) -> dict[str, Any]:
+        """读取带行号的有限区间，供模型构造精确代码证据/patch context。"""
+
         args = ReadFileInput.model_validate(value)
         path = self._resolve(args.scope, args.path)
         if not path.is_file():
@@ -326,6 +371,8 @@ class LocalToolFactory:
         }
 
     def _search_text(self, value: ToolInput) -> dict[str, Any]:
+        """执行 fixed-string 搜索；rg 不存在时使用 Python 回退。"""
+
         args = SearchTextInput.model_validate(value)
         path = self._resolve(args.scope, args.path)
         command = [
@@ -373,7 +420,11 @@ class LocalToolFactory:
         query: str,
         limit: int,
     ) -> list[str]:
-        """Search allowed files deterministically when ripgrep is unavailable."""
+        """无 ripgrep 时在允许根目录内做确定性纯文本搜索。
+
+        回退路径沿用与 read/list 相同的 containment 边界，并多取一条结果，
+        让调用者可以准确设置 truncated，而不必扫描完整仓库。
+        """
 
         candidates: list[Path] = []
         if start.is_file():
@@ -399,6 +450,8 @@ class LocalToolFactory:
         return matches
 
     def _find_symbol(self, value: ToolInput) -> list[str]:
+        """委托语言后端查找声明。"""
+
         args = SymbolInput.model_validate(value)
         return self.backend.find_symbol(self._root(args.scope), args.symbol)[:500]
 
@@ -415,6 +468,12 @@ class LocalToolFactory:
         return self.backend.go_find_method(self._root(args.scope), args.receiver, args.method)
 
     def _run_readonly_check(self, value: ToolInput) -> dict[str, Any]:
+        """执行角色白名单内的 Go 查询/测试命令。
+
+        Analyzer 只允许 go_doc；Transformer 才能运行 go_test。参数通过正则
+        限制后使用 argv 调用，不经过 shell。
+        """
+
         args = ReadonlyCheckInput.model_validate(value)
         if args.check not in self.allowed_checks:
             raise ValueError(
@@ -451,6 +510,8 @@ class LocalToolFactory:
         }
 
     def _apply_patch(self, value: ToolInput) -> dict[str, Any]:
+        """先 `git apply --check`，通过后再真正应用非删除 patch。"""
+
         args = ApplyPatchInput.model_validate(value)
         if len(args.patch.encode("utf-8")) > MAX_WRITE_BYTES:
             raise ValueError(f"UTF-8 patch exceeds {MAX_WRITE_BYTES} bytes")
@@ -474,6 +535,8 @@ class LocalToolFactory:
 
     @staticmethod
     def _validate_patch_paths(patch: str) -> None:
+        """拒绝删除、重命名、二进制 patch 和越界路径。"""
+
         forbidden = (
             "deleted file mode",
             "rename from ",
@@ -493,6 +556,8 @@ class LocalToolFactory:
                 raise ValueError(f"unsafe patch path: {raw}")
 
     def _write_file(self, value: ToolInput) -> dict[str, Any]:
+        """在唯一可写 scope 内创建或覆盖一个 UTF-8 文件。"""
+
         args = WriteFileInput.model_validate(value)
         encoded = args.content.encode("utf-8")
         if len(encoded) > MAX_WRITE_BYTES:
@@ -505,6 +570,8 @@ class LocalToolFactory:
 
 
 def analyzer_tools(repository: Path, backend: GoBackend) -> ToolRegistry:
+    """Agent 1：目标源码只读，且不能运行目标测试。"""
+
     return LocalToolFactory(
         {"source": repository},
         backend=backend,
@@ -513,6 +580,8 @@ def analyzer_tools(repository: Path, backend: GoBackend) -> ToolRegistry:
 
 
 def transformer_tools(worktree: Path, backend: GoBackend) -> ToolRegistry:
+    """Agent 2：只可写 detached worktree，并可运行受限 Go 检查。"""
+
     return LocalToolFactory(
         {"worktree": worktree},
         backend=backend,
@@ -522,6 +591,8 @@ def transformer_tools(worktree: Path, backend: GoBackend) -> ToolRegistry:
 
 
 def reviewer_tools(original: Path, patched: Path, backend: GoBackend) -> ToolRegistry:
+    """Agent 3：同时读取 original/patched，但没有写入和命令执行工具。"""
+
     return LocalToolFactory(
         {"original": original, "patched": patched}, backend=backend
     ).read_only_registry(include_checks=False)

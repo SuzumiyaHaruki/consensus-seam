@@ -8,10 +8,14 @@ from ..models import BaselineReport, FailureCode
 
 
 class BaselineVerifier:
+    """在未修改目标仓库上执行构建和原始测试。"""
+
     def __init__(self, backend: LanguageBackend) -> None:
         self.backend = backend
 
     def run(self, project: LoadedProject) -> BaselineReport:
+        """先构建后测试；任一步失败都标记 BASELINE_FAILED。"""
+
         build = self.backend.build(
             project.working_directory,
             project.manifest.build.command,

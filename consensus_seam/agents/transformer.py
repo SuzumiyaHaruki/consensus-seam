@@ -15,6 +15,8 @@ from ..tools import transformer_tools
 
 
 class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
+    """Agent 2：只在隔离 worktree 中实现选中的 PATCHABLE 能力。"""
+
     agent_name = "transformer"
     prompt_name = "agent2.md"
     output_type = InterfaceReport
@@ -39,6 +41,8 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
         feedback: dict[str, Any] | None = None,
         invocation_id: str | None = None,
     ) -> InterfaceReport:
+        # Controller 机械计算状态与 allowlist 的交集，不能只靠 Prompt 要求
+        # 模型自觉忽略未选择能力。
         patchable = capability_report.patchable(selected_capabilities)
         if not patchable:
             raise ValueError(
@@ -63,6 +67,7 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
             tools=transformer_tools(worktree, self.backend),
             invocation_id=invocation_id,
         )
+        # 漏报会让 patch 无法审计，多报意味着 Agent 越权修改了未选择能力。
         reported = set(result.capabilities())
         if reported != patchable:
             raise ValueError(

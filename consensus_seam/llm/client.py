@@ -12,7 +12,11 @@ from .base import AgentRuntimeError, ToolExecutor
 
 
 class FakeLLMClient:
-    """A deterministic AgentRuntime for tests and response fixtures."""
+    """按队列返回固定响应的确定性开发 Runtime。
+
+    它不产生网络请求或 token 成本，适合测试工作流状态机、结构化重试与
+    CLI。calls 会记录传入 Prompt/Schema，供测试验证信息边界。
+    """
 
     def __init__(self, responses: Iterable[str]) -> None:
         self._responses = deque(responses)
@@ -20,6 +24,8 @@ class FakeLLMClient:
 
     @classmethod
     def from_json_file(cls, path: str | Path) -> "FakeLLMClient":
+        """从 JSON 数组构造队列；对象元素会先序列化成 JSON 文本。"""
+
         with Path(path).open("r", encoding="utf-8") as handle:
             values = json.load(handle)
         if not isinstance(values, list):
@@ -55,7 +61,7 @@ class FakeLLMClient:
 
 
 class UnconfiguredLLMClient:
-    """Fail clearly until a real provider adapter is deliberately selected."""
+    """未选择真实或 Fake Runtime 时提供明确错误。"""
 
     def run(
         self,

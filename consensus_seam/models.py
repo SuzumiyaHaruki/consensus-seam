@@ -8,7 +8,8 @@ from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
+# 可用能力的集合。该集合是 v0.1 的研究任务定义，不是从具体 Raft 项目
+# 推导出来的；所有 Analyzer 输出都必须完整覆盖这些能力。
 CAPABILITY_NAMES = frozenset(
     {
         "message_capture",
@@ -23,7 +24,11 @@ CAPABILITY_NAMES = frozenset(
 
 
 class StrictModel(BaseModel):
-    """Base model that rejects silently invented fields."""
+    """所有外部数据模型的严格基类。
+
+    extra="forbid" 防止模型悄悄创造 Schema 外字段；validate_assignment
+    保证工作流后续修改对象（例如 INVASIVE_REDISCOVERED）时仍执行校验。
+    """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -33,6 +38,8 @@ class CommandConfig(StrictModel):
 
 
 class FailureCode(str, Enum):
+    """Verifier 可产生的机器可路由失败类型。"""
+
     BASELINE_FAILED = "BASELINE_FAILED"
     BUILD_FAILED = "BUILD_FAILED"
     MESSAGE_CAPTURE_FAILED = "MESSAGE_CAPTURE_FAILED"
@@ -46,6 +53,8 @@ class FailureCode(str, Enum):
     SEMANTIC_AMBIGUITY = "SEMANTIC_AMBIGUITY"
 
 
+# capability → 必须配置的确定性检查类型。Manifest 校验与 Verifier 共用
+# 这一份映射，避免两个模块分别维护后发生漂移。
 CAPABILITY_CHECK_CODES: dict[str, frozenset[FailureCode]] = {
     "message_capture": frozenset(
         {
@@ -71,12 +80,16 @@ class SystemBoundary(StrictModel):
 
 
 class ExperimentConfig(StrictModel):
+    """实验性质及其可公开研究主张。"""
+
     kind: Literal["engineering_smoke", "blind_capability", "repair"]
     oracle_visible_to_agents: bool
     research_claim: str = Field(min_length=1)
 
 
 class AgentModelConfig(StrictModel):
+    """单个 Agent 的模型与推理预算。"""
+
     model: str = Field(min_length=1)
     thinking: Literal["enabled", "disabled"] = "enabled"
     reasoning_effort: Literal["low", "high", "max"] = "high"
@@ -84,6 +97,8 @@ class AgentModelConfig(StrictModel):
 
 
 class LLMConfig(StrictModel):
+    """三个 Agent 的独立模型配置；Reviewer 默认使用更强模型。"""
+
     analyzer: AgentModelConfig = Field(
         default_factory=lambda: AgentModelConfig(
             model="deepseek-v4-flash", reasoning_effort="max"
@@ -102,6 +117,8 @@ class LLMConfig(StrictModel):
 
 
 class CapabilityCheckConfig(StrictModel):
+    """一个由 Controller 执行、Agent 不可见的能力检查。"""
+
     name: str = Field(min_length=1)
     capability: Literal[
         "message_capture",
@@ -116,11 +133,15 @@ class CapabilityCheckConfig(StrictModel):
 
 
 class VerificationFixtureConfig(StrictModel):
+    """隐藏文件从评测目录到临时 worktree 的复制规则。"""
+
     source: Path
     destination: Path
 
     @model_validator(mode="after")
     def destination_must_be_relative(self) -> "VerificationFixtureConfig":
+        # destination 最终会参与文件写入，因此必须是安全相对路径；.git
+        # 即使仍在 worktree 内也属于禁止触碰的版本控制元数据。
         if self.destination.is_absolute() or ".." in self.destination.parts:
             raise ValueError("verification fixture destination must stay in the worktree")
         if ".git" in self.destination.parts:
@@ -139,11 +160,15 @@ TransformCapability = Literal[
 
 
 class WorkflowLimits(StrictModel):
+    """固定状态机的有界重试预算，防止 Agent 无限自循环。"""
+
     agent1_reanalysis_rounds: int = Field(default=2, ge=1, le=10)
     agent2_patch_rounds: int = Field(default=3, ge=1, le=10)
 
 
 class ProjectManifest(StrictModel):
+    """项目 YAML 的完整强类型表示。"""
+
     name: str = Field(min_length=1)
     language: Literal["go"]
     protocol: str = Field(min_length=1)
@@ -161,6 +186,8 @@ class ProjectManifest(StrictModel):
 
     @model_validator(mode="after")
     def validate_capability_checks(self) -> "ProjectManifest":
+        """检查实验选择和失败码之间的静态一致性。"""
+
         if self.transform_capabilities is not None:
             if not self.transform_capabilities:
                 raise ValueError("transform_capabilities cannot be empty")
@@ -178,6 +205,8 @@ class ProjectManifest(StrictModel):
 
 
 class CapabilityDefinition(StrictModel):
+    """能力的通用描述、允许形式、义务和公开测试契约。"""
+
     description: str = Field(min_length=1)
     accepted_v0_forms: list[str] = Field(default_factory=list)
     obligations: dict[str, str] = Field(default_factory=dict)
@@ -189,6 +218,8 @@ class CapabilityPrerequisites(StrictModel):
 
 
 class CapabilitySpec(StrictModel):
+    """内置能力规范；所有目标项目共享，不包含目标 oracle。"""
+
     version: int = Field(ge=1)
     capabilities: dict[str, CapabilityDefinition]
     prerequisites: CapabilityPrerequisites = Field(
@@ -218,6 +249,8 @@ class CapabilityStatus(str, Enum):
 
 
 class CodeEvidence(StrictModel):
+    """可由审计者定位回源码的证据。"""
+
     file: str | None = None
     symbol: str | None = None
     line: int | None = Field(default=None, ge=1)
@@ -225,6 +258,8 @@ class CodeEvidence(StrictModel):
 
     @model_validator(mode="after")
     def require_location(self) -> "CodeEvidence":
+        # reason 只是解释，不能替代定位信息；否则 Reviewer 可以用泛泛描述
+        # 伪装成代码证据。
         if self.file is None and self.symbol is None:
             raise ValueError("evidence must identify a file or symbol")
         return self
@@ -239,6 +274,8 @@ class ObligationStatus(str, Enum):
 
 
 class ObligationAssessment(StrictModel):
+    """某项能力义务的状态、证据和判定理由。"""
+
     status: ObligationStatus
     evidence: list[CodeEvidence] = Field(default_factory=list)
     reason: str = Field(min_length=1)
@@ -251,6 +288,8 @@ class ObligationAssessment(StrictModel):
 
 
 class CapabilityFinding(StrictModel):
+    """Agent 1 对单项能力的完整结论。"""
+
     status: CapabilityStatus
     evidence: list[CodeEvidence] = Field(default_factory=list)
     boundary: str | None = None
@@ -263,6 +302,8 @@ class CapabilityFinding(StrictModel):
 
     @model_validator(mode="after")
     def require_supporting_explanation(self) -> "CapabilityFinding":
+        # 正向声称必须有代码证据；UNKNOWN/INVASIVE 至少要说明为什么无法
+        # 安全支持，防止只输出标签而没有可审计依据。
         if self.status in {
             CapabilityStatus.SUPPORTED,
             CapabilityStatus.PATCHABLE,
@@ -278,6 +319,8 @@ class CapabilityFinding(StrictModel):
 
 
 class CapabilityReport(StrictModel):
+    """Agent 1 的顶层报告及跨字段一致性约束。"""
+
     target: str = Field(min_length=1)
     capabilities: dict[str, CapabilityFinding]
 
@@ -285,6 +328,7 @@ class CapabilityReport(StrictModel):
 
     @model_validator(mode="after")
     def require_exact_v0_capabilities(self) -> "CapabilityReport":
+        # Agent 不能遗漏“不好判断”的能力，也不能临时创造第八种能力。
         names = set(self.capabilities)
         missing = self.required_capabilities - names
         extra = names - self.required_capabilities
@@ -302,6 +346,8 @@ class CapabilityReport(StrictModel):
         return self
 
     def _validate_lifecycle_obligations(self) -> None:
+        """防止把 scheduler pause 误报为完整 crash/recovery 支持。"""
+
         finding = self.capabilities["lifecycle_control"]
         required = {
             "stop_boundary",
@@ -316,6 +362,8 @@ class CapabilityReport(StrictModel):
             state is not ObligationStatus.SATISFIED for state in states.values()
         ):
             raise ValueError("SUPPORTED lifecycle_control requires every obligation SATISFIED")
+        # recovery 和状态语义同时缺失时，增加生命周期测试接口必然需要
+        # 发明持久/易失边界，因此 overall 只能是 INVASIVE。
         recovery_missing = (
             states["restart_or_recovery_boundary"] is ObligationStatus.MISSING
         )
@@ -332,6 +380,8 @@ class CapabilityReport(StrictModel):
             )
 
     def _validate_external_input_obligations(self) -> None:
+        """强制区分应用工作负载、协议 ingress 与内部定时事件。"""
+
         finding = self.capabilities["external_input"]
         required = {
             "workload_entrypoint",
@@ -347,6 +397,8 @@ class CapabilityReport(StrictModel):
             raise ValueError("SUPPORTED external_input requires every obligation SATISFIED")
 
     def patchable(self, allowlist: list[str] | set[str] | None = None) -> set[str]:
+        """返回 PATCHABLE 能力，并可与本次实验 allowlist 求交集。"""
+
         result = {
             name
             for name, finding in self.capabilities.items()
@@ -355,6 +407,8 @@ class CapabilityReport(StrictModel):
         return result if allowlist is None else result & set(allowlist)
 
     def apply_rediscovered(self, names: set[str]) -> None:
+        """把 Transformer 实作时发现的侵入性反馈合并回分析报告。"""
+
         for name in names:
             if name not in self.capabilities:
                 raise ValueError(f"unknown rediscovered capability: {name}")
@@ -376,6 +430,8 @@ class CodeLocation(StrictModel):
 
 
 class InterfaceCapability(StrictModel):
+    """Agent 2 对一项已实现接口的结构化说明。"""
+
     implemented: bool
     rediscovered_status: Literal["INVASIVE_REDISCOVERED"] | None = None
     capture_boundary: CodeLocation | None = None
@@ -400,6 +456,8 @@ class InterfaceCapability(StrictModel):
 
 
 class InterfaceReport(StrictModel):
+    """Agent 2 输出；仅覆盖本轮被选择的 PATCHABLE 能力。"""
+
     message_capture: InterfaceCapability | None = None
     message_injection: InterfaceCapability | None = None
     time_control: InterfaceCapability | None = None
@@ -409,6 +467,8 @@ class InterfaceReport(StrictModel):
 
     @model_validator(mode="after")
     def require_one_capability(self) -> "InterfaceReport":
+        # message control 的并发与 ID 范围是 v0.1 必须显式声明的语义，不能
+        # 只靠实现代码让 Reviewer 猜测。
         if not self.capabilities():
             raise ValueError("interface report must describe at least one capability")
         for name in ("message_capture", "message_injection"):
@@ -460,6 +520,8 @@ class ReviewCheckResult(str, Enum):
 
 
 class ReviewCheck(StrictModel):
+    """Reviewer 对一个命名审计问题的结论。"""
+
     name: str = Field(min_length=1)
     result: ReviewCheckResult
     evidence: list[CodeEvidence] = Field(default_factory=list)
@@ -468,6 +530,9 @@ class ReviewCheck(StrictModel):
     @field_validator("evidence", mode="before")
     @classmethod
     def discard_unlocated_supplementary_evidence(cls, value: object) -> object:
+        # 模型偶尔会把“其余文件未修改”一类全局结论放进 evidence，并把
+        # file/symbol 设为 null。这类项目属于 reason，不应让整个报告失败；
+        # 这里仅删除无定位的附加项，后面的校验仍要求 PASS 至少有一条证据。
         if not isinstance(value, list):
             return value
         return [
@@ -484,6 +549,8 @@ class ReviewCheck(StrictModel):
 
 
 class ReviewReport(StrictModel):
+    """Agent 3 的结构化语义审计报告。"""
+
     overall: ReviewOverall
     checks: list[ReviewCheck]
     issues: list[ReviewIssue] = Field(default_factory=list)
@@ -503,6 +570,8 @@ class ReviewReport(StrictModel):
 
     @model_validator(mode="after")
     def require_consistent_issues(self) -> "ReviewReport":
+        # 所有必需检查都必须出现。PASS 不能同时携带 issue，也不能隐藏
+        # FAIL/UNKNOWN；非 PASS 则必须明确指出至少一个问题。
         names = [check.name for check in self.checks]
         if len(names) != len(set(names)):
             raise ValueError("review check names must be unique")
@@ -524,6 +593,8 @@ class ReviewReport(StrictModel):
         return self
 
     def validate_for_interface(self, interface_report: InterfaceReport) -> None:
+        """根据 Agent 2 实际实现的能力，收紧 PASS 所需检查。"""
+
         if self.overall is not ReviewOverall.PASS:
             return
         required = {
@@ -560,6 +631,8 @@ class FailureRoute(str, Enum):
 
 
 class CommandExecution(StrictModel):
+    """一次外部命令的可审计结果；stdout/stderr 均按原样记录。"""
+
     command: str
     returncode: int
     stdout: str = ""
@@ -572,6 +645,8 @@ class CommandExecution(StrictModel):
 
 
 class PatchMetrics(StrictModel):
+    """基于 Git diff 计算的低侵入性指标。"""
+
     existing_production_files_modified: list[str] = Field(default_factory=list)
     new_production_files: list[str] = Field(default_factory=list)
     existing_test_files_modified: list[str] = Field(default_factory=list)
@@ -610,6 +685,8 @@ class WorkflowOutcome(str, Enum):
 
 
 class WorkflowResult(StrictModel):
+    """CLI 最终输出；run_directory 指向本次完整或失败运行目录。"""
+
     outcome: WorkflowOutcome
     run_directory: Path
     reason: str | None = None

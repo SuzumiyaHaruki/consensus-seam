@@ -13,6 +13,12 @@ from .base import AgentRuntimeError
 
 
 class DeepSeekClient:
+    """不依赖第三方 SDK 的 DeepSeek HTTP transport。
+
+    本类只负责单次 Chat Completions 请求和 HTTP 重试；多轮工具调用由
+    ToolCallingAgentRuntime 负责。API Key 只进入 Authorization header。
+    """
+
     def __init__(
         self,
         api_key: str,
@@ -44,6 +50,8 @@ class DeepSeekClient:
         tools: list[dict[str, Any]] | None,
         response_format: dict[str, str] | None,
     ) -> dict[str, Any]:
+        """发送一个 OpenAI-compatible 的非流式请求。"""
+
         body: dict[str, Any] = {
             "model": model.model,
             "messages": messages,
@@ -77,6 +85,7 @@ class DeepSeekClient:
                 payload["_consensus_seam_http_attempts"] = attempt
                 return payload
             except HTTPError as exc:
+                # 只重试限流和服务端故障；认证、请求格式等其他 4xx 立即失败。
                 detail = exc.read().decode("utf-8", errors="replace")[:4000]
                 retriable = exc.code == 429 or 500 <= exc.code < 600
                 if not retriable or attempt == self.max_attempts:
@@ -93,6 +102,8 @@ class DeepSeekClient:
         raise AgentRuntimeError("DeepSeek API retry loop ended unexpectedly")
 
     def _retry_delay(self, attempt: int, retry_after: str | None = None) -> float:
+        """优先尊重 Retry-After，否则使用上限 30 秒的指数退避。"""
+
         if retry_after is not None:
             try:
                 return min(max(float(retry_after), 0), 30)

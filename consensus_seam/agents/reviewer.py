@@ -20,6 +20,8 @@ from ..tools import reviewer_tools
 
 
 class IndependentReviewer(StructuredAgent[ReviewReport]):
+    """Agent 3：对 original 与 patched 两个 scope 做独立只读审查。"""
+
     agent_name = "reviewer"
     prompt_name = "agent3.md"
     output_type = ReviewReport
@@ -45,6 +47,8 @@ class IndependentReviewer(StructuredAgent[ReviewReport]):
         *,
         invocation_id: str | None = None,
     ) -> ReviewReport:
+        # Reviewer 能看到 patch、metrics、接口声明和通用 contract，但看不到
+        # 隐藏测试。它审查“代码是否合理”，Verifier 裁决“行为是否真实”。
         payload = {
             "original_repository": str(project.repository),
             "patched_worktree": str(worktree),

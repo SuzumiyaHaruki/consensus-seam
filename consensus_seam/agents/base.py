@@ -17,10 +17,16 @@ OutputT = TypeVar("OutputT", bound=BaseModel)
 
 
 class AgentOutputError(ValueError):
-    """Raised after all structured-output attempts fail validation."""
+    """所有结构化输出尝试均无法通过校验时抛出。"""
 
 
 class StructuredAgent(Generic[OutputT]):
+    """三个 Agent 共用的 JSON Schema 输出与重试框架。
+
+    Runtime 只负责得到模型文本；本类负责 JSON 解析、Pydantic 校验和角色
+    特有的 post-validation，防止“差不多正确”的输出进入工作流。
+    """
+
     agent_name: str
     prompt_name: str
     output_type: type[OutputT]
@@ -41,6 +47,8 @@ class StructuredAgent(Generic[OutputT]):
         self.max_attempts = max_attempts
 
     def _system_prompt(self) -> str:
+        """从受版本控制的 prompt 文件读取角色系统提示。"""
+
         return (self.prompt_directory / self.prompt_name).read_text(encoding="utf-8")
 
     def _complete(
@@ -51,11 +59,18 @@ class StructuredAgent(Generic[OutputT]):
         post_validate: Callable[[OutputT], None] | None = None,
         invocation_id: str | None = None,
     ) -> OutputT:
+        """执行最多 max_attempts 次结构化输出尝试。
+
+        每次尝试拥有独立 invocation_id，便于关联具体 round 的 token 和工具
+        成本。失败只反馈标准化校验错误，不会向 Agent 暴露隐藏 oracle。
+        """
+
         validation_error = ""
         invocation_prefix = invocation_id or self.agent_name
         for attempt in range(1, self.max_attempts + 1):
             retry_prompt = user_prompt
             if validation_error:
+                # 保留完整原始任务，只追加上一次结构错误，避免重试时丢失上下文。
                 retry_prompt += (
                     "\n\nYour previous response was rejected. Return corrected JSON only. "
                     f"Validation error:\n{validation_error}"

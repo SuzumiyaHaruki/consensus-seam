@@ -14,7 +14,7 @@ from .resources import resource_root
 
 
 class ConfigurationError(ValueError):
-    """Raised when a project or bundled specification is invalid."""
+    """项目清单、内置规范或路径边界不合法时抛出。"""
 
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -22,12 +22,20 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 @dataclass(frozen=True)
 class ResolvedVerificationFixture:
+    """解析后的隐藏验证文件。
+
+    source 是 Controller 仓库中的真实文件；destination 是临时 worktree 内
+    的相对路径。二者分离，确保 Agent 无法从目标仓库读取 oracle。
+    """
+
     source: Path
     destination: Path
 
 
 @dataclass(frozen=True)
 class LoadedProject:
+    """一次运行所需的已验证、绝对路径化配置。"""
+
     manifest_path: Path
     manifest: ProjectManifest
     repository: Path
@@ -38,7 +46,12 @@ class LoadedProject:
     verification_fixtures: tuple[ResolvedVerificationFixture, ...] = ()
 
     def agent_manifest(self) -> dict[str, Any]:
-        """Return project settings safe to disclose to all three Agents."""
+        """返回允许披露给三个 Agent 的项目视图。
+
+        capability_checks、verification_fixtures 和 experiment 都属于
+        Controller/评测器信息。它们若进入 Prompt，会泄漏隐藏测试位置、
+        命令或实验身份，因此必须在统一入口处删除。
+        """
 
         return self.manifest.model_dump(
             mode="json",
@@ -47,6 +60,8 @@ class LoadedProject:
 
 
 def _read_yaml(path: Path) -> Any:
+    """统一读取 YAML，并把文件/YAML 异常转换成 ConfigurationError。"""
+
     try:
         with path.open("r", encoding="utf-8") as handle:
             return yaml.safe_load(handle)
@@ -57,6 +72,8 @@ def _read_yaml(path: Path) -> Any:
 
 
 def _load_model(path: Path, model_type: type[ModelT]) -> ModelT:
+    """读取 YAML 后立即执行严格 Pydantic 校验。"""
+
     try:
         return model_type.model_validate(_read_yaml(path))
     except ValidationError as exc:
@@ -68,7 +85,11 @@ def load_project(
     *,
     package_root: Path | None = None,
 ) -> LoadedProject:
-    """Load a target manifest and the v0.1 bundled policy files."""
+    """加载目标 manifest、能力规范、修改策略和协议简介。
+
+    该函数也是配置安全边界：所有用于执行命令或复制 fixture 的路径都会
+    在此解析并验证，工作流后续只使用 LoadedProject 中的绝对路径。
+    """
 
     path = Path(manifest_path).expanduser().resolve()
     root = package_root or resource_root()
@@ -81,6 +102,7 @@ def load_project(
     if not repository.is_dir():
         raise ConfigurationError(f"repository is not a directory: {repository}")
 
+    # working_directory 可以指向单仓库中的子模块，但绝不能逃离 repository。
     requested_working_directory = manifest.working_directory
     if requested_working_directory.is_absolute():
         working_directory = requested_working_directory.resolve()
@@ -95,6 +117,7 @@ def load_project(
 
     capabilities = _load_model(root / "spec" / "capabilities.yaml", CapabilitySpec)
     policy = _load_model(root / "spec" / "modification-policy.yaml", ModificationPolicy)
+    # Python 控制器不硬编码 Raft 概念；协议知识由 protocol YAML 提供。
     protocol_path = root / "spec" / "protocols" / f"{manifest.protocol}.yaml"
     protocol_brief = _read_yaml(protocol_path)
     if not isinstance(protocol_brief, dict):
@@ -109,6 +132,8 @@ def load_project(
         source = source.resolve()
         if not source.is_file():
             raise ConfigurationError(f"verification fixture is not a file: {source}")
+        # 隐藏 fixture 如果位于目标仓库中，即使 Prompt 不披露路径，Agent
+        # 仍可能通过 list/read 工具发现它，因此配置阶段直接拒绝。
         try:
             source.relative_to(repository)
         except ValueError:

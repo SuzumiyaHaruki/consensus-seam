@@ -16,6 +16,8 @@ from .models import CapabilityReport, CapabilityStatus
 
 
 class ArtifactStore:
+    """一次运行的结构化产物目录。"""
+
     def __init__(self, run_directory: Path) -> None:
         self.run_directory = run_directory.resolve()
         self.run_directory.mkdir(parents=True, exist_ok=False)
@@ -23,6 +25,8 @@ class ArtifactStore:
 
     @classmethod
     def create(cls, runs_root: Path) -> "ArtifactStore":
+        """使用 UTC 微秒时间戳创建不冲突的 run 目录。"""
+
         runs_root.mkdir(parents=True, exist_ok=True)
         stem = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         candidate = runs_root / stem
@@ -33,6 +37,7 @@ class ArtifactStore:
         return cls(candidate)
 
     def _path(self, name: str) -> Path:
+        # 所有写入都经过此处，防止调用者用 ../ 把报告写出 run 目录。
         path = (self.run_directory / name).resolve()
         try:
             path.relative_to(self.run_directory)
@@ -58,6 +63,8 @@ class ArtifactStore:
         *,
         transform_capabilities: list[str] | None = None,
     ) -> Path:
+        """汇总仍需人工处理或被实验范围主动跳过的能力。"""
+
         unresolved = {}
         for name, finding in report.capabilities.items():
             if finding.status in {
@@ -81,7 +88,12 @@ class ArtifactStore:
         return self.write_json("unresolved.json", unresolved)
 
     def publish_latest(self) -> Path:
-        """Replace the tracked audit export with this run's non-worktree artifacts."""
+        """原子替换 Git 跟踪的 latest 审计导出。
+
+        patched-worktree 可能包含完整目标仓库和未审核代码，既体积大又不适合
+        上传；latest 只复制报告、最终 patch、统计和日志。先写 staging 再
+        os.replace，避免复制到一半留下表面完整的目录。
+        """
 
         runs_root = self.run_directory.parent
         latest = runs_root / "latest"

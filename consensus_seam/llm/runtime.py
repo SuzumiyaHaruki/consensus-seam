@@ -13,6 +13,8 @@ from .base import AgentRuntimeError, ChatCompletionClient, ToolExecutor
 
 @dataclass(frozen=True)
 class AgentRunStats:
+    """一次结构化 attempt 的聚合成本与状态，不含推理正文。"""
+
     agent: str
     invocation_id: str
     model: str
@@ -31,6 +33,8 @@ class AgentRunStats:
 
 @dataclass(frozen=True)
 class ToolCallAudit:
+    """一次工具调用的元数据；不保存返回源码或 patch 内容。"""
+
     agent: str
     invocation_id: str
     model: str
@@ -43,6 +47,8 @@ class ToolCallAudit:
 
 
 class ToolCallingAgentRuntime:
+    """执行 Chat Completions → tool calls → final JSON 的有界循环。"""
+
     def __init__(self, client: ChatCompletionClient, *, max_steps: int = 64) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be positive")
@@ -52,9 +58,13 @@ class ToolCallingAgentRuntime:
         self._tool_audit: list[ToolCallAudit] = []
 
     def stats_snapshot(self) -> list[dict[str, Any]]:
+        """返回可序列化副本，调用者不能修改 Runtime 内部记录。"""
+
         return [asdict(item) for item in self._stats]
 
     def tool_audit_snapshot(self) -> list[dict[str, Any]]:
+        """返回工具审计快照。"""
+
         return [asdict(item) for item in self._tool_audit]
 
     def run(
@@ -68,6 +78,8 @@ class ToolCallingAgentRuntime:
         tools: ToolExecutor | None = None,
         invocation_id: str | None = None,
     ) -> str:
+        """运行一个 Agent attempt，直到得到最终文本或达到 max_steps。"""
+
         invocation_id = invocation_id or f"{agent}-unscoped"
         started = time.monotonic()
         api_calls = 0
@@ -80,6 +92,8 @@ class ToolCallingAgentRuntime:
         api_wall_clock = 0.0
         status = "FAILED"
         error_type: str | None = None
+        # JSON Schema 同时通过系统提示和 response_format 约束模型；真正的
+        # 可信校验仍在 StructuredAgent/Pydantic 中完成。
         schema_instruction = ""
         if response_schema is not None:
             schema_instruction = (
@@ -103,6 +117,8 @@ class ToolCallingAgentRuntime:
                     response_format={"type": "json_object"} if response_schema else None,
                 )
                 api_wall_clock += time.monotonic() - api_started
+                # transport 会把 HTTP 重试次数附加在私有字段中，因此这里的
+                # api_calls 表示真实 HTTP 请求数，而非逻辑轮数。
                 api_calls += int(response.pop("_consensus_seam_http_attempts", 1))
                 usage = response.get("usage") or {}
                 input_tokens += int(usage.get("prompt_tokens", 0) or 0)
@@ -135,6 +151,8 @@ class ToolCallingAgentRuntime:
                             result = tools.execute(
                                 function["name"], function["arguments"]
                             )
+                            # 审计只记录脱敏参数、长度、条目数与耗时。工具完整
+                            # 结果仍回传给模型，但不会落入 tool-call-audit。
                             self._tool_audit.append(
                                 ToolCallAudit(
                                     agent=agent,
@@ -179,6 +197,8 @@ class ToolCallingAgentRuntime:
             error_type = type(exc).__name__
             raise
         finally:
+            # 无论成功还是异常都记录 attempt，确保失败成本不会从实验统计中
+            # 消失。error_type 只记录异常类名，不记录可能含敏感内容的消息。
             self._stats.append(
                 AgentRunStats(
                     agent=agent,
@@ -200,6 +220,8 @@ class ToolCallingAgentRuntime:
 
     @staticmethod
     def _summarize_arguments(raw_arguments: str) -> dict[str, Any]:
+        """脱敏工具参数：源码/patch 只保留 UTF-8 字节数。"""
+
         try:
             arguments = json.loads(raw_arguments)
         except json.JSONDecodeError:
@@ -222,6 +244,8 @@ class ToolCallingAgentRuntime:
 
     @staticmethod
     def _returned_lines(result: str) -> int | None:
+        """从标准工具 JSON 中提取返回条目数，无法识别时返回 None。"""
+
         try:
             payload = json.loads(result)
         except json.JSONDecodeError:
@@ -239,6 +263,8 @@ class ToolCallingAgentRuntime:
 
     @staticmethod
     def _tool_success(result: str) -> bool | None:
+        """读取工具标准响应的 ok 字段。"""
+
         try:
             payload = json.loads(result)
         except json.JSONDecodeError:
@@ -247,9 +273,11 @@ class ToolCallingAgentRuntime:
 
     @staticmethod
     def _assistant_message(message: dict[str, Any]) -> dict[str, Any]:
+        """保留下一轮 API 所需字段，避免保存无关响应元数据。"""
+
         preserved = {"role": "assistant", "content": message.get("content")}
-        # DeepSeek thinking-mode tool calls require reasoning_content to be passed
-        # back exactly on the following request.
+        # DeepSeek thinking 模式要求工具调用后的下一请求原样带回
+        # reasoning_content；它只存在于内存消息链，不写入统计产物。
         if "reasoning_content" in message:
             preserved["reasoning_content"] = message["reasoning_content"]
         if message.get("tool_calls"):

@@ -1,19 +1,12 @@
 # ConsensusSeam v0.1
 
-ConsensusSeam is a Python controller for analyzing the test-control seams of Go
-consensus implementations. It separates three roles:
+ConsensusSeam is a Python controller for analyzing the test-control seams of Go consensus implementations. It separates three roles:
 
 1. a read-only capability analyzer;
 2. a low-intrusion transformer that may act only on `PATCHABLE` findings;
 3. an independent, read-only reviewer.
 
-A deterministic verifier, not an Agent, runs the configured build and test
-commands. The current repository is the first runnable framework: it provides
-validated configuration and Agent I/O, prompts, a DeepSeek Chat Completions tool
-runtime, a fake runtime, an explicit workflow, a thin Go backend, isolated Git
-worktrees, artifact reporting, and tests. v0.1 has completed a live, blind Mini
-Raft message-control experiment with deterministic repair feedback. The artifacts
-under `runs/latest` are development evidence, not yet a cross-system evaluation.
+A deterministic verifier, not an Agent, runs the configured build and test commands. The current repository is the first runnable framework: it provides validated configuration and Agent I/O, prompts, a DeepSeek Chat Completions tool runtime, a fake runtime, an explicit workflow, a thin Go backend, isolated Git worktrees, artifact reporting, and tests. v0.1 has completed a live, blind Mini Raft message-control experiment with deterministic repair feedback. The artifacts under `runs/latest` are development evidence, not yet a cross-system evaluation.
 
 ## Requirements
 
@@ -51,13 +44,9 @@ consensus-seam analyze \
   --api-key-file .secrets/deepseek-api-key.txt
 ```
 
-`DEEPSEEK_API_KEY_FILE` can provide the same path without a CLI flag. Key file
-contents are never written to run artifacts or logs.
+`DEEPSEEK_API_KEY_FILE` can provide the same path without a CLI flag. Key file contents are never written to run artifacts or logs.
 
-`DEEPSEEK_BASE_URL` may override `https://api.deepseek.com` for a compatible
-gateway. `--model-profile manifest|mixed|all-flash|all-pro` supports controlled
-model comparisons. The default `manifest` profile reads per-Agent settings from
-`project.yaml`.
+`DEEPSEEK_BASE_URL` may override `https://api.deepseek.com` for a compatible gateway. `--model-profile manifest|mixed|all-flash|all-pro` supports controlled model comparisons. The default `manifest` profile reads per-Agent settings from `project.yaml`.
 
 ```bash
 consensus-seam analyze --project targets/my-target/project.yaml \
@@ -70,16 +59,9 @@ consensus-seam run --project targets/my-target/project.yaml \
   --responses responses.json
 ```
 
-`--responses` is a deterministic development adapter. Its JSON file contains an
-array of raw Agent responses, consumed in order. A real tool-capable Agent/LLM
-runtime is selected automatically when `DEEPSEEK_API_KEY` is present.
+`--responses` is a deterministic development adapter. Its JSON file contains an array of raw Agent responses, consumed in order. A real tool-capable Agent/LLM runtime is selected automatically when `DEEPSEEK_API_KEY` is present.
 
-The Analyzer can list, read, and search source plus query Go declarations; it
-cannot edit source or run target tests. The Transformer gets the same inspection
-tools plus bounded `apply_patch` and `write_file` operations scoped to its Git
-worktree. The Reviewer gets separate read-only `original` and `patched` scopes.
-All tool responses are capped before returning to the model. Text search uses
-ripgrep when available and a deterministic Python fixed-string fallback otherwise.
+The Analyzer can list, read, and search source plus query Go declarations; it cannot edit source or run target tests. The Transformer gets the same inspection tools plus bounded `apply_patch` and `write_file` operations scoped to its Git worktree. The Reviewer gets separate read-only `original` and `patched` scopes. All tool responses are capped before returning to the model. Text search uses ripgrep when available and a deterministic Python fixed-string fallback otherwise.
 
 Existing tracked Go tests are mechanically protected: Agent 2 may create new
 `*_test.go` files but a worktree that modifies an existing one is discarded.

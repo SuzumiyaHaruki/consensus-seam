@@ -14,6 +14,8 @@ from .base import LanguageBackend
 
 
 class GoBackend(LanguageBackend):
+    """Go 目标的构建、格式化、文本搜索与 AST 查询实现。"""
+
     def build(self, repo: Path, command: str) -> CommandExecution:
         return self.run_command(repo, command)
 
@@ -21,6 +23,8 @@ class GoBackend(LanguageBackend):
         return self.run_command(repo, command)
 
     def format_changed_files(self, repo: Path) -> CommandExecution:
+        """仅对相对 HEAD 发生变化的 Go 文件运行 gofmt。"""
+
         started = time.monotonic()
         changed = subprocess.run(
             ["git", "diff", "--name-only", "HEAD", "--", "*.go"],
@@ -60,6 +64,8 @@ class GoBackend(LanguageBackend):
         )
 
     def find_symbol(self, repo: Path, symbol: str) -> list[str]:
+        """优先精确处理 Receiver.Method，其余声明使用文本搜索。"""
+
         if symbol.count(".") == 1:
             receiver, method = symbol.split(".", 1)
             valid = all(
@@ -80,6 +86,8 @@ class GoBackend(LanguageBackend):
         )
 
     def find_references(self, repo: Path, symbol: str) -> list[str]:
+        """返回保守文本候选，并明确方法接收者尚未被类型证明。"""
+
         if symbol.count(".") == 1:
             receiver, method = symbol.split(".", 1)
             valid = all(
@@ -115,6 +123,8 @@ class GoBackend(LanguageBackend):
         name: str,
         receiver: str | None = None,
     ) -> list[dict[str, object]]:
+        """调用随包发布的 Go helper，以 go/parser 精确定位声明。"""
+
         helper = Path(__file__).resolve().parent / "go_ast" / "main.go"
         command = [
             "go",
@@ -151,6 +161,8 @@ class GoBackend(LanguageBackend):
 
     @staticmethod
     def _search(repo: Path, pattern: str) -> list[str]:
+        """使用 rg 搜索 Go 文件；不可用或无结果时执行确定性回退。"""
+
         try:
             completed = subprocess.run(
                 ["rg", "--line-number", "--glob", "*.go", pattern, "."],
@@ -168,6 +180,8 @@ class GoBackend(LanguageBackend):
 
     @staticmethod
     def _python_search(repo: Path, pattern: str) -> list[str]:
+        """不依赖外部工具的正则搜索回退，跳过 .git/vendor。"""
+
         expression = re.compile(pattern)
         matches: list[str] = []
         for current, directories, filenames in os.walk(repo, followlinks=False):

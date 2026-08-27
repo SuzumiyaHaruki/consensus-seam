@@ -11,6 +11,11 @@ ModelProfile = Literal["manifest", "mixed", "all-flash", "all-pro"]
 
 
 def resolve_model_profile(config: LLMConfig, profile: ModelProfile) -> LLMConfig:
+    """在保留 thinking/token 等参数的前提下覆盖三个模型名称。
+
+    总是返回副本，避免一次 CLI 实验的 profile 原地污染 LoadedProject。
+    """
+
     if profile == "manifest":
         return config.model_copy(deep=True)
 
