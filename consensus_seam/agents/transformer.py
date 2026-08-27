@@ -37,6 +37,7 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
         *,
         selected_capabilities: set[str] | None = None,
         feedback: dict[str, Any] | None = None,
+        invocation_id: str | None = None,
     ) -> InterfaceReport:
         patchable = capability_report.patchable(selected_capabilities)
         if not patchable:
@@ -60,6 +61,7 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
         result = self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
             tools=transformer_tools(worktree, self.backend),
+            invocation_id=invocation_id,
         )
         reported = set(result.capabilities())
         if reported != patchable:

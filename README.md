@@ -11,8 +11,9 @@ A deterministic verifier, not an Agent, runs the configured build and test
 commands. The current repository is the first runnable framework: it provides
 validated configuration and Agent I/O, prompts, a DeepSeek Chat Completions tool
 runtime, a fake runtime, an explicit workflow, a thin Go backend, isolated Git
-worktrees, artifact reporting, and tests. It does not yet claim the Mini Raft
-message-control vertical slice or a live authenticated DeepSeek run.
+worktrees, artifact reporting, and tests. v0.1 has completed a live, blind Mini
+Raft message-control experiment with deterministic repair feedback. The artifacts
+under `runs/latest` are development evidence, not yet a cross-system evaluation.
 
 ## Requirements
 
@@ -77,7 +78,8 @@ The Analyzer can list, read, and search source plus query Go declarations; it
 cannot edit source or run target tests. The Transformer gets the same inspection
 tools plus bounded `apply_patch` and `write_file` operations scoped to its Git
 worktree. The Reviewer gets separate read-only `original` and `patched` scopes.
-All tool responses are capped before returning to the model.
+All tool responses are capped before returning to the model. Text search uses
+ripgrep when available and a deterministic Python fixed-string fallback otherwise.
 
 Existing tracked Go tests are mechanically protected: Agent 2 may create new
 `*_test.go` files but a worktree that modifies an existing one is discarded.
@@ -98,9 +100,10 @@ recorded in `unresolved.json` as intentionally skipped.
 Each invocation writes structured artifacts below `runs/<run-id>/`. The original
 target repository is never modified by the transformer path; modifications are
 made in a detached Git worktree. Live runtimes also write `agent-run-stats.json`
-with model, API/tool-call counts, token usage, cache tokens, and timing. It never
-stores `reasoning_content`. Temporary 429, 5xx, and network failures are retried
-up to three times with bounded exponential backoff.
+with an invocation/round ID, model, API/tool-call counts, token usage, cache
+tokens, and timing. Tool audit records carry the same invocation ID. Neither
+artifact stores `reasoning_content`. Temporary 429, 5xx, and network failures
+are retried up to three times with bounded exponential backoff.
 
 On completion, audit-sized artifacts are also published to the Git-tracked
 `runs/latest/` directory. It contains reports, `changes.patch`, statistics, and
@@ -118,6 +121,17 @@ Formal benchmark manifests and hidden acceptance tests live under `evaluation/`,
 outside target repositories. `capability_checks`, experiment labels, and fixture
 paths are removed from every Agent prompt. Hidden files are materialized only
 after independent review and are deleted after verification.
+
+This is an **oracle-blind, contract-aware** evaluation: Agents see the generic
+testing contract, but not target-specific ground truth, acceptance code, commands,
+or expected implementation locations. For message control,
+`NewMessageController(Transport)` creates an active capture/suppress controller;
+production code uses the original Transport directly rather than toggling the
+controller into a pass-through mode.
+
+Runs labeled `blind_capability` or `repair` are refused unless both the
+ConsensusSeam controller and target repository are clean Git revisions. Commit
+or otherwise resolve changes to `runs/latest` before starting another formal run.
 
 For the blind Mini Raft experiment use:
 

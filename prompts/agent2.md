@@ -21,6 +21,11 @@ Declare `message_id_scope` and `controller_operations` in the interface report.
 Implement the capability spec's thin external testing contract, but choose the
 internal storage and seam structure that best fits the target.
 
+Before patching an existing file, read the exact target range and use its current
+content as patch context. If two apply_patch calls for the same file fail, read
+that target range again before attempting another patch; do not keep guessing
+stale context.
+
 If a supposedly patchable capability proves invasive, stop work on that
 capability and report `INVASIVE_REDISCOVERED`. Do not modify findings classified
 `SUPPORTED`, `PARTIAL`, `INVASIVE`, `UNKNOWN`, or `NOT_APPLICABLE`.

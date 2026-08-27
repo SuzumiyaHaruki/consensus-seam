@@ -486,6 +486,7 @@ class ReviewReport(StrictModel):
             "exact_target_preserved",
             "failed_injection_preserves_pending",
             "existing_tests_unchanged",
+            "testing_contract_conformance",
         }
     )
 
@@ -514,7 +515,11 @@ class ReviewReport(StrictModel):
     def validate_for_interface(self, interface_report: InterfaceReport) -> None:
         if self.overall is not ReviewOverall.PASS:
             return
-        required = {"protocol_logic_unchanged", "existing_tests_unchanged"}
+        required = {
+            "protocol_logic_unchanged",
+            "existing_tests_unchanged",
+            "testing_contract_conformance",
+        }
         capture = interface_report.message_capture
         if capture is not None and capture.implemented:
             required.update({"original_send_suppressed", "message_snapshot_stable"})

@@ -63,6 +63,8 @@ def test_analyzer_retries_invalid_json(tmp_path: Path) -> None:
     result = analyzer.analyze(loaded_project(tmp_path))
     assert result.target == "mini-raft"
     assert len(client.calls) == 2
+    assert client.calls[0]["invocation_id"] == "analyzer-attempt1"
+    assert client.calls[1]["invocation_id"] == "analyzer-attempt2"
     assert "previous response was rejected" in client.calls[1]["user_prompt"]
 
 

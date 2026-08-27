@@ -96,6 +96,7 @@ def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
         agent="analyzer",
         model=AgentModelConfig(model="deepseek-v4-flash"),
         tools=EchoTools(),
+        invocation_id="analyzer-a1-attempt1",
     )
     assert json.loads(result) == {"answer": "done"}
     second_messages = client.calls[1]["messages"]
@@ -108,6 +109,7 @@ def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
     assert client.calls[0]["response_format"] == {"type": "json_object"}
     stats = runtime.stats_snapshot()
     assert stats[0]["agent"] == "analyzer"
+    assert stats[0]["invocation_id"] == "analyzer-a1-attempt1"
     assert stats[0]["model"] == "deepseek-v4-flash"
     assert stats[0]["api_calls"] == 2
     assert stats[0]["tool_calls"] == 1
@@ -120,6 +122,7 @@ def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
     audit = runtime.tool_audit_snapshot()
     assert len(audit) == 1
     assert audit[0]["agent"] == "analyzer"
+    assert audit[0]["invocation_id"] == "analyzer-a1-attempt1"
     assert audit[0]["tool"] == "echo"
     assert audit[0]["arguments"] == {"value": "source"}
     assert audit[0]["output_bytes"] > 0

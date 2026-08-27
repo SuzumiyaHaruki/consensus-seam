@@ -4,6 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import consensus_seam.tools as tools_module
 from consensus_seam.languages.go import GoBackend
 from consensus_seam.tools import (
     MAX_TOOL_OUTPUT,
@@ -119,3 +120,31 @@ def test_all_tool_results_are_bounded() -> None:
     payload = json.loads(serialized)
     assert len(serialized.encode("utf-8")) <= MAX_TOOL_OUTPUT
     assert payload["truncated"] is True
+
+
+def test_search_text_falls_back_when_ripgrep_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "node.go").write_text(
+        "package mini\n\nfunc SendMessage() {}\n",
+        encoding="utf-8",
+    )
+
+    def no_ripgrep(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("rg is unavailable")
+
+    monkeypatch.setattr(tools_module.subprocess, "run", no_ripgrep)  # type: ignore[attr-defined]
+    registry = analyzer_tools(source, GoBackend())
+    result = json.loads(
+        registry.execute(
+            "search_text",
+            '{"scope":"source","path":".","query":"SendMessage"}',
+        )
+    )
+    assert result["ok"] is True
+    assert result["result"]["matches"] == [
+        f"{source / 'node.go'}:3:func SendMessage() {{}}"
+    ]

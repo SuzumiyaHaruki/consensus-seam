@@ -339,23 +339,64 @@ class LocalToolFactory:
             args.query,
             str(path),
         ]
-        completed = subprocess.run(
-            command,
-            cwd=self._root(args.scope),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        if completed.returncode not in (0, 1):
-            raise RuntimeError(completed.stderr.strip() or "rg search failed")
-        lines = completed.stdout.splitlines()
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self._root(args.scope),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        except FileNotFoundError:
+            lines = self._python_fixed_string_search(
+                self._root(args.scope),
+                path,
+                args.query,
+                args.max_results + 1,
+            )
+        else:
+            if completed.returncode not in (0, 1):
+                raise RuntimeError(completed.stderr.strip() or "rg search failed")
+            lines = completed.stdout.splitlines()
         output = lines[: args.max_results]
         joined = "\n".join(output)
         if len(joined) > MAX_TOOL_OUTPUT:
             joined = joined[:MAX_TOOL_OUTPUT]
             output = joined.splitlines()
         return {"matches": output, "truncated": len(lines) > len(output)}
+
+    @staticmethod
+    def _python_fixed_string_search(
+        root: Path,
+        start: Path,
+        query: str,
+        limit: int,
+    ) -> list[str]:
+        """Search allowed files deterministically when ripgrep is unavailable."""
+
+        candidates: list[Path] = []
+        if start.is_file():
+            candidates.append(start)
+        elif start.is_dir():
+            for current, directories, filenames in os.walk(start, followlinks=False):
+                directories[:] = sorted(name for name in directories if name != ".git")
+                candidates.extend(Path(current) / name for name in sorted(filenames))
+
+        matches: list[str] = []
+        for candidate in candidates:
+            try:
+                candidate.resolve().relative_to(root)
+                with candidate.open("r", encoding="utf-8", errors="replace") as handle:
+                    for line_number, line in enumerate(handle, start=1):
+                        if query not in line:
+                            continue
+                        matches.append(f"{candidate}:{line_number}:{line.rstrip()}")
+                        if len(matches) >= limit:
+                            return matches
+            except (OSError, ValueError):
+                continue
+        return matches
 
     def _find_symbol(self, value: ToolInput) -> list[str]:
         args = SymbolInput.model_validate(value)

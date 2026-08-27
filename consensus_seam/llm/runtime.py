@@ -14,6 +14,7 @@ from .base import AgentRuntimeError, ChatCompletionClient, ToolExecutor
 @dataclass(frozen=True)
 class AgentRunStats:
     agent: str
+    invocation_id: str
     model: str
     status: str
     api_calls: int
@@ -31,6 +32,7 @@ class AgentRunStats:
 @dataclass(frozen=True)
 class ToolCallAudit:
     agent: str
+    invocation_id: str
     model: str
     tool: str
     arguments: dict[str, Any]
@@ -64,7 +66,9 @@ class ToolCallingAgentRuntime:
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
+        invocation_id = invocation_id or f"{agent}-unscoped"
         started = time.monotonic()
         api_calls = 0
         tool_call_count = 0
@@ -134,6 +138,7 @@ class ToolCallingAgentRuntime:
                             self._tool_audit.append(
                                 ToolCallAudit(
                                     agent=agent,
+                                    invocation_id=invocation_id,
                                     model=model.model,
                                     tool=function["name"],
                                     arguments=self._summarize_arguments(
@@ -177,6 +182,7 @@ class ToolCallingAgentRuntime:
             self._stats.append(
                 AgentRunStats(
                     agent=agent,
+                    invocation_id=invocation_id,
                     model=model.model,
                     status=status,
                     api_calls=api_calls,

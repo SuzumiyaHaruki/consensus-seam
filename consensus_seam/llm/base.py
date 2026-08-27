@@ -26,6 +26,7 @@ class AgentRuntime(Protocol):
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
         """Run a bounded Agent turn, including local tool calls."""
 

@@ -28,6 +28,7 @@ class BlindFakeRuntime:
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
         if agent == "analyzer":
             report = capability_report()
@@ -136,7 +137,11 @@ func TestHidden(t *testing.T) {
     )
 
     runtime = BlindFakeRuntime()
-    workflow = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs")
+    workflow = ConsensusWorkflow(
+        runtime,
+        runs_root=tmp_path / "runs",
+        controller_repository=repo,
+    )
     result = workflow.run(load_project(manifest))
     assert result.outcome is WorkflowOutcome.PASS
     assert runtime.reviewer_saw_hidden_fixture is False

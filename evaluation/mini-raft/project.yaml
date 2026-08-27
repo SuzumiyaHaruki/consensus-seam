@@ -12,7 +12,7 @@ system_boundary:
 experiment:
   kind: blind_capability
   oracle_visible_to_agents: false
-  research_claim: Blind capability classification and low-intrusion message-control transformation
+  research_claim: Oracle-blind, contract-aware capability classification and low-intrusion message-control transformation
 
 transform_capabilities:
   - message_capture

@@ -7,7 +7,10 @@ capabilities:
       the original uncontrollable send path. A captured message must not continue
       automatically along that path.
     testing_contract:
-      constructor: NewMessageController(Transport)
+      constructor: >
+        NewMessageController(Transport) creates an active test-mode controller.
+        Outbound messages are captured and suppressed immediately after
+        construction; v0.1 does not require an enable or disable toggle.
       list_pending: ListPending() returns stable metadata with ID, From, To, Type, and CaptureSequence
       clear_pending: ClearPending() removes all pending messages
 

@@ -100,3 +100,23 @@ def test_reviewer_cannot_mark_applicable_injection_check_not_applicable() -> Non
     report = ReviewReport.model_validate(payload)
     with pytest.raises(ValueError, match="applicable checks PASS"):
         report.validate_for_interface(interface)
+
+
+def test_reviewer_must_pass_testing_contract_conformance() -> None:
+    interface = InterfaceReport.model_validate(
+        {
+            "message_injection": {
+                "implemented": True,
+                "message_id_scope": "test_session",
+                "controller_operations": "serialized",
+            }
+        }
+    )
+    payload = review_report()
+    for check in payload["checks"]:
+        if check["name"] == "testing_contract_conformance":
+            check["result"] = "NOT_APPLICABLE"
+            check["evidence"] = []
+    report = ReviewReport.model_validate(payload)
+    with pytest.raises(ValueError, match="testing_contract_conformance"):
+        report.validate_for_interface(interface)

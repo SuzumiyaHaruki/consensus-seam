@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from consensus_seam.cli import main
 from consensus_seam.config import load_project
 from consensus_seam.llm.client import FakeLLMClient
@@ -12,7 +14,7 @@ from consensus_seam.llm.runtime import ToolCallingAgentRuntime
 from consensus_seam.models import WorkflowOutcome
 from consensus_seam.models import AgentModelConfig
 from consensus_seam.llm.base import ToolExecutor
-from consensus_seam.workflow import ConsensusWorkflow
+from consensus_seam.workflow import ConsensusWorkflow, ExperimentPreconditionError
 from tests.helpers import capability_report, review_report, write_project_manifest
 
 
@@ -52,6 +54,7 @@ class EditingFakeClient:
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
         self.calls += 1
         if self.calls == 1:
@@ -110,6 +113,7 @@ class GuardrailFakeRuntime:
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
         if agent == "analyzer":
             report = capability_report()
@@ -213,6 +217,7 @@ class ScopedTransformRuntime:
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
         if agent == "analyzer":
             report = capability_report()
@@ -281,6 +286,7 @@ def test_live_runtime_stats_are_written_without_reasoning_content(tmp_path: Path
     result = workflow.analyze(load_project(manifest))
     stats = json.loads((result.run_directory / "agent-run-stats.json").read_text())
     assert stats[0]["agent"] == "analyzer"
+    assert stats[0]["invocation_id"] == "analyzer-a1-attempt1"
     assert stats[0]["input_tokens"] == 100
     assert stats[0]["output_tokens"] == 20
     assert "reasoning_content" not in stats[0]
@@ -462,3 +468,36 @@ def test_cli_analyze_command(tmp_path: Path, capsys: Any) -> None:
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert output["outcome"] == "ANALYZED"
+
+
+@pytest.mark.parametrize("dirty_repository", ["controller", "target"])
+def test_formal_experiment_requires_clean_revisions(
+    tmp_path: Path,
+    dirty_repository: str,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    initialize_git_repository(target)
+    controller = tmp_path / "controller"
+    controller.mkdir()
+    initialize_git_repository(controller)
+    dirty = controller if dirty_repository == "controller" else target
+    (dirty / "node.go").write_text("package mini\n\n// dirty\n", encoding="utf-8")
+    manifest = write_project_manifest(
+        tmp_path,
+        target,
+        extra=(
+            "experiment:",
+            "  kind: blind_capability",
+            "  oracle_visible_to_agents: false",
+            "  research_claim: clean revision guard",
+        ),
+    )
+    workflow = ConsensusWorkflow(
+        FakeLLMClient([json.dumps(capability_report())]),
+        runs_root=tmp_path / "runs",
+        controller_repository=controller,
+    )
+    with pytest.raises(ExperimentPreconditionError, match=dirty_repository):
+        workflow.analyze(load_project(manifest))
+    assert not (tmp_path / "runs").exists()

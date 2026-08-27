@@ -49,8 +49,10 @@ class StructuredAgent(Generic[OutputT]):
         *,
         tools: ToolExecutor | None = None,
         post_validate: Callable[[OutputT], None] | None = None,
+        invocation_id: str | None = None,
     ) -> OutputT:
         validation_error = ""
+        invocation_prefix = invocation_id or self.agent_name
         for attempt in range(1, self.max_attempts + 1):
             retry_prompt = user_prompt
             if validation_error:
@@ -65,6 +67,7 @@ class StructuredAgent(Generic[OutputT]):
                 agent=self.agent_name,
                 model=self.model,
                 tools=tools,
+                invocation_id=f"{invocation_prefix}-attempt{attempt}",
             )
             try:
                 payload = json.loads(raw)

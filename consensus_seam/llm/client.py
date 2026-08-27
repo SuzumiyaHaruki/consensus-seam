@@ -36,6 +36,7 @@ class FakeLLMClient:
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -43,6 +44,7 @@ class FakeLLMClient:
                 "user_prompt": user_prompt,
                 "response_schema": response_schema,
                 "agent": agent,
+                "invocation_id": invocation_id,
                 "model": model.model_dump(mode="json"),
                 "tools": [] if tools is None else tools.definitions,
             }
@@ -50,6 +52,7 @@ class FakeLLMClient:
         if not self._responses:
             raise AgentRuntimeError("FakeLLMClient has no response remaining")
         return self._responses.popleft()
+
 
 class UnconfiguredLLMClient:
     """Fail clearly until a real provider adapter is deliberately selected."""
@@ -63,6 +66,7 @@ class UnconfiguredLLMClient:
         agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
     ) -> str:
         raise AgentRuntimeError(
             "no Agent runtime configured; pass --responses or set DEEPSEEK_API_KEY"

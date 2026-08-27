@@ -29,6 +29,13 @@ from .verify import (
 from .workspace import GitWorktree, git_audit_state
 
 
+FORMAL_EXPERIMENT_KINDS = frozenset({"blind_capability", "repair"})
+
+
+class ExperimentPreconditionError(RuntimeError):
+    """Raised when a formal experiment is not bound to clean Git revisions."""
+
+
 class ConsensusWorkflow:
     """Orchestrate Agents with fixed transitions and bounded retries."""
 
@@ -39,6 +46,7 @@ class ConsensusWorkflow:
         runs_root: Path,
         backend: GoBackend | None = None,
         model_profile: ModelProfile = "manifest",
+        controller_repository: Path | None = None,
     ) -> None:
         self.backend = backend or GoBackend()
         self.runtime = runtime
@@ -46,6 +54,9 @@ class ConsensusWorkflow:
         self.baseline_verifier = BaselineVerifier(self.backend)
         self.verifier = DeterministicVerifier(self.backend)
         self.runs_root = runs_root
+        self.controller_repository = (
+            controller_repository or resource_root()
+        ).resolve()
 
     def analyze(self, project: LoadedProject) -> WorkflowResult:
         return self._with_artifacts(
@@ -59,7 +70,7 @@ class ConsensusWorkflow:
         artifacts: ArtifactStore,
     ) -> WorkflowResult:
         analyzer, _, _ = self._agents(project)
-        report = analyzer.analyze(project)
+        report = analyzer.analyze(project, invocation_id="analyzer-a1")
         artifacts.write_model("capability-report.json", report)
         self._write_unresolved(artifacts, report, project)
         return WorkflowResult(
@@ -72,6 +83,7 @@ class ConsensusWorkflow:
         project: LoadedProject,
         operation: Callable[[ArtifactStore], WorkflowResult],
     ) -> WorkflowResult:
+        self._require_reproducible_experiment(project)
         artifacts = ArtifactStore.create(self.runs_root)
         self._write_run_config(artifacts, project)
         stats_start = self._runtime_stats_count()
@@ -117,7 +129,7 @@ class ConsensusWorkflow:
                     reason="BASELINE_FAILED",
                 )
 
-        report = analyzer.analyze(project)
+        report = analyzer.analyze(project, invocation_id="analyzer-a1")
         artifacts.write_model("capability-report.json", report)
         if not self._selected_patchable(project, report):
             self._write_unresolved(artifacts, report, project)
@@ -136,7 +148,11 @@ class ConsensusWorkflow:
         limits = project.manifest.limits
         for analysis_round in range(1, limits.agent1_reanalysis_rounds + 1):
             if analysis_round > 1:
-                report = analyzer.analyze(project, feedback=agent1_feedback)
+                report = analyzer.analyze(
+                    project,
+                    feedback=agent1_feedback,
+                    invocation_id=f"analyzer-a{analysis_round}",
+                )
                 artifacts.write_model("capability-report.json", report)
                 if not self._selected_patchable(project, report):
                     self._write_unresolved(artifacts, report, project)
@@ -164,6 +180,7 @@ class ConsensusWorkflow:
                     worktree.path,
                     selected_capabilities=self._selected_patchable(project, report),
                     feedback=agent2_feedback,
+                    invocation_id=f"transformer-a{analysis_round}-p{patch_round}",
                 )
                 artifacts.write_model("interface-report.json", interface_report)
                 artifacts.write_model(
@@ -263,6 +280,7 @@ class ConsensusWorkflow:
                     worktree.path,
                     git_diff,
                     patch_metrics,
+                    invocation_id=f"reviewer-a{analysis_round}-p{patch_round}",
                 )
                 artifacts.write_model("review-report.json", review)
                 artifacts.write_model(
@@ -385,7 +403,7 @@ class ConsensusWorkflow:
                     else project.manifest.experiment.model_dump(mode="json")
                 ),
                 "source_revisions": {
-                    "controller": git_audit_state(resource_root()),
+                    "controller": git_audit_state(self.controller_repository),
                     "target": git_audit_state(project.repository),
                 },
                 "system_boundary": project.manifest.system_boundary.model_dump(mode="json"),
@@ -402,6 +420,28 @@ class ConsensusWorkflow:
                 ],
             },
         )
+
+    def _require_reproducible_experiment(self, project: LoadedProject) -> None:
+        experiment = project.manifest.experiment
+        if experiment is None or experiment.kind not in FORMAL_EXPERIMENT_KINDS:
+            return
+        states = {
+            "controller": git_audit_state(self.controller_repository),
+            "target": git_audit_state(project.repository),
+        }
+        invalid = [
+            name
+            for name, state in states.items()
+            if state["revision"] is None or state["dirty"] is not False
+        ]
+        if invalid:
+            details = ", ".join(
+                f"{name}(revision={states[name]['revision']}, dirty={states[name]['dirty']})"
+                for name in invalid
+            )
+            raise ExperimentPreconditionError(
+                "formal experiments require clean Git revisions: " + details
+            )
 
     def _runtime_stats_count(self) -> int:
         snapshot = getattr(self.runtime, "stats_snapshot", None)

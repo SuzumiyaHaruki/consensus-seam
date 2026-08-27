@@ -42,6 +42,8 @@ class IndependentReviewer(StructuredAgent[ReviewReport]):
         worktree: Path,
         git_diff: str,
         patch_metrics: PatchMetrics,
+        *,
+        invocation_id: str | None = None,
     ) -> ReviewReport:
         payload = {
             "original_repository": str(project.repository),
@@ -58,4 +60,5 @@ class IndependentReviewer(StructuredAgent[ReviewReport]):
             json.dumps(payload, indent=2, sort_keys=True),
             tools=reviewer_tools(project.repository, worktree, self.backend),
             post_validate=lambda report: report.validate_for_interface(interface_report),
+            invocation_id=invocation_id,
         )

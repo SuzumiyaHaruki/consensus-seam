@@ -33,6 +33,7 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
         project: LoadedProject,
         *,
         feedback: dict[str, Any] | None = None,
+        invocation_id: str | None = None,
     ) -> CapabilityReport:
         payload = {
             "project": project.agent_manifest(),
@@ -45,6 +46,7 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
         report = self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
             tools=analyzer_tools(project.repository, self.backend),
+            invocation_id=invocation_id,
         )
         if report.target != project.manifest.name:
             raise ValueError(

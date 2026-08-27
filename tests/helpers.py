@@ -50,6 +50,7 @@ def review_report() -> dict[str, Any]:
         "exact_target_preserved",
         "failed_injection_preserves_pending",
         "existing_tests_unchanged",
+        "testing_contract_conformance",
     ):
         checks.append(
             {
