@@ -21,6 +21,7 @@ class AgentOutputError(ValueError):
 
 
 class StructuredAgent(Generic[OutputT]):
+    agent_name: str
     prompt_name: str
     output_type: type[OutputT]
 
@@ -55,6 +56,7 @@ class StructuredAgent(Generic[OutputT]):
                 self._system_prompt(),
                 retry_prompt,
                 self.output_type.model_json_schema(),
+                agent=self.agent_name,
                 model=self.model,
                 tools=tools,
             )

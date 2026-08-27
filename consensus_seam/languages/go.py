@@ -79,6 +79,17 @@ class GoBackend(LanguageBackend):
         )
 
     def find_references(self, repo: Path, symbol: str) -> list[str]:
+        if symbol.count(".") == 1:
+            receiver, method = symbol.split(".", 1)
+            valid = all(
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", item)
+                for item in (receiver, method)
+            )
+            if valid:
+                return [
+                    f"{line} [textual candidate for {symbol}; receiver not proven]"
+                    for line in self._search(repo, rf"\b{re.escape(method)}\b")
+                ]
         return self._search(repo, rf"\b{re.escape(symbol)}\b")
 
     def syntax_check(self, repo: Path) -> CommandExecution:

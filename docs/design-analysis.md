@@ -45,6 +45,11 @@ already defines state ownership across restart.
   `go/parser`/`go/ast` helper rather than only a regular expression.
 - Target manifests define `system_boundary`, per-Agent models, and named
   capability checks. Full runs reject unverified implementation claims.
+- Existing tracked Go tests are protected through Git's committed baseline; new
+  capability tests remain allowed. No additional content hashes are introduced.
+- `INVASIVE_REDISCOVERED` always invalidates the entire current worktree.
+- Tool output is uniformly bounded, and live Agent runs record aggregate usage
+  and timing without storing model reasoning content.
 
 ## Deliberately incomplete after the framework milestone
 
@@ -60,6 +65,10 @@ following with generated Go tests:
 
 A live authenticated DeepSeek run is still required to validate model behavior,
 tool-choice quality, token usage, and retry behavior against the real service.
+
+`SUPPORTED` findings in analyze-only/no-patch runs are not dynamically verified
+yet. A future opt-in supported-capability verification mode may execute manifest
+checks, particularly for the etcd-raft classification experiment.
 
 Capability-test routing is now wired through the manifest and workflow. The Mini
 Raft target must provide separate MC1/MC2/MC3 commands; without them, a full run

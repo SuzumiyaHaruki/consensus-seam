@@ -42,14 +42,18 @@ class ConsensusWorkflow:
     def analyze(self, project: LoadedProject) -> WorkflowResult:
         artifacts = ArtifactStore.create(self.runs_root)
         self._write_run_config(artifacts, project)
-        analyzer, _, _ = self._agents(project)
-        report = analyzer.analyze(project)
-        artifacts.write_model("capability-report.json", report)
-        artifacts.write_unresolved(report)
-        return WorkflowResult(
-            outcome=WorkflowOutcome.ANALYZED,
-            run_directory=artifacts.run_directory,
-        )
+        stats_start = self._runtime_stats_count()
+        try:
+            analyzer, _, _ = self._agents(project)
+            report = analyzer.analyze(project)
+            artifacts.write_model("capability-report.json", report)
+            artifacts.write_unresolved(report)
+            return WorkflowResult(
+                outcome=WorkflowOutcome.ANALYZED,
+                run_directory=artifacts.run_directory,
+            )
+        finally:
+            self._write_runtime_stats(artifacts, stats_start)
 
     def patch(self, project: LoadedProject) -> WorkflowResult:
         return self._patch_loop(project, verify=False)
@@ -60,6 +64,19 @@ class ConsensusWorkflow:
     def _patch_loop(self, project: LoadedProject, *, verify: bool) -> WorkflowResult:
         artifacts = ArtifactStore.create(self.runs_root)
         self._write_run_config(artifacts, project)
+        stats_start = self._runtime_stats_count()
+        try:
+            return self._execute_patch_loop(project, verify=verify, artifacts=artifacts)
+        finally:
+            self._write_runtime_stats(artifacts, stats_start)
+
+    def _execute_patch_loop(
+        self,
+        project: LoadedProject,
+        *,
+        verify: bool,
+        artifacts: ArtifactStore,
+    ) -> WorkflowResult:
         analyzer, transformer, reviewer = self._agents(project)
         if verify:
             baseline = self.baseline_verifier.run(project)
@@ -123,14 +140,51 @@ class ConsensusWorkflow:
                 if rediscovered:
                     report.apply_rediscovered(rediscovered)
                     artifacts.write_model("capability-report.json", report)
-                if not report.patchable():
-                    artifacts.write_text("changes.patch", worktree.diff())
-                    artifacts.write_unresolved(report)
-                    return WorkflowResult(
-                        outcome=WorkflowOutcome.PARTIAL,
-                        run_directory=artifacts.run_directory,
-                        reason="All proposed changes were rediscovered as invasive",
+                    artifacts.write_json(
+                        f"logs/discarded-a{analysis_round}-p{patch_round}.json",
+                        {
+                            "worktree": str(worktree.path),
+                            "reason": "INVASIVE_REDISCOVERED",
+                            "capabilities": sorted(rediscovered),
+                        },
                     )
+                    if not report.patchable():
+                        artifacts.write_text("changes.patch", "")
+                        artifacts.write_unresolved(report)
+                        return WorkflowResult(
+                            outcome=WorkflowOutcome.PARTIAL,
+                            run_directory=artifacts.run_directory,
+                            reason="All proposed changes were rediscovered as invasive",
+                        )
+                    agent2_feedback = {
+                        "failure": "INVASIVE_REDISCOVERED",
+                        "discarded_capabilities": sorted(rediscovered),
+                        "instruction": (
+                            "The prior worktree was discarded. Start from the fresh "
+                            "worktree and modify only remaining PATCHABLE capabilities."
+                        ),
+                    }
+                    continue
+
+                protected_tests = worktree.modified_existing_go_tests()
+                if protected_tests:
+                    artifacts.write_json(
+                        f"logs/protected-files-a{analysis_round}-p{patch_round}.json",
+                        {
+                            "worktree": str(worktree.path),
+                            "reason": "EXISTING_TEST_MODIFIED",
+                            "files": protected_tests,
+                        },
+                    )
+                    agent2_feedback = {
+                        "failure": "EXISTING_TEST_MODIFIED",
+                        "files": protected_tests,
+                        "instruction": (
+                            "The prior worktree was discarded. Existing Go tests are "
+                            "immutable; create new capability tests instead."
+                        ),
+                    }
+                    continue
 
                 # Make new files visible to Git before selecting changed Go files.
                 worktree.diff()
@@ -299,3 +353,12 @@ class ConsensusWorkflow:
                 ],
             },
         )
+
+    def _runtime_stats_count(self) -> int:
+        snapshot = getattr(self.runtime, "stats_snapshot", None)
+        return len(snapshot()) if callable(snapshot) else 0
+
+    def _write_runtime_stats(self, artifacts: ArtifactStore, start: int) -> None:
+        snapshot = getattr(self.runtime, "stats_snapshot", None)
+        records = snapshot()[start:] if callable(snapshot) else []
+        artifacts.write_json("agent-run-stats.json", records)

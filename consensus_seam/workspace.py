@@ -47,3 +47,16 @@ class GitWorktree:
         # Intent-to-add makes new, non-ignored files visible in a regular patch.
         _git(self.path, "add", "--intent-to-add", "--", ".")
         return _git(self.path, "diff", "--binary", "--no-ext-diff", "HEAD", "--")
+
+    def modified_existing_go_tests(self) -> list[str]:
+        """Return tracked Go tests changed from HEAD; newly created tests are allowed."""
+
+        tracked = {
+            line
+            for line in _git(self.path, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+            if line.endswith("_test.go")
+        }
+        changed = set(
+            _git(self.path, "diff", "--name-only", "HEAD", "--").splitlines()
+        )
+        return sorted(tracked & changed)

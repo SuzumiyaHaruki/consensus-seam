@@ -114,24 +114,49 @@ class ToolRegistry:
     def execute(self, name: str, raw_arguments: str) -> str:
         tool = self._tools.get(name)
         if tool is None:
-            return json.dumps({"ok": False, "error": f"unknown tool: {name}"})
+            return self._bounded_json({"ok": False, "error": f"unknown tool: {name}"})
         try:
             raw = json.loads(raw_arguments)
             arguments = tool.input_model.model_validate(raw)
             value = tool.handler(arguments)
-            return json.dumps({"ok": True, "result": value}, ensure_ascii=False)
+            return self._bounded_json({"ok": True, "result": value})
         except (
             json.JSONDecodeError,
             ValidationError,
             OSError,
             RuntimeError,
+            TypeError,
             ValueError,
             subprocess.SubprocessError,
         ) as exc:
-            return json.dumps(
-                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+            return self._bounded_json(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            )
+
+    @staticmethod
+    def _bounded_json(payload: dict[str, Any]) -> str:
+        serialized = json.dumps(payload, ensure_ascii=False)
+        original_bytes = len(serialized.encode("utf-8"))
+        if original_bytes <= MAX_TOOL_OUTPUT:
+            return serialized
+        preview_limit = MAX_TOOL_OUTPUT - 512
+        while preview_limit > 0:
+            preview = serialized.encode("utf-8")[:preview_limit].decode(
+                "utf-8", errors="ignore"
+            )
+            bounded = json.dumps(
+                {
+                    "ok": payload.get("ok", True),
+                    "truncated": True,
+                    "original_bytes": original_bytes,
+                    "preview": preview,
+                },
                 ensure_ascii=False,
             )
+            if len(bounded.encode("utf-8")) <= MAX_TOOL_OUTPUT:
+                return bounded
+            preview_limit -= 512
+        return '{"ok":false,"truncated":true,"error":"tool output exceeded limit"}'
 
 
 class LocalToolFactory:

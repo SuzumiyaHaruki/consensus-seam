@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from typing import Any
+from urllib.error import HTTPError
 
 import consensus_seam.llm.deepseek as deepseek_module
 from consensus_seam.llm.deepseek import DeepSeekClient
@@ -50,3 +52,33 @@ def test_deepseek_client_uses_chat_completions_payload(monkeypatch: Any) -> None
     assert captured["body"]["reasoning_effort"] == "max"
     assert captured["body"]["tool_choice"] == "auto"
     assert captured["body"]["response_format"] == {"type": "json_object"}
+
+
+def test_deepseek_client_retries_429_with_bounded_backoff(monkeypatch: Any) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> FakeHTTPResponse:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise HTTPError(
+                request.full_url,
+                429,
+                "rate limited",
+                {"Retry-After": "0.25"},
+                BytesIO(b'{"error":"rate limited"}'),
+            )
+        return FakeHTTPResponse()
+
+    monkeypatch.setattr(deepseek_module, "urlopen", fake_urlopen)
+    client = DeepSeekClient("secret", sleep=delays.append)
+    response = client.create_chat_completion(
+        model=AgentModelConfig(model="deepseek-v4-flash"),
+        messages=[{"role": "user", "content": "hello"}],
+        tools=None,
+        response_format=None,
+    )
+    assert response["_consensus_seam_http_attempts"] == 2
+    assert attempts == 2
+    assert delays == [0.25]

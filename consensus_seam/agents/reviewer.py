@@ -14,6 +14,7 @@ from ..tools import reviewer_tools
 
 
 class IndependentReviewer(StructuredAgent[ReviewReport]):
+    agent_name = "reviewer"
     prompt_name = "agent3.md"
     output_type = ReviewReport
 

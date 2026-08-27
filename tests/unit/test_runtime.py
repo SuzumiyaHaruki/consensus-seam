@@ -37,6 +37,13 @@ class ScriptedChatClient:
         self.calls.append(kwargs)
         if len(self.calls) == 1:
             return {
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "prompt_cache_hit_tokens": 4,
+                    "prompt_cache_miss_tokens": 6,
+                },
                 "choices": [
                     {
                         "finish_reason": "tool_calls",
@@ -59,6 +66,13 @@ class ScriptedChatClient:
                 ]
             }
         return {
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 3,
+                "total_tokens": 23,
+                "prompt_cache_hit_tokens": 5,
+                "prompt_cache_miss_tokens": 15,
+            },
             "choices": [
                 {
                     "finish_reason": "stop",
@@ -79,6 +93,7 @@ def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
         "Return JSON.",
         "Inspect the repository.",
         {"type": "object"},
+        agent="analyzer",
         model=AgentModelConfig(model="deepseek-v4-flash"),
         tools=EchoTools(),
     )
@@ -91,3 +106,14 @@ def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
         "content": '{"ok": true, "result": "source"}',
     }
     assert client.calls[0]["response_format"] == {"type": "json_object"}
+    stats = runtime.stats_snapshot()
+    assert stats[0]["agent"] == "analyzer"
+    assert stats[0]["model"] == "deepseek-v4-flash"
+    assert stats[0]["api_calls"] == 2
+    assert stats[0]["tool_calls"] == 1
+    assert stats[0]["input_tokens"] == 30
+    assert stats[0]["output_tokens"] == 5
+    assert stats[0]["total_tokens"] == 35
+    assert stats[0]["cache_hit_input_tokens"] == 9
+    assert stats[0]["cache_miss_input_tokens"] == 21
+    assert "reasoning_content" not in stats[0]

@@ -38,6 +38,21 @@ export DEEPSEEK_API_KEY='...'
 consensus-seam analyze --project targets/my-target/project.yaml
 ```
 
+Or place the raw key on one line in a file outside version control:
+
+```bash
+mkdir -p .secrets
+chmod 700 .secrets
+${EDITOR:-vi} .secrets/deepseek-api-key.txt
+chmod 600 .secrets/deepseek-api-key.txt
+consensus-seam analyze \
+  --project targets/my-target/project.yaml \
+  --api-key-file .secrets/deepseek-api-key.txt
+```
+
+`DEEPSEEK_API_KEY_FILE` can provide the same path without a CLI flag. Key file
+contents are never written to run artifacts or logs.
+
 `DEEPSEEK_BASE_URL` may override `https://api.deepseek.com` for a compatible
 gateway. `--model-profile manifest|mixed|all-flash|all-pro` supports controlled
 model comparisons. The default `manifest` profile reads per-Agent settings from
@@ -62,6 +77,12 @@ The Analyzer can list, read, and search source plus query Go declarations; it
 cannot edit source or run target tests. The Transformer gets the same inspection
 tools plus bounded `apply_patch` and `write_file` operations scoped to its Git
 worktree. The Reviewer gets separate read-only `original` and `patched` scopes.
+All tool responses are capped before returning to the model.
+
+Existing tracked Go tests are mechanically protected: Agent 2 may create new
+`*_test.go` files but a worktree that modifies an existing one is discarded.
+Likewise, any `INVASIVE_REDISCOVERED` result discards that entire worktree before
+the remaining capabilities are retried from `HEAD`.
 
 Every target manifest must state its `system_boundary`. A full `run` also expects
 deterministic `capability_checks` for every implemented capability. Missing MC1,
@@ -70,7 +91,10 @@ success based only on the original test suite.
 
 Each invocation writes structured artifacts below `runs/<run-id>/`. The original
 target repository is never modified by the transformer path; modifications are
-made in a detached Git worktree.
+made in a detached Git worktree. Live runtimes also write `agent-run-stats.json`
+with model, API/tool-call counts, token usage, cache tokens, and timing. It never
+stores `reasoning_content`. Temporary 429, 5xx, and network failures are retried
+up to three times with bounded exponential backoff.
 
 See `CODEX_SPEC.md` for the non-goals and `spec/` for the capability and change
 policies. The current implementation boundary and next vertical slice are

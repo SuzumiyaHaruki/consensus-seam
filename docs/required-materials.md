@@ -3,7 +3,10 @@
 ## Required for the first DeepSeek integration run
 
 1. A funded or otherwise usable DeepSeek API key. Export it as
-   `DEEPSEEK_API_KEY`; do not paste it into `project.yaml` or commit it.
+   `DEEPSEEK_API_KEY`, or put only the raw key on one line in a protected text
+   file and pass `--api-key-file`. Do not paste it into `project.yaml` or commit
+   it. A recommended local path is `.secrets/deepseek-api-key.txt` with mode 600.
+   `DEEPSEEK_API_KEY_FILE` may point to the same file.
 2. Network access to `https://api.deepseek.com`. If the environment uses a
    compatible gateway, provide its URL through `DEEPSEEK_BASE_URL`.
 3. Authorization to send requested source snippets and tool results to DeepSeek.

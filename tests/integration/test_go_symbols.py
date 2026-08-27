@@ -14,6 +14,8 @@ type RawNode struct{}
 
 func (rn *RawNode) Ready() {}
 func (rn RawNode) Tick() {}
+
+func use(rn *RawNode) { rn.Ready() }
 """,
         encoding="utf-8",
     )
@@ -31,3 +33,5 @@ func (rn RawNode) Tick() {}
     assert backend.find_symbol(tmp_path, "RawNode.Tick") == [
         "rawnode.go:6:RawNode.Tick"
     ]
+    references = backend.find_references(tmp_path, "RawNode.Ready")
+    assert any("rn.Ready()" in item and "receiver not proven" in item for item in references)

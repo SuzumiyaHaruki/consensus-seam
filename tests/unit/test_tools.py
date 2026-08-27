@@ -5,7 +5,15 @@ import subprocess
 from pathlib import Path
 
 from consensus_seam.languages.go import GoBackend
-from consensus_seam.tools import analyzer_tools, reviewer_tools, transformer_tools
+from consensus_seam.tools import (
+    MAX_TOOL_OUTPUT,
+    LocalTool,
+    ToolInput,
+    ToolRegistry,
+    analyzer_tools,
+    reviewer_tools,
+    transformer_tools,
+)
 
 
 def names(registry: object) -> set[str]:
@@ -94,3 +102,20 @@ deleted file mode 100644
     )
     assert rejected["ok"] is False
     assert (repo / "node.go").exists()
+
+
+def test_all_tool_results_are_bounded() -> None:
+    registry = ToolRegistry(
+        [
+            LocalTool(
+                "large_result",
+                "return a deliberately large result",
+                ToolInput,
+                lambda _: "测" * MAX_TOOL_OUTPUT,
+            )
+        ]
+    )
+    serialized = registry.execute("large_result", "{}")
+    payload = json.loads(serialized)
+    assert len(serialized.encode("utf-8")) <= MAX_TOOL_OUTPUT
+    assert payload["truncated"] is True

@@ -23,6 +23,7 @@ class AgentRuntime(Protocol):
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
         *,
+        agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
     ) -> str:

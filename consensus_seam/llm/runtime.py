@@ -3,10 +3,29 @@
 from __future__ import annotations
 
 import json
+import time
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from ..models import AgentModelConfig
 from .base import AgentRuntimeError, ChatCompletionClient, ToolExecutor
+
+
+@dataclass(frozen=True)
+class AgentRunStats:
+    agent: str
+    model: str
+    status: str
+    api_calls: int
+    tool_calls: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cache_hit_input_tokens: int
+    cache_miss_input_tokens: int
+    api_wall_clock_seconds: float
+    wall_clock_seconds: float
+    error_type: str | None = None
 
 
 class ToolCallingAgentRuntime:
@@ -15,6 +34,10 @@ class ToolCallingAgentRuntime:
             raise ValueError("max_steps must be positive")
         self.client = client
         self.max_steps = max_steps
+        self._stats: list[AgentRunStats] = []
+
+    def stats_snapshot(self) -> list[dict[str, Any]]:
+        return [asdict(item) for item in self._stats]
 
     def run(
         self,
@@ -22,9 +45,21 @@ class ToolCallingAgentRuntime:
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
         *,
+        agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
     ) -> str:
+        started = time.monotonic()
+        api_calls = 0
+        tool_call_count = 0
+        input_tokens = 0
+        output_tokens = 0
+        total_tokens = 0
+        cache_hit_tokens = 0
+        cache_miss_tokens = 0
+        api_wall_clock = 0.0
+        status = "FAILED"
+        error_type: str | None = None
         schema_instruction = ""
         if response_schema is not None:
             schema_instruction = (
@@ -38,50 +73,93 @@ class ToolCallingAgentRuntime:
         ]
         definitions = None if tools is None else tools.definitions
 
-        for _ in range(self.max_steps):
-            response = self.client.create_chat_completion(
-                model=model,
-                messages=messages,
-                tools=definitions,
-                response_format={"type": "json_object"} if response_schema else None,
-            )
-            try:
-                choice = response["choices"][0]
-                message = choice["message"]
-            except (KeyError, IndexError, TypeError) as exc:
-                raise AgentRuntimeError("DeepSeek response is missing choices[0].message") from exc
+        try:
+            for _ in range(self.max_steps):
+                api_started = time.monotonic()
+                response = self.client.create_chat_completion(
+                    model=model,
+                    messages=messages,
+                    tools=definitions,
+                    response_format={"type": "json_object"} if response_schema else None,
+                )
+                api_wall_clock += time.monotonic() - api_started
+                api_calls += int(response.pop("_consensus_seam_http_attempts", 1))
+                usage = response.get("usage") or {}
+                input_tokens += int(usage.get("prompt_tokens", 0) or 0)
+                output_tokens += int(usage.get("completion_tokens", 0) or 0)
+                total_tokens += int(usage.get("total_tokens", 0) or 0)
+                cache_hit_tokens += int(usage.get("prompt_cache_hit_tokens", 0) or 0)
+                cache_miss_tokens += int(usage.get("prompt_cache_miss_tokens", 0) or 0)
+                try:
+                    choice = response["choices"][0]
+                    message = choice["message"]
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise AgentRuntimeError(
+                        "DeepSeek response is missing choices[0].message"
+                    ) from exc
 
-            assistant_message = self._assistant_message(message)
-            messages.append(assistant_message)
-            tool_calls = message.get("tool_calls") or []
-            if tool_calls:
-                if tools is None:
-                    raise AgentRuntimeError("model requested tools but this Agent has none")
-                for call in tool_calls:
-                    try:
-                        call_id = call["id"]
-                        function = call["function"]
-                        result = tools.execute(function["name"], function["arguments"])
-                    except (KeyError, TypeError) as exc:
-                        raise AgentRuntimeError("malformed tool call in model response") from exc
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "content": result,
-                        }
+                assistant_message = self._assistant_message(message)
+                messages.append(assistant_message)
+                tool_calls = message.get("tool_calls") or []
+                tool_call_count += len(tool_calls)
+                if tool_calls:
+                    if tools is None:
+                        raise AgentRuntimeError(
+                            "model requested tools but this Agent has none"
+                        )
+                    for call in tool_calls:
+                        try:
+                            call_id = call["id"]
+                            function = call["function"]
+                            result = tools.execute(
+                                function["name"], function["arguments"]
+                            )
+                        except (KeyError, TypeError) as exc:
+                            raise AgentRuntimeError(
+                                "malformed tool call in model response"
+                            ) from exc
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": result,
+                            }
+                        )
+                    continue
+
+                finish_reason = choice.get("finish_reason")
+                if finish_reason == "length":
+                    raise AgentRuntimeError("model output was truncated at max_tokens")
+                content = message.get("content")
+                if not isinstance(content, str) or not content.strip():
+                    raise AgentRuntimeError(
+                        "model returned neither tool calls nor final content"
                     )
-                continue
+                status = "COMPLETED"
+                return content
 
-            finish_reason = choice.get("finish_reason")
-            if finish_reason == "length":
-                raise AgentRuntimeError("model output was truncated at max_tokens")
-            content = message.get("content")
-            if not isinstance(content, str) or not content.strip():
-                raise AgentRuntimeError("model returned neither tool calls nor final content")
-            return content
-
-        raise AgentRuntimeError(f"Agent tool loop exceeded {self.max_steps} steps")
+            raise AgentRuntimeError(f"Agent tool loop exceeded {self.max_steps} steps")
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            self._stats.append(
+                AgentRunStats(
+                    agent=agent,
+                    model=model.model,
+                    status=status,
+                    api_calls=api_calls,
+                    tool_calls=tool_call_count,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    cache_hit_input_tokens=cache_hit_tokens,
+                    cache_miss_input_tokens=cache_miss_tokens,
+                    api_wall_clock_seconds=api_wall_clock,
+                    wall_clock_seconds=time.monotonic() - started,
+                    error_type=error_type,
+                )
+            )
 
     @staticmethod
     def _assistant_message(message: dict[str, Any]) -> dict[str, Any]:

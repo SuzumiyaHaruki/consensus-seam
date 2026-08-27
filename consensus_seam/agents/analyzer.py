@@ -14,6 +14,7 @@ from ..tools import analyzer_tools
 
 
 class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
+    agent_name = "analyzer"
     prompt_name = "agent1.md"
     output_type = CapabilityReport
 

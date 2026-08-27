@@ -15,6 +15,7 @@ from ..tools import transformer_tools
 
 
 class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
+    agent_name = "transformer"
     prompt_name = "agent2.md"
     output_type = InterfaceReport
 

@@ -33,6 +33,7 @@ class FakeLLMClient:
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
         *,
+        agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
     ) -> str:
@@ -41,6 +42,7 @@ class FakeLLMClient:
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "response_schema": response_schema,
+                "agent": agent,
                 "model": model.model_dump(mode="json"),
                 "tools": [] if tools is None else tools.definitions,
             }
@@ -61,6 +63,7 @@ class FakeLLMClient:
             system_prompt,
             user_prompt,
             response_schema,
+            agent="fake",
             model=AgentModelConfig(model="fake"),
         )
 
@@ -74,6 +77,7 @@ class UnconfiguredLLMClient:
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
         *,
+        agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
     ) -> str:

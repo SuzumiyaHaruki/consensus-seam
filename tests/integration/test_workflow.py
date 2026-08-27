@@ -8,6 +8,7 @@ from typing import Any
 from consensus_seam.cli import main
 from consensus_seam.config import load_project
 from consensus_seam.llm.client import FakeLLMClient
+from consensus_seam.llm.runtime import ToolCallingAgentRuntime
 from consensus_seam.models import WorkflowOutcome
 from consensus_seam.models import AgentModelConfig
 from consensus_seam.llm.base import ToolExecutor
@@ -48,6 +49,7 @@ class EditingFakeClient:
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
         *,
+        agent: str,
         model: AgentModelConfig,
         tools: ToolExecutor | None = None,
     ) -> str:
@@ -84,6 +86,112 @@ class EditingFakeClient:
         return json.dumps({"overall": "PASS", "issues": []})
 
 
+class GuardrailFakeRuntime:
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+        self.transformer_round = 0
+
+    @staticmethod
+    def _write(tools: ToolExecutor | None, path: str, content: str) -> None:
+        assert tools is not None
+        result = json.loads(
+            tools.execute("write_file", json.dumps({"path": path, "content": content}))
+        )
+        assert result["ok"] is True
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+    ) -> str:
+        if agent == "analyzer":
+            report = capability_report()
+            if self.mode == "rediscovered":
+                report["capabilities"]["message_capture"]["status"] = "PATCHABLE"
+            return json.dumps(report)
+        if agent == "reviewer":
+            return json.dumps({"overall": "PASS", "issues": []})
+
+        self.transformer_round += 1
+        payload = json.loads(user_prompt)
+        if self.mode == "protected_test" and self.transformer_round == 1:
+            self._write(tools, "node_test.go", "package mini\n\n// weakened\n")
+            return json.dumps(
+                {
+                    "message_injection": {
+                        "implemented": True,
+                        "entrypoint": {"symbol": "injectForTest"},
+                    }
+                }
+            )
+        if self.mode == "rediscovered" and self.transformer_round == 1:
+            self._write(
+                tools,
+                "capture_seam.go",
+                "package mini\n\nfunc contaminatedCaptureChange() {}\n",
+            )
+            return json.dumps(
+                {
+                    "message_capture": {
+                        "implemented": False,
+                        "rediscovered_status": "INVASIVE_REDISCOVERED",
+                    },
+                    "message_injection": {
+                        "implemented": True,
+                        "entrypoint": {"symbol": "injectForTest"},
+                    },
+                }
+            )
+
+        expected_failure = (
+            "EXISTING_TEST_MODIFIED"
+            if self.mode == "protected_test"
+            else "INVASIVE_REDISCOVERED"
+        )
+        assert payload["feedback"]["failure"] == expected_failure
+        self._write(
+            tools,
+            "injection_seam.go",
+            "package mini\n\nfunc injectForTest() {}\n",
+        )
+        return json.dumps(
+            {
+                "message_injection": {
+                    "implemented": True,
+                    "entrypoint": {
+                        "file": "injection_seam.go",
+                        "symbol": "injectForTest",
+                    },
+                }
+            }
+        )
+
+
+class AnalyzerChatClient:
+    def create_chat_completion(self, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            },
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(capability_report()),
+                    },
+                }
+            ],
+        }
+
+
 def test_analyze_writes_validated_artifacts(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -114,6 +222,39 @@ def test_analyze_writes_validated_artifacts(tmp_path: Path) -> None:
     assert result.outcome is WorkflowOutcome.ANALYZED
     assert (result.run_directory / "capability-report.json").is_file()
     assert (result.run_directory / "unresolved.json").is_file()
+    assert json.loads((result.run_directory / "agent-run-stats.json").read_text()) == []
+
+
+def test_live_runtime_stats_are_written_without_reasoning_content(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifest = tmp_path / "project.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "name: mini-raft",
+                "language: go",
+                "protocol: raft",
+                f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
+                "build: {command: 'go test ./...'}",
+                "test: {command: 'go test ./...'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workflow = ConsensusWorkflow(
+        ToolCallingAgentRuntime(AnalyzerChatClient()),
+        runs_root=tmp_path / "runs",
+    )
+    result = workflow.analyze(load_project(manifest))
+    stats = json.loads((result.run_directory / "agent-run-stats.json").read_text())
+    assert stats[0]["agent"] == "analyzer"
+    assert stats[0]["input_tokens"] == 100
+    assert stats[0]["output_tokens"] == 20
+    assert "reasoning_content" not in stats[0]
 
 
 def test_patch_stops_when_analysis_finds_no_patchable_capability(tmp_path: Path) -> None:
@@ -237,6 +378,92 @@ def test_run_refuses_success_without_capability_check(tmp_path: Path) -> None:
         (result.run_directory / "verification-report.json").read_text()
     )
     assert "MESSAGE_INJECTION_FAILED" in verification["details"][0]
+
+
+def test_existing_go_tests_are_protected_and_bad_worktree_is_discarded(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    original_test = "package mini\n\nfunc TestExisting(t *testing.T) {}\n"
+    (repo / "node_test.go").write_text(original_test, encoding="utf-8")
+    git(repo, "add", "node_test.go")
+    git(
+        repo,
+        "-c",
+        "user.name=ConsensusSeam Test",
+        "-c",
+        "user.email=consensus-seam@example.invalid",
+        "commit",
+        "-m",
+        "add existing test",
+    )
+    manifest = tmp_path / "project.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "name: mini-raft",
+                "language: go",
+                "protocol: raft",
+                f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
+                "build: {command: 'git diff --check'}",
+                "test: {command: 'git diff --check'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workflow = ConsensusWorkflow(
+        GuardrailFakeRuntime("protected_test"), runs_root=tmp_path / "runs"
+    )
+    result = workflow.patch(load_project(manifest))
+    assert result.outcome is WorkflowOutcome.PASS
+    assert (result.run_directory / "logs/protected-files-a1-p1.json").is_file()
+    patch = (result.run_directory / "changes.patch").read_text(encoding="utf-8")
+    assert "injection_seam.go" in patch
+    assert "node_test.go" not in patch
+    assert (repo / "node_test.go").read_text(encoding="utf-8") == original_test
+
+
+def test_rediscovered_invasive_change_always_uses_fresh_worktree(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = tmp_path / "project.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "name: mini-raft",
+                "language: go",
+                "protocol: raft",
+                f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
+                "build: {command: 'git diff --check'}",
+                "test: {command: 'git diff --check'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workflow = ConsensusWorkflow(
+        GuardrailFakeRuntime("rediscovered"), runs_root=tmp_path / "runs"
+    )
+    result = workflow.patch(load_project(manifest))
+    assert result.outcome is WorkflowOutcome.PASS
+    assert (result.run_directory / "logs/discarded-a1-p1.json").is_file()
+    patch = (result.run_directory / "changes.patch").read_text(encoding="utf-8")
+    assert "injection_seam.go" in patch
+    assert "capture_seam.go" not in patch
+    assert (result.run_directory / "patched-worktree/capture_seam.go").is_file()
+    assert not (
+        result.run_directory / "patched-worktree-a1-p2/capture_seam.go"
+    ).exists()
 
 
 def test_cli_analyze_command(tmp_path: Path, capsys: Any) -> None:

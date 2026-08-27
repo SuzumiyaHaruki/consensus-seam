@@ -5,3 +5,9 @@ __pycache__/
 dist/
 build/
 runs/*/
+.secrets/
+.env
+api-key.txt
+key.txt
+deepseek-key.txt
+deepseek_api_key.txt
