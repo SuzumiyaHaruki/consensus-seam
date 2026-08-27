@@ -102,6 +102,11 @@ with model, API/tool-call counts, token usage, cache tokens, and timing. It neve
 stores `reasoning_content`. Temporary 429, 5xx, and network failures are retried
 up to three times with bounded exponential backoff.
 
+On completion, audit-sized artifacts are also published to the Git-tracked
+`runs/latest/` directory. It contains reports, `changes.patch`, statistics, and
+logs, but excludes patched worktrees. Publishing updates local Git content only;
+the workflow never commits or pushes to a remote repository automatically.
+
 See `CODEX_SPEC.md` for the non-goals and `spec/` for the capability and change
 policies. The current implementation boundary and next vertical slice are
 documented in `docs/design-analysis.md`. Inputs needed for live runs are listed in

@@ -1,0 +1,56 @@
+{
+  "message_capture": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": {
+      "file": "controlled_transport.go",
+      "symbol": "ControlledTransport.Send",
+      "meaning": "Capture happens before the wrapped transport sees the message: Send stores a stable clone in the pending store and suppresses the original delivery path."
+    },
+    "pending_store": {
+      "file": "controlled_transport.go",
+      "symbol": "ControlledTransport.pending",
+      "meaning": "Ordered pending []MessageMeta holding captured snapshots; no scheduling policy implemented."
+    },
+    "entrypoint": {
+      "file": "controlled_transport.go",
+      "symbol": "ControlledTransport.Send",
+      "meaning": "Test-mode outbound seam: every outbound message funnels through Node.emit -> Transport.Send, so wrapping Config.Transport with ControlledTransport intercepts all vote requests/responses, append entries/responses, and heartbeats."
+    },
+    "copy_strategy": "Message.Clone() is taken at capture time; MessageMeta.Message holds the stable snapshot; ListPending returns deep copies so callers cannot mutate internal state.",
+    "production_mode": "Unchanged: MemoryTransport.Send still delivers synchronously via target.Step; ControlledTransport is opt-in by supplying it as Config.Transport. No protocol logic, message content, or destinations were modified.",
+    "test_mode": "Send captures every outbound message before the original send and does not forward it (MC2 suppression); capture order is stable via monotonic CaptureSequence and unique per-message ID (MC1).",
+    "notes": [
+      "Accepted v0.1 form: capture-at-transport-seam with suppression; verified by in-package TestControlledTransportCaptureAndSuppress and by the consensusseam-tagged MC1/MC2 tests (API-identical; tag cannot be forwarded by the local check tool).",
+      "Message IDs are unique per transport ('1', '2', ...) and CaptureSequence strictly increases in capture order.",
+      "Re-entrant Send from a target's Step during Inject is safe: Inject releases the mutex before delivery."
+    ]
+  },
+  "message_injection": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": null,
+    "pending_store": {
+      "file": "controlled_transport.go",
+      "symbol": "ControlledTransport.pending",
+      "meaning": "The selected message is consumed only after delivery succeeds; on any wrapped-transport error (ErrUnknownNode, ErrPaused, or arbitrary transport error) it remains pending and the error is returned unchanged."
+    },
+    "entrypoint": {
+      "file": "controlled_transport.go",
+      "symbol": "ControlledTransport.Inject",
+      "meaning": "Selects a pending message by MessageID and delivers it through the wrapped transport, which routes by the recorded To to the target node's normal Step boundary (node.go:134, validates To, clones, processes under mutex)."
+    },
+    "copy_strategy": "Injection reuses the captured stable snapshot (Message.Clone()); MemoryTransport.Send clones again before target.Step, so message content is never mutated.",
+    "production_mode": "Unchanged: no Node, Step, or MemoryTransport changes; injection only uses existing normal protocol paths.",
+    "test_mode": "Inject(id) consumes exactly one pending message and leaves all unselected messages pending (MC3); failed delivery keeps the message pending and returns the delivery error for errors.Is.",
+    "notes": [
+      "Unknown IDs return ErrUnknownMessage and leave the store untouched.",
+      "Verified by in-package TestControlledTransportInjection (MC3-equivalent) including the rejecting-transport keep-on-failure case; consensusseam-tagged MC3 uses the identical public API.",
+      "No deduplication/replay protection beyond per-ID consumption; out of scope for this seam."
+    ]
+  },
+  "time_control": null,
+  "randomness_control": null,
+  "lifecycle_control": null,
+  "observation": null
+}

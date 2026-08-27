@@ -444,6 +444,10 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
     assert (result.run_directory / "verification-report.json").is_file()
     run_config = json.loads((result.run_directory / "run-config.json").read_text())
     assert run_config["resolved_models"]["reviewer"]["model"] == "deepseek-v4-pro"
+    assert run_config["source_revisions"]["target"]["revision"] is not None
+    assert run_config["source_revisions"]["target"]["dirty"] is False
+    assert (tmp_path / "runs/latest/verification-report.json").is_file()
+    assert not (tmp_path / "runs/latest/patched-worktree").exists()
 
 
 def test_run_refuses_success_without_capability_check(tmp_path: Path) -> None:

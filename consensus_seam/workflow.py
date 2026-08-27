@@ -18,8 +18,9 @@ from .models import (
     WorkflowResult,
 )
 from .reporting import ArtifactStore
+from .resources import resource_root
 from .verify import BaselineVerifier, CapabilityCheck, DeterministicVerifier
-from .workspace import GitWorktree
+from .workspace import GitWorktree, git_audit_state
 
 
 class ConsensusWorkflow:
@@ -55,6 +56,7 @@ class ConsensusWorkflow:
             )
         finally:
             self._write_runtime_stats(artifacts, stats_start)
+            artifacts.publish_latest()
 
     def patch(self, project: LoadedProject) -> WorkflowResult:
         return self._patch_loop(project, verify=False)
@@ -70,6 +72,7 @@ class ConsensusWorkflow:
             return self._execute_patch_loop(project, verify=verify, artifacts=artifacts)
         finally:
             self._write_runtime_stats(artifacts, stats_start)
+            artifacts.publish_latest()
 
     def _execute_patch_loop(
         self,
@@ -351,6 +354,10 @@ class ConsensusWorkflow:
             "run-config.json",
             {
                 "project": project.manifest.name,
+                "source_revisions": {
+                    "controller": git_audit_state(resource_root()),
+                    "target": git_audit_state(project.repository),
+                },
                 "system_boundary": project.manifest.system_boundary.model_dump(mode="json"),
                 "model_profile": self.model_profile,
                 "transform_capabilities": project.manifest.transform_capabilities,

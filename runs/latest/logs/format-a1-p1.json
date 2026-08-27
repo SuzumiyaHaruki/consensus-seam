@@ -1,0 +1,7 @@
+{
+  "command": "gofmt -w controlled_transport.go controlled_transport_test.go",
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "duration_seconds": 0.009246478000932257
+}

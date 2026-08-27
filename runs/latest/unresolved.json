@@ -1,0 +1,6 @@
+{
+  "randomness_control": {
+    "reason": "outside this run's transform_capabilities scope",
+    "status": "PATCHABLE"
+  }
+}

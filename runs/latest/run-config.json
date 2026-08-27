@@ -1,0 +1,62 @@
+{
+  "capability_checks": [
+    {
+      "capability": "message_capture",
+      "command": "go test -tags consensusseam ./acceptance -run '^TestMC1Capture$' -count=1",
+      "failure_code": "MESSAGE_CAPTURE_FAILED",
+      "name": "MC1 capture"
+    },
+    {
+      "capability": "message_capture",
+      "command": "go test -tags consensusseam ./acceptance -run '^TestMC2Suppression$' -count=1",
+      "failure_code": "MESSAGE_SUPPRESSION_FAILED",
+      "name": "MC2 suppression"
+    },
+    {
+      "capability": "message_injection",
+      "command": "go test -tags consensusseam ./acceptance -run '^TestMC3ExactInjection$' -count=1",
+      "failure_code": "MESSAGE_INJECTION_FAILED",
+      "name": "MC3 exact injection"
+    }
+  ],
+  "model_profile": "manifest",
+  "project": "mini-raft",
+  "source_revisions": {
+    "controller": {
+      "dirty": false,
+      "revision": "52ab69049af3610c5b5bd4146584064db273ec13"
+    },
+    "target": {
+      "dirty": false,
+      "revision": "1e1b72e71a0d5ad97bde10fe2ac4909804329914"
+    }
+  },
+  "resolved_models": {
+    "analyzer": {
+      "max_tokens": 32768,
+      "model": "deepseek-v4-flash",
+      "reasoning_effort": "max",
+      "thinking": "enabled"
+    },
+    "reviewer": {
+      "max_tokens": 32768,
+      "model": "deepseek-v4-pro",
+      "reasoning_effort": "high",
+      "thinking": "enabled"
+    },
+    "transformer": {
+      "max_tokens": 32768,
+      "model": "deepseek-v4-flash",
+      "reasoning_effort": "max",
+      "thinking": "enabled"
+    }
+  },
+  "system_boundary": {
+    "description": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.\n",
+    "kind": "protocol_library"
+  },
+  "transform_capabilities": [
+    "message_capture",
+    "message_injection"
+  ]
+}

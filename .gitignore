@@ -5,6 +5,8 @@ __pycache__/
 dist/
 build/
 runs/*/
+!runs/latest/
+!runs/latest/**
 .secrets/
 .env
 api-key.txt

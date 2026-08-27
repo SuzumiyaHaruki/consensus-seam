@@ -23,6 +23,18 @@ def _git(repo: Path, *args: str) -> str:
     return completed.stdout
 
 
+def git_audit_state(repository: Path) -> dict[str, object]:
+    """Return the committed revision and whether tracked/untracked changes exist."""
+
+    repo = repository.resolve()
+    try:
+        revision = _git(repo, "rev-parse", "HEAD").strip()
+        dirty = bool(_git(repo, "status", "--porcelain").strip())
+    except WorkspaceError:
+        return {"revision": None, "dirty": None}
+    return {"revision": revision, "dirty": dirty}
+
+
 @dataclass(frozen=True)
 class GitWorktree:
     original_repository: Path

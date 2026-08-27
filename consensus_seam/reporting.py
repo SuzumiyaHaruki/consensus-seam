@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +31,15 @@ class ArtifactStore:
             candidate = runs_root / f"{stem}-{suffix}"
             suffix += 1
         return cls(candidate)
+
+    @classmethod
+    def open_existing(cls, run_directory: Path) -> "ArtifactStore":
+        path = run_directory.resolve()
+        if not path.is_dir():
+            raise ValueError(f"run directory does not exist: {path}")
+        store = cls.__new__(cls)
+        store.run_directory = path
+        return store
 
     def _path(self, name: str) -> Path:
         path = (self.run_directory / name).resolve()
@@ -76,3 +88,55 @@ class ArtifactStore:
                     "reason": "outside this run's transform_capabilities scope",
                 }
         return self.write_json("unresolved.json", unresolved)
+
+    def publish_latest(self) -> Path:
+        """Replace the tracked audit export with this run's non-worktree artifacts."""
+
+        runs_root = self.run_directory.parent
+        latest = runs_root / "latest"
+        staging = Path(tempfile.mkdtemp(prefix=".latest-", dir=runs_root))
+        try:
+            for source in self.run_directory.rglob("*"):
+                relative = source.relative_to(self.run_directory)
+                if any(part.startswith("patched-worktree") for part in relative.parts):
+                    continue
+                if not source.is_file():
+                    continue
+                destination = staging / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+
+            manifest = {
+                "source_run": self.run_directory.name,
+                "published_at": datetime.now(timezone.utc).isoformat(),
+                "included": "reports, patch, statistics, and logs",
+                "excluded": ["patched-worktree*"],
+            }
+            (staging / "audit-manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            (staging / "APPLY.md").write_text(
+                """# Applying the latest verified patch
+
+Review `changes.patch`, `review-report.json`, and `verification-report.json`
+before modifying the target repository. Confirm the expected target revision in
+`run-config.json`, then run from the target repository:
+
+```bash
+git apply --check /absolute/path/to/runs/latest/changes.patch
+git apply /absolute/path/to/runs/latest/changes.patch
+go test ./...
+```
+
+ConsensusSeam deliberately does not apply or commit the patch automatically.
+""",
+                encoding="utf-8",
+            )
+            if latest.exists():
+                shutil.rmtree(latest)
+            os.replace(staging, latest)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return latest
