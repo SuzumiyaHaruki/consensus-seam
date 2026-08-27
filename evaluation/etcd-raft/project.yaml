@@ -1,0 +1,40 @@
+name: etcd-raft
+language: go
+protocol: raft
+repository: ../../../etcd-raft
+
+system_boundary:
+  kind: protocol_library
+  description: >
+    Analyze the standalone go.etcd.io/raft/v3 library at its pinned repository
+    revision. Public protocol state-machine APIs, Ready processing, Storage
+    interfaces and implementations shipped in this module, membership changes,
+    and asynchronous storage-write behavior are inside the boundary. Real
+    network transport, external durable disk or WAL implementations, application
+    state machines, process supervision, and the etcd server are outside the
+    boundary.
+
+experiment:
+  kind: blind_capability
+  oracle_visible_to_agents: false
+  research_claim: >
+    Exploratory oracle-free, contract-aware capability analysis of a
+    production-grade consensus library without source modification or scoring
+    against a human answer key.
+
+# analyze-only 仍要求 manifest 提供命令，但 `consensus-seam analyze` 不会执行
+# baseline、测试、Transformer、Reviewer 或 Verifier。
+build:
+  command: go test -run '^$' ./...
+
+test:
+  command: go test ./...
+
+working_directory: .
+
+llm:
+  analyzer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768

@@ -25,6 +25,18 @@ capabilities:
     testing_contract:
       inject: Inject(messageID) delivers through the recorded target's normal protocol input
       message_id_scope: implementation must declare pending_store_instance or test_session
+      setup: >
+        The listed testing contract must be sufficient for capture and injection.
+        Core behavior must not require an additional public Register, Enable, or
+        target-binding call that is absent from this contract.
+      delivery_binding: >
+        Reuse the wrapped Transport when it already provides deterministic
+        in-process routing to the recorded target. If it does not, use an
+        existing deterministic target binding internally without adding required
+        caller setup; otherwise report INVASIVE_REDISCOVERED.
+      failed_delivery: >
+        If the selected delivery path returns an error, Inject propagates that
+        underlying error and leaves the selected message pending.
 
   time_control:
     description: >

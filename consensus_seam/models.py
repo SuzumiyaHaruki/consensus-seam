@@ -45,6 +45,7 @@ class FailureCode(str, Enum):
     MESSAGE_CAPTURE_FAILED = "MESSAGE_CAPTURE_FAILED"
     MESSAGE_SUPPRESSION_FAILED = "MESSAGE_SUPPRESSION_FAILED"
     MESSAGE_INJECTION_FAILED = "MESSAGE_INJECTION_FAILED"
+    MESSAGE_INJECTION_RETENTION_FAILED = "MESSAGE_INJECTION_RETENTION_FAILED"
     TIME_CONTROL_FAILED = "TIME_CONTROL_FAILED"
     RANDOMNESS_CONTROL_FAILED = "RANDOMNESS_CONTROL_FAILED"
     LIFECYCLE_CONTROL_FAILED = "LIFECYCLE_CONTROL_FAILED"
@@ -62,7 +63,12 @@ CAPABILITY_CHECK_CODES: dict[str, frozenset[FailureCode]] = {
             FailureCode.MESSAGE_SUPPRESSION_FAILED,
         }
     ),
-    "message_injection": frozenset({FailureCode.MESSAGE_INJECTION_FAILED}),
+    "message_injection": frozenset(
+        {
+            FailureCode.MESSAGE_INJECTION_FAILED,
+            FailureCode.MESSAGE_INJECTION_RETENTION_FAILED,
+        }
+    ),
     "time_control": frozenset({FailureCode.TIME_CONTROL_FAILED}),
     "randomness_control": frozenset({FailureCode.RANDOMNESS_CONTROL_FAILED}),
     "lifecycle_control": frozenset({FailureCode.LIFECYCLE_CONTROL_FAILED}),

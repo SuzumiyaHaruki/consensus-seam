@@ -109,9 +109,15 @@ def test_registered_capability_check_is_executed(tmp_path: Path) -> None:
                 capability="message_injection",
                 command="mc3",
                 failure_code=FailureCode.MESSAGE_INJECTION_FAILED,
-            )
+            ),
+            CapabilityCheck(
+                name="MC4",
+                capability="message_injection",
+                command="mc4",
+                failure_code=FailureCode.MESSAGE_INJECTION_RETENTION_FAILED,
+            ),
         ],
         required_capabilities={"message_injection"},
     )
     assert report.passed is True
-    assert [execution.command for execution in report.capability_tests] == ["mc3"]
+    assert [execution.command for execution in report.capability_tests] == ["mc3", "mc4"]

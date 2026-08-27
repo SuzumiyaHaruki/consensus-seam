@@ -362,6 +362,10 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
             "    capability: message_injection",
             "    command: git diff --check",
             "    failure_code: MESSAGE_INJECTION_FAILED",
+            "  - name: MC4 failed delivery retention",
+            "    capability: message_injection",
+            "    command: git diff --check",
+            "    failure_code: MESSAGE_INJECTION_RETENTION_FAILED",
         ),
     )
     workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")

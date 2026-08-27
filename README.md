@@ -70,7 +70,7 @@ the remaining capabilities are retried from `HEAD`.
 
 Every target manifest must state its `system_boundary`. A full `run` also expects
 deterministic `capability_checks` for every implemented capability. Missing MC1,
-MC2, MC3, or equivalent checks produces `SEMANTIC_AMBIGUITY`, rather than a false
+MC2, MC3/MC4, or equivalent checks produces `SEMANTIC_AMBIGUITY`, rather than a false
 success based only on the original test suite.
 
 An optional `transform_capabilities` allowlist scopes one experiment without

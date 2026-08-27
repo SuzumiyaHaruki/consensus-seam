@@ -83,7 +83,8 @@ PASS reports carry named checks and evidence, while patch/tool metrics provide
 auditable cost and modification data without storing chain-of-thought.
 
 Capability-test routing is now wired through the manifest and workflow. The Mini
-Raft target must provide separate MC1/MC2/MC3 commands; without them, a full run
+Raft target must provide separate capture, suppression, exact-injection, and
+failed-delivery commands (MC1/MC2/MC3/MC4 in Mini Raft); without them, a full run
 returns `SEMANTIC_AMBIGUITY` after build and regression tests.
 
 ## Main engineering risks for the next phase

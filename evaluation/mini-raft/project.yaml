@@ -37,6 +37,10 @@ capability_checks:
     capability: message_injection
     command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC3ExactInjection$' -count=1
     failure_code: MESSAGE_INJECTION_FAILED
+  - name: MC4 failed delivery retention
+    capability: message_injection
+    command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC4FailedDeliveryRetention$' -count=1
+    failure_code: MESSAGE_INJECTION_RETENTION_FAILED
 
 verification_fixtures:
   - source: hidden-acceptance/message_control_test.go

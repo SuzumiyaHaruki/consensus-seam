@@ -122,7 +122,10 @@ func TestMC3ExactInjection(t *testing.T) {
 	if status := nodes[2].Status(); status.Term != 0 {
 		t.Fatalf("unselected target processed a message: %+v", status)
 	}
+}
 
+
+func TestMC4FailedDeliveryRetention(t *testing.T) {
 	deliveryError := errors.New("injected delivery failed")
 	rejecting := raft.NewMessageController(rejectingTransport{err: deliveryError})
 	if err := rejecting.Send(raft.Message{

@@ -14,7 +14,19 @@ mode, copy a stable message snapshot, and store it without implementing a
 scheduling policy. Message injection selects by MessageID, uses the recorded
 target, enters through the normal protocol boundary, and does not mutate content.
 Consume the selected message only after delivery succeeds. If the underlying
-delivery returns an error, preserve the message in PENDING state.
+delivery returns an error, propagate that error and preserve the message in
+PENDING state. The public operations listed in the capability testing contract
+must be sufficient: do not require callers to invoke an additional Register,
+Enable, or target-binding method that the contract does not list. Additional
+helpers may exist only when they are optional.
+
+For injection, inspect the concrete target before choosing a binding. If the
+wrapped Transport already performs deterministic in-process routing to the
+recorded target and enters the normal protocol input boundary, reuse its Send
+path so its delivery errors remain observable. If the wrapped path is a real
+network or otherwise nondeterministic, use an existing deterministic binding
+internally without extra caller setup. If neither is safely possible, report
+`INVASIVE_REDISCOVERED`; do not invent a target registry that tests must populate.
 Test-controller operations are serialized in v0.1; do not add an IN_FLIGHT state
 for concurrent Inject calls. Outbound Send/capture may still be concurrent.
 Declare `message_id_scope` and `controller_operations` in the interface report.
