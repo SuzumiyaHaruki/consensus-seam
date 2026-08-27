@@ -66,14 +66,19 @@ class StructuredAgent(Generic[OutputT]):
         """
 
         validation_error = ""
+        previous_raw = ""
         invocation_prefix = invocation_id or self.agent_name
         for attempt in range(1, self.max_attempts + 1):
             retry_prompt = user_prompt
             if validation_error:
-                # 保留完整原始任务，只追加上一次结构错误，避免重试时丢失上下文。
+                # 保留完整原始任务，同时带回上一版响应。结构错误通常只需要
+                # 修 JSON；若不提供上一版，模型只能重新读源码并重复生成，既
+                # 浪费工具调用，也容易再次犯同一个字段遗漏错误。
                 retry_prompt += (
-                    "\n\nYour previous response was rejected. Return corrected JSON only. "
-                    f"Validation error:\n{validation_error}"
+                    "\n\nYour previous response was rejected. Correct that response "
+                    "instead of repeating the source analysis. Return corrected JSON only."
+                    f"\n\nPrevious response:\n{previous_raw}"
+                    f"\n\nValidation error:\n{validation_error}"
                 )
             raw = self.runtime.run(
                 self._system_prompt(),
@@ -92,6 +97,7 @@ class StructuredAgent(Generic[OutputT]):
                 return result
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 validation_error = str(exc)
+                previous_raw = raw
         raise AgentOutputError(
             f"{self.__class__.__name__} returned invalid output after "
             f"{self.max_attempts} attempts: {validation_error}"

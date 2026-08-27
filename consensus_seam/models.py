@@ -297,7 +297,14 @@ class CapabilityFinding(StrictModel):
     """Agent 1 对单项能力的完整结论。"""
 
     status: CapabilityStatus
-    evidence: list[CodeEvidence] = Field(default_factory=list)
+    evidence: list[CodeEvidence] = Field(
+        default_factory=list,
+        description=(
+            "Top-level capability evidence. SUPPORTED, PATCHABLE, and PARTIAL "
+            "require at least one item even when execution_paths or obligation "
+            "evidence are present."
+        ),
+    )
     boundary: str | None = None
     gap: str | None = None
     reason: str | None = None
@@ -305,7 +312,13 @@ class CapabilityFinding(StrictModel):
     suggested_direction: str | None = None
     entrypoints: list[str] = Field(default_factory=list)
     # 只记录输入/输出边界或运行模型实质不同的公开路径，不展开协议内部每个分支。
-    execution_paths: list[str] = Field(default_factory=list)
+    execution_paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Materially distinct public execution paths discovered inside the "
+            "system boundary; this does not replace top-level code evidence."
+        ),
+    )
     obligations: dict[str, "ObligationAssessment"] = Field(default_factory=dict)
 
     @model_validator(mode="after")

@@ -66,6 +66,7 @@ def test_analyzer_retries_invalid_json(tmp_path: Path) -> None:
     assert client.calls[0]["invocation_id"] == "analyzer-attempt1"
     assert client.calls[1]["invocation_id"] == "analyzer-attempt2"
     assert "previous response was rejected" in client.calls[1]["user_prompt"]
+    assert "Previous response:\nnot-json" in client.calls[1]["user_prompt"]
 
 
 def test_analyzer_retries_target_name_mismatch(tmp_path: Path) -> None:
