@@ -60,9 +60,9 @@ consensus-seam analyze \
 
 这些材料属于具体目标，不会自动进入全局能力规范。
 
-## 生成后 repair 材料
+## 可选的生成后 repair 材料
 
-当接口形状由 Agent 自行设计时，可以先不提供 capability checks。`patch` 完成后，根据实际接口准备一个后置检查清单：
+当接口形状由 Agent 自行设计时，可以不提供 capability checks。`patch` 完成后已经能够获得接口代码；只有希望继续验证或提高候选质量时，才需要根据实际接口准备一个后置检查清单：
 
 ```yaml
 capability_checks:

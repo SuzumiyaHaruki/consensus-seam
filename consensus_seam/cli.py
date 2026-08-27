@@ -46,8 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     for command, description in (
         ("analyze", "运行只读能力分析 Agent"),
         ("patch", "运行 Analyzer、Transformer 和独立 Reviewer"),
-        ("run", "运行 baseline、三个 Agent 和确定性验证"),
-        ("repair", "使用生成后的真实测试修复已有候选接口"),
+        ("run", "运行带预配置 checks 的固定评测/回归流程"),
+        ("repair", "可选：使用生成后的真实测试修复已有候选接口"),
     ):
         subparser = subparsers.add_parser(command, help=description)
         subparser.add_argument("--project", required=True, type=Path)

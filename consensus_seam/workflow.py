@@ -148,7 +148,7 @@ class ConsensusWorkflow:
         return self._patch_loop(project, verify=False)
 
     def run(self, project: LoadedProject) -> WorkflowResult:
-        """运行 baseline、三个 Agent 和全部确定性能力检查。"""
+        """对已配置稳定 checks 的目标运行固定评测/回归流程。"""
 
         return self._patch_loop(project, verify=True)
 

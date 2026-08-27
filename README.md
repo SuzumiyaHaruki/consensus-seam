@@ -112,8 +112,8 @@ consensus-seam repair  --project /绝对路径/project.yaml \
 
 - `analyze`：只运行 Agent 1，不修改源码，也不执行目标构建测试；
 - `patch`：运行三个 Agent和候选构建，不执行完整原测试或 evaluator-only 隐藏检查；
-- `run`：在 `patch` 基础上执行目标 manifest 配置的基础能力检查。
-- `repair`：不重新运行 Analyzer；读取已有候选补丁和接口报告，执行生成后编写的后置测试，并把确定性失败反馈给 Agent 2 修复。
+- `run`：预配置评测/回归模式；适用于已经在目标 manifest 中提供稳定 capability checks 的目标，在重新生成候选后执行 baseline、原测试和确定性检查。
+- `repair`：可选的质量增强流程；不重新运行 Analyzer，读取已有候选补丁和接口报告，执行生成后编写的后置测试，并把确定性失败反馈给 Agent 2 修复。
 
 `--responses responses.json` 是无 API 密钥时使用的确定性开发适配器。JSON 中按顺序存放 Agent 原始响应。
 
@@ -129,16 +129,15 @@ consensus-seam repair  --project /绝对路径/project.yaml \
 
 ## 验证原则
 
-第一版只要求与研究目标相称的验证：
+第一版按命令提供不同验证强度：
 
-1. 未修改目标的 baseline 能够构建并通过原测试；
-2. 修改后仍能构建并通过原测试；
-3. 每项新增能力至少有一个项目配置的基本使用检查；
-4. Reviewer 确认修改没有明显越过低侵入边界。
+1. `patch` 要求候选能够格式化、构建，并通过 Reviewer；这是未知目标接口生成的完成条件；
+2. `run` 额外要求未修改目标通过 baseline、候选通过原测试，并执行预先配置的基础能力检查；
+3. `repair` 对已有候选执行生成后提供的真实使用检查，并在失败时进行可选修复。
 
-某个目标可以配置更多检查，但这些目标专属检查必须留在自己的 `evaluation/<target>/` 目录，不能反向变成所有共识系统的全局要求。
+`run` 不适用于尚不知道接口形状、也没有预配置 checks 的首次目标。某个成熟目标可以配置更多回归检查，但这些目标专属检查必须留在自己的 `evaluation/<target>/` 目录，不能反向变成所有共识系统的全局要求。
 
-开放式接口生成不要求预先猜测 API。可以先运行 `patch`，使用者再根据实际 `USAGE.md` 编写测试，并通过 `repair --checks` 启动独立修复循环。后置测试代码直到 Reviewer 返回后才进入候选 worktree；Agent 2 只看到失败类型、命令和输出，不直接读取 evaluator-only fixture。
+开放式接口生成不要求预先猜测 API。`patch` 是完整的主流程，结束后已经得到接口代码、接口报告和使用说明，不运行 `repair` 也可以使用这些结果。如果还希望用真实使用场景提高候选质量，可以根据实际 `USAGE.md` 编写测试，并通过 `repair --checks` 启动独立修复循环。后置测试代码直到 Reviewer 返回后才进入候选 worktree；Agent 2 只看到失败类型、命令和输出，不直接读取 evaluator-only fixture。
 
 实验失败分为三类：
 
@@ -176,7 +175,7 @@ consensus-seam repair  --project /绝对路径/project.yaml \
 
 ## 当前目标
 
-Mini Raft 完整实验：
+Mini Raft 预配置回归评测：
 
 ```bash
 consensus-seam run \

@@ -1,6 +1,6 @@
 # etcd/raft 评测说明
 
-本目录定义独立 `go.etcd.io/raft/v3` 仓库的实验输入。当前阶段先进行盲分析和低侵入接口生成，不提供人工 ground truth、预设 API 形状、隐藏测试、转换 allowlist 或能力检查。接口生成后，再根据实际 API 编写独立的后置测试。
+本目录定义独立 `go.etcd.io/raft/v3` 仓库的实验输入。实验主流程进行盲分析和低侵入接口生成，不提供人工 ground truth、预设 API 形状、隐藏测试、转换 allowlist 或能力检查。该主流程会直接产出接口代码，不依赖后续修复。
 
 ## 固定目标
 
@@ -50,7 +50,7 @@ toolchain go1.26.7
 
 人工不指定 etcd/raft 的内部实现路径。Analyzer 应发现并比较 `Node`、`RawNode`、同步与异步存储路径；Transformer 后续应尽可能覆盖所有低侵入可实现路径，并报告剩余限制。
 
-## 第一阶段：接口生成
+## 完整主流程：接口生成
 
 先验证目标原仓库：
 
@@ -73,9 +73,9 @@ GOTOOLCHAIN=auto consensus-seam patch \
 
 预期产物包括能力报告、接口报告、中文结构的使用报告、候选补丁、Reviewer 报告、未解决项、模型统计、工具审计和运行配置。目标原仓库不会被直接修改。
 
-## 第二阶段：生成后测试与修复
+## 可选流程：生成后测试与修复
 
-根据第一阶段实际生成的 `interface-report.json` 和 `USAGE.md` 编写后置测试，再运行：
+如果希望进一步验证或提高候选质量，可以根据主流程实际生成的 `interface-report.json` 和 `USAGE.md` 编写后置测试，再运行：
 
 ```bash
 cd /home/nitro/Desktop/consensus-seam
@@ -83,7 +83,7 @@ cd /home/nitro/Desktop/consensus-seam
 
 GOTOOLCHAIN=auto consensus-seam repair \
   --project /home/nitro/Desktop/consensus-seam/evaluation/etcd-raft/project.yaml \
-  --run /home/nitro/Desktop/consensus-seam/runs/<第一阶段时间戳目录> \
+  --run /home/nitro/Desktop/consensus-seam/runs/<主流程时间戳目录> \
   --checks /绝对路径/etcd-post-hoc-checks.yaml \
   --api-key-file /home/nitro/Desktop/ds.txt \
   --model-profile manifest

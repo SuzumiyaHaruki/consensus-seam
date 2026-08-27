@@ -106,4 +106,4 @@ Agent 必须确认停止边界、恢复入口、状态所有权以及持久/易�
 
 analyze-only 运行没有 `interface-report.json`，但仍会生成 `USAGE.md`，总结目标已有能力和待补充能力。
 
-接口生成后，使用者可以基于真实 API 编写测试，并通过 `repair` 把失败反馈给 Agent 2。这样 capability checks 不需要提前猜测接口形状，同时保留自动修复能力。
+`patch` 完成时已经产出可用的接口候选，不要求继续执行 `repair`。如果使用者希望进一步提高候选质量，可以基于真实 API 编写测试，并通过可选的 `repair` 把失败反馈给 Agent 2。这样 capability checks 不需要提前猜测接口形状，同时保留独立的自动修复能力。
