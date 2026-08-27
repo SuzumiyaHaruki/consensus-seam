@@ -5,9 +5,9 @@
   "experiment": {
     "kind": "blind_capability",
     "oracle_visible_to_agents": false,
-    "research_claim": "Exploratory oracle-free, contract-aware capability analysis of a production-grade consensus library without source modification or scoring against a human answer key.\n"
+    "research_claim": "Exploratory, contract-aware, read-only analysis of seven basic test-control capabilities in a production consensus library without source modification or a human answer key.\n"
   },
-  "included": "reports, patch, statistics, and logs",
-  "published_at": "2026-08-27T08:48:18.253884+00:00",
-  "source_run": "20260827T084133.028711Z"
+  "included": "\u62a5\u544a\u3001\u8865\u4e01\u3001\u7edf\u8ba1\u548c\u65e5\u5fd7",
+  "published_at": "2026-08-27T09:49:42.055692+00:00",
+  "source_run": "20260827T094541.181935Z"
 }

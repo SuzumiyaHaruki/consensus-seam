@@ -3,7 +3,7 @@
   "experiment": {
     "kind": "blind_capability",
     "oracle_visible_to_agents": false,
-    "research_claim": "Exploratory oracle-free, contract-aware capability analysis of a production-grade consensus library without source modification or scoring against a human answer key.\n"
+    "research_claim": "Exploratory, contract-aware, read-only analysis of seven basic test-control capabilities in a production consensus library without source modification or a human answer key.\n"
   },
   "model_profile": "manifest",
   "project": "etcd-raft",
@@ -30,7 +30,7 @@
   "source_revisions": {
     "controller": {
       "dirty": false,
-      "revision": "44ab9eaca69f6d858da2224063c6443bd8fd596d"
+      "revision": "c4c0c9e0c3972d3bca73f260cccb62d8a4abc232"
     },
     "target": {
       "dirty": false,
@@ -38,7 +38,7 @@
     }
   },
   "system_boundary": {
-    "description": "Analyze the standalone go.etcd.io/raft/v3 library at its pinned repository revision. Public protocol state-machine APIs, Ready processing, Storage interfaces and implementations shipped in this module, membership changes, and asynchronous storage-write behavior are inside the boundary. Real network transport, external durable disk or WAL implementations, application state machines, process supervision, and the etcd server are outside the boundary.\n",
+    "description": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.\n",
     "kind": "protocol_library"
   },
   "transform_capabilities": null,

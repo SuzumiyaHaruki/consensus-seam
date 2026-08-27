@@ -129,6 +129,12 @@ class ArtifactStore:
             lines.extend([f"## {title}", "", f"- 分析状态：`{finding.status.value}`"])
             if finding.boundary:
                 lines.append(f"- 覆盖边界：{finding.boundary}")
+            lines.append(
+                "- 现有测试接口是否完整："
+                + ("是" if finding.existing_test_interface_complete else "否")
+            )
+            if finding.test_support_reason:
+                lines.append(f"- 测试支持判断：{finding.test_support_reason}")
             if generated is not None:
                 lines.append(
                     "- 本次修改："
@@ -139,6 +145,11 @@ class ArtifactStore:
             if finding.execution_paths:
                 lines.extend(["### Analyzer 发现的实现路径", ""])
                 lines.extend(f"- {path}" for path in finding.execution_paths)
+                lines.append("")
+
+            if finding.suggested_changes:
+                lines.extend(["### 建议改造", ""])
+                lines.extend(f"- {item}" for item in finding.suggested_changes)
                 lines.append("")
 
             if finding.entrypoints:
@@ -186,6 +197,10 @@ class ArtifactStore:
                 if generated.uncovered_paths:
                     lines.extend(["### 未覆盖路径", ""])
                     lines.extend(f"- {path}" for path in generated.uncovered_paths)
+                    lines.append("")
+                if generated.implementation_approach:
+                    lines.extend(["### 实际实现方式", ""])
+                    lines.extend(f"- {item}" for item in generated.implementation_approach)
                     lines.append("")
 
             if finding.limitations:

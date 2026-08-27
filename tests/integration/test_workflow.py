@@ -118,7 +118,11 @@ class GuardrailFakeRuntime:
         if agent == "analyzer":
             report = capability_report()
             if self.mode == "rediscovered":
-                report["capabilities"]["message_capture"]["status"] = "PATCHABLE"
+                capture = report["capabilities"]["message_capture"]
+                capture["status"] = "PATCHABLE"
+                capture["existing_test_interface_complete"] = False
+                capture["test_support_reason"] = "capture still needs test support"
+                capture["suggested_changes"] = ["add a capture hook"]
             return json.dumps(report)
         if agent == "reviewer":
             return json.dumps(review_report())
@@ -230,6 +234,9 @@ class ScopedTransformRuntime:
                     }
                 ],
                 "gap": "random source is not injectable",
+                "existing_test_interface_complete": False,
+                "test_support_reason": "random source is not directly controllable",
+                "suggested_changes": ["inject the existing random source"],
             }
             return json.dumps(report)
         if agent == "transformer":

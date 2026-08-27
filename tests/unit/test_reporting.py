@@ -48,6 +48,10 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
                     "file": "injection_seam.go",
                     "symbol": "InjectForTest",
                 },
+                "implementation_approach": [
+                    "通过 hook 捕获消息。",
+                    "使用控制对象按 ID 保存并选择消息。",
+                ],
                 "test_mode": "进程内测试路径",
                 "covered_paths": ["RawNode synchronous ingress"],
                 "uncovered_paths": ["Node asynchronous ingress：目标入口不返回处理结果"],
@@ -61,7 +65,12 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
 
     assert "Node.Status" in content
     assert "InjectForTest" in content
+    assert "通过 hook 捕获消息" in content
+    assert "按 ID 保存并选择消息" in content
     assert "进程内测试路径" in content
+    assert "现有测试接口是否完整：否" in content
+    assert "建议改造" in content
+    assert "实际实现方式" in content
     assert "Node asynchronous ingress" in content
     assert "RawNode synchronous ingress" in content
     assert "未覆盖路径" in content

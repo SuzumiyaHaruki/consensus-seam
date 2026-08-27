@@ -44,6 +44,32 @@ v0.1 固定分析消息捕获、消息注入、时间控制、随机性控制、
 
 Agent 应使用目标项目最自然的形态实现接口。Mini Raft 可以包装 `Transport`，etcd/raft 可以扩展 `rafttest.InteractionEnv` 或使用 `RawNode`。目标特有接口形态不得回写为全局前提。
 
+## 底层原语与测试支持改造
+
+能力分析必须区分两个层次：
+
+1. 底层原语：协议已经提供的输入、输出、Tick、状态读取、构造或恢复方法；
+2. 测试接口：测试人员可以直接调用、保存和组合这些原语的稳定接口。
+
+底层原语是实现包装的依据，但不能自动得到 `SUPPORTED`。例如：
+
+- `Ready.Messages` 是消息输出原语；
+- `Step` 是消息输入原语；
+- pending 缓存、控制面 ID、List/Clear/Inject 才组成完整消息控制接口。
+
+消息 ID 是 ConsensusSeam 测试控制层的身份，用于选择某次捕获到的具体消息，不属于 Raft term、index 或原始消息内容。
+
+Analyzer 对每项能力都应回答：
+
+- 现有原语是什么；
+- 是否已经能直接供测试使用；
+- 现有测试接口是否完整；
+- 还缺少哪些测试支持；
+- 可以采用包装、hook、依赖注入、配置项、只读 accessor 或测试 harness 扩展中的哪些方式；
+- 建议改造是否越过低侵入边界。
+
+如果仍需新增测试支持并且可以低侵入完成，状态应为 `PATCHABLE`，不能因为底层原语已经存在就标为 `SUPPORTED`。如果现有公开测试接口已经完整满足合同，则不应为了形式统一重复修改。
+
 ## 多实现路径发现
 
 共识库可能同时提供同步、异步、嵌入式和完整节点等多种路径。人工通常只知道仓库和系统边界，不应被要求提前列出这些内部路径。
@@ -61,6 +87,8 @@ Analyzer 应从源码、公开接口和已有测试设施中发现所有实质�
 Analyzer 应通过 `execution_paths`、`boundary`、`entrypoints` 和 `limitations` 记录发现结果。能力总状态应综合所有已发现路径：全部已有时是 `SUPPORTED`；只要至少一条当前缺失路径能够低侵入补充，就可以是 `PATCHABLE`，同时明确其他不可补充路径；已有部分路径、但剩余缺口都无法在 v0.1 安全补充时是 `PARTIAL`。这样仍然保持 Agent 2 只修改 `PATCHABLE` 的原设计，同时允许它尽可能完成安全子集。
 
 Transformer 应尝试覆盖所有已发现且能够低侵入实现的路径，并在 `covered_paths` 中列出已覆盖路径。不能安全实现的路径写入 `uncovered_paths` 和 `notes`，不能为了让报告看起来完整而修改协议核心，也不能静默只实现最容易的一条路径。
+
+Transformer 应参考 Analyzer 的 `suggested_changes`，但不被某一种实现手段绑定。它可以组合多种允许方式，只要实际改造保持低侵入并在 interface report 的 `implementation_approach` 中如实记录。
 
 例如 etcd/raft 的 Analyzer 应同时考虑 `Node`、`RawNode` 和同步/异步存储路径；Transformer 可以优先复用它们已有的不同入口。若某条路径需要越过当前系统边界，应记录为未覆盖，而不是要求人工事先排除它。
 

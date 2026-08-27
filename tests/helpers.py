@@ -73,6 +73,23 @@ def capability_report(*, patchable: str | None = "message_injection") -> dict[st
     }
     if patchable is not None:
         statuses[patchable] = "PATCHABLE"
+
+    def test_support_fields(name: str, direct_reason: str) -> dict[str, Any]:
+        patchable_status = statuses[name] == "PATCHABLE"
+        return {
+            "existing_test_interface_complete": statuses[name] == "SUPPORTED",
+            "test_support_reason": (
+                f"{name} requires additional test support"
+                if patchable_status
+                else direct_reason
+            ),
+            "suggested_changes": (
+                [f"expose {name} with a low-intrusion test hook or wrapper"]
+                if patchable_status
+                else []
+            ),
+        }
+
     return {
         "target": "mini-raft",
         "capabilities": {
@@ -80,25 +97,37 @@ def capability_report(*, patchable: str | None = "message_injection") -> dict[st
                 "status": statuses["message_capture"],
                 "evidence": evidence("Transport.Send"),
                 "boundary": "application_transport",
+                **test_support_fields("message_capture", "existing controller is directly usable"),
             },
             "message_injection": {
                 "status": statuses["message_injection"],
                 "evidence": evidence("Node.Step"),
                 "boundary": "protocol_handler",
                 "gap": "stable ID lookup is missing" if patchable == "message_injection" else None,
+                **test_support_fields("message_injection", "existing injection API is directly usable"),
             },
             "time_control": {
                 "status": statuses["time_control"],
                 "evidence": evidence("Node.Tick"),
                 "boundary": "protocol_logical_time",
+                **test_support_fields("time_control", "Node.Tick is directly usable"),
             },
             "randomness_control": {
                 "status": statuses["randomness_control"],
                 "reason": "random source and protocol state are entangled",
+                "existing_test_interface_complete": False,
+                "test_support_reason": "existing random control is incomplete and invasive",
+                **(
+                    test_support_fields("randomness_control", "existing random control is directly usable")
+                    if statuses["randomness_control"] == "PATCHABLE"
+                    else {}
+                ),
             },
             "lifecycle_control": {
                 "status": statuses["lifecycle_control"],
                 "reason": "the implementation does not define restart state ownership",
+                "existing_test_interface_complete": False,
+                "test_support_reason": "existing lifecycle control is incomplete and invasive",
                 "obligations": {
                     "stop_boundary": obligation(
                         "SATISFIED", "Node.Pause", "scheduler pause exists"
@@ -117,11 +146,13 @@ def capability_report(*, patchable: str | None = "message_injection") -> dict[st
             "observation": {
                 "status": statuses["observation"],
                 "evidence": evidence("Node.Status"),
+                **test_support_fields("observation", "Node.Status is directly usable"),
             },
             "external_input": {
                 "status": statuses["external_input"],
                 "evidence": evidence("Node.Propose"),
                 "entrypoints": ["Node.Propose"],
+                **test_support_fields("external_input", "Node.Propose is directly usable"),
                 "obligations": {
                     "workload_entrypoint": obligation(
                         "SATISFIED", "Node.Propose", "proposal is application work"

@@ -311,6 +311,27 @@ class CapabilityFinding(StrictModel):
     limitations: list[str] = Field(default_factory=list)
     suggested_direction: str | None = None
     entrypoints: list[str] = Field(default_factory=list)
+    existing_test_interface_complete: bool = Field(
+        default=False,
+        description=(
+            "Whether existing target APIs already satisfy the complete test "
+            "capability without adding target code."
+        ),
+    )
+    test_support_reason: str | None = Field(
+        default=None,
+        description=(
+            "Simplified-Chinese explanation of why existing primitives are or "
+            "are not a complete test-facing interface."
+        ),
+    )
+    suggested_changes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Evidence-backed low-intrusion options such as wrappers, hooks, "
+            "dependency injection, configuration, accessors, or harness changes."
+        ),
+    )
     # 只记录输入/输出边界或运行模型实质不同的公开路径，不展开协议内部每个分支。
     execution_paths: list[str] = Field(
         default_factory=list,
@@ -336,6 +357,18 @@ class CapabilityFinding(StrictModel):
             CapabilityStatus.UNKNOWN,
         } and not (self.reason or self.gap or self.evidence):
             raise ValueError(f"{self.status.value} requires a reason, gap, or evidence")
+        if self.status is not CapabilityStatus.NOT_APPLICABLE and not self.test_support_reason:
+            raise ValueError(f"{self.status.value} requires test_support_reason")
+        if self.status is CapabilityStatus.SUPPORTED:
+            if not self.existing_test_interface_complete:
+                raise ValueError("SUPPORTED requires a complete existing test interface")
+            if self.gap:
+                raise ValueError("SUPPORTED capability cannot declare a gap")
+        if self.status is CapabilityStatus.PATCHABLE:
+            if self.existing_test_interface_complete:
+                raise ValueError("PATCHABLE cannot have a complete existing test interface")
+            if not self.suggested_changes:
+                raise ValueError("PATCHABLE requires suggested_changes")
         return self
 
 
@@ -471,6 +504,13 @@ class InterfaceCapability(StrictModel):
     # 因低侵入边界而保留。二者只是审计信息，不引入逐路径工作流状态机。
     covered_paths: list[str] = Field(default_factory=list)
     uncovered_paths: list[str] = Field(default_factory=list)
+    implementation_approach: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Actual low-intrusion techniques used by Agent 2, such as wrapper, "
+            "hook, dependency injection, configuration, accessor, or harness extension."
+        ),
+    )
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")

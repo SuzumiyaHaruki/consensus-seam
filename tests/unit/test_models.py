@@ -30,6 +30,32 @@ def test_supported_finding_requires_code_evidence() -> None:
         CapabilityReport.model_validate(payload)
 
 
+def test_supported_capability_requires_complete_existing_interface_without_gap() -> None:
+    payload = capability_report()
+    payload["capabilities"]["message_capture"]["gap"] = "pending store is missing"
+    with pytest.raises(ValidationError, match="cannot declare a gap"):
+        CapabilityReport.model_validate(payload)
+
+    payload = capability_report()
+    payload["capabilities"]["message_capture"][
+        "existing_test_interface_complete"
+    ] = False
+    with pytest.raises(ValidationError, match="complete existing test interface"):
+        CapabilityReport.model_validate(payload)
+
+
+def test_patchable_capability_requires_reason_and_suggested_changes() -> None:
+    payload = capability_report()
+    payload["capabilities"]["message_injection"]["suggested_changes"] = []
+    with pytest.raises(ValidationError, match="requires suggested_changes"):
+        CapabilityReport.model_validate(payload)
+
+    payload = capability_report()
+    payload["capabilities"]["message_injection"]["test_support_reason"] = None
+    with pytest.raises(ValidationError, match="requires test_support_reason"):
+        CapabilityReport.model_validate(payload)
+
+
 def test_external_input_cannot_be_patchable() -> None:
     payload = capability_report(patchable="external_input")
     with pytest.raises(ValidationError, match="discovery-only"):
@@ -52,6 +78,12 @@ def test_lifecycle_supported_conflicting_with_missing_semantics_is_rejected() ->
     payload = capability_report()
     payload["capabilities"]["lifecycle_control"]["status"] = "SUPPORTED"
     payload["capabilities"]["lifecycle_control"]["evidence"] = evidence("Node.Pause")
+    payload["capabilities"]["lifecycle_control"]["test_support_reason"] = (
+        "existing lifecycle API is directly usable"
+    )
+    payload["capabilities"]["lifecycle_control"][
+        "existing_test_interface_complete"
+    ] = True
     with pytest.raises(ValidationError, match="requires every obligation SATISFIED"):
         CapabilityReport.model_validate(payload)
 

@@ -1,6 +1,7 @@
 # 应用最近一次已验证补丁
 
-修改目标仓库前，先审查 `changes.patch`、`review-report.json` 和 `verification-report.json`，并在 `run-config.json` 中确认目标提交版本。
+修改目标仓库前，先审查 `changes.patch`、`review-report.json` 和
+`verification-report.json`，并在 `run-config.json` 中确认目标提交版本。
 
 然后在目标仓库中运行：
 

@@ -20,6 +20,12 @@ capabilities:
         The Analyzer discovers materially distinct in-scope paths. The
         implementation covers every low-intrusion path it can and explicitly
         records covered and uncovered paths.
+      test_support_gap: >
+        A raw outbound message API is only an underlying primitive. Unless an
+        existing test interface already stores captured messages and supplies
+        stable control-plane IDs plus list and clear operations, additional test
+        support is required and the capability is not SUPPORTED. A wrapper,
+        hook, or low-intrusion combination may implement the missing behavior.
 
   message_injection:
     description: >
@@ -30,6 +36,10 @@ capabilities:
     testing_contract:
       inject: A callable entrypoint selects and delivers a pending message by stable ID.
       message_id_scope: The implementation declares whether IDs belong to a pending store, test session, node, or global scope.
+      control_identity: >
+        Message IDs are assigned by the test-control layer to captured message
+        instances. They are not protocol-message fields and need not be derived
+        from term, index, type, or payload.
       target_binding: >
         Use target-object ownership or routing that actually exists in the target.
         A target ID alone is not a target-object binding. Existing constructors,
@@ -51,11 +61,21 @@ capabilities:
     accepted_v0_forms:
       - explicit_tick
       - injectable_clock
+    testing_contract:
+      test_support_assessment: >
+        Reuse a directly testable Tick or Clock when sufficient. Add a thin
+        coordination wrapper, harness method, or hook only when multiple existing
+        time paths or asynchronous completion prevent direct deterministic use.
 
   randomness_control:
     description: >
       Protocol-relevant randomness can be fixed or injected so the same initial
       state and seed produce repeatable random choices.
+    testing_contract:
+      test_support_assessment: >
+        Reuse existing configuration when directly testable; otherwise a Config
+        option, dependency-injected source, hook, or test constructor may expose
+        the existing random choice without replacing its algorithm.
 
   lifecycle_control:
     description: >
@@ -66,12 +86,20 @@ capabilities:
       restart_or_recovery_boundary: Identify an existing restart or recovery path; scheduler resume is not recovery.
       state_ownership_defined: Determine whether recoverable-state ownership and boundaries are already defined.
       persistent_volatile_semantics_defined: Determine whether crash-surviving and volatile state are explicitly defined.
+    testing_contract:
+      test_support_assessment: >
+        Test support may compose or expose existing stop, create, and recovery
+        APIs, but it must not invent state ownership or persistence semantics.
 
   observation:
     description: >
       Expose the minimum global or node state needed for capability verification
       and later testing. Fields may remain protocol- and implementation-specific;
       v0.1 does not require a universal state schema.
+    testing_contract:
+      test_support_assessment: >
+        Use an existing Status API directly when sufficient. A read-only wrapper
+        or accessor may aggregate existing state but must not create protocol state.
 
   external_input:
     description: >
