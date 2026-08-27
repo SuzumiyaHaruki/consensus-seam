@@ -1,0 +1,66 @@
+name: mini-raft
+language: go
+protocol: raft
+repository: ../../../mini-raft
+
+system_boundary:
+  kind: protocol_library
+  description: >
+    Analyze the Mini Raft protocol core. Real networking, durable storage, and
+    application process behavior are outside the boundary.
+
+experiment:
+  kind: blind_capability
+  oracle_visible_to_agents: false
+  research_claim: Blind capability classification and low-intrusion message-control transformation
+
+transform_capabilities:
+  - message_capture
+  - message_injection
+
+build:
+  command: go test -run '^$' ./...
+
+test:
+  command: go test ./...
+
+capability_checks:
+  - name: MC1 capture
+    capability: message_capture
+    command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC1Capture$' -count=1
+    failure_code: MESSAGE_CAPTURE_FAILED
+  - name: MC2 suppression
+    capability: message_capture
+    command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC2Suppression$' -count=1
+    failure_code: MESSAGE_SUPPRESSION_FAILED
+  - name: MC3 exact injection
+    capability: message_injection
+    command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC3ExactInjection$' -count=1
+    failure_code: MESSAGE_INJECTION_FAILED
+
+verification_fixtures:
+  - source: hidden-acceptance/message_control_test.go
+    destination: _consensus_seam_hidden/acceptance/message_control_test.go
+
+llm:
+  analyzer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768
+  transformer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768
+  reviewer:
+    model: deepseek-v4-pro
+    thinking: enabled
+    reasoning_effort: high
+    max_tokens: 32768
+
+working_directory: .
+
+limits:
+  agent1_reanalysis_rounds: 2
+  agent2_patch_rounds: 3

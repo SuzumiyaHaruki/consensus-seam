@@ -28,6 +28,18 @@ class AgentRunStats:
     error_type: str | None = None
 
 
+@dataclass(frozen=True)
+class ToolCallAudit:
+    agent: str
+    model: str
+    tool: str
+    arguments: dict[str, Any]
+    output_bytes: int
+    returned_lines: int | None
+    duration_ms: float
+    success: bool | None
+
+
 class ToolCallingAgentRuntime:
     def __init__(self, client: ChatCompletionClient, *, max_steps: int = 64) -> None:
         if max_steps < 1:
@@ -35,9 +47,13 @@ class ToolCallingAgentRuntime:
         self.client = client
         self.max_steps = max_steps
         self._stats: list[AgentRunStats] = []
+        self._tool_audit: list[ToolCallAudit] = []
 
     def stats_snapshot(self) -> list[dict[str, Any]]:
         return [asdict(item) for item in self._stats]
+
+    def tool_audit_snapshot(self) -> list[dict[str, Any]]:
+        return [asdict(item) for item in self._tool_audit]
 
     def run(
         self,
@@ -111,8 +127,23 @@ class ToolCallingAgentRuntime:
                         try:
                             call_id = call["id"]
                             function = call["function"]
+                            tool_started = time.monotonic()
                             result = tools.execute(
                                 function["name"], function["arguments"]
+                            )
+                            self._tool_audit.append(
+                                ToolCallAudit(
+                                    agent=agent,
+                                    model=model.model,
+                                    tool=function["name"],
+                                    arguments=self._summarize_arguments(
+                                        function["arguments"]
+                                    ),
+                                    output_bytes=len(result.encode("utf-8")),
+                                    returned_lines=self._returned_lines(result),
+                                    duration_ms=(time.monotonic() - tool_started) * 1000,
+                                    success=self._tool_success(result),
+                                )
                             )
                         except (KeyError, TypeError) as exc:
                             raise AgentRuntimeError(
@@ -160,6 +191,53 @@ class ToolCallingAgentRuntime:
                     error_type=error_type,
                 )
             )
+
+    @staticmethod
+    def _summarize_arguments(raw_arguments: str) -> dict[str, Any]:
+        try:
+            arguments = json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            return {"invalid_json_bytes": len(raw_arguments.encode("utf-8"))}
+        if not isinstance(arguments, dict):
+            return {"argument_type": type(arguments).__name__}
+        summary: dict[str, Any] = {}
+        for key, value in arguments.items():
+            if key in {"content", "patch"} and isinstance(value, str):
+                summary[f"{key}_bytes"] = len(value.encode("utf-8"))
+            elif isinstance(value, str):
+                summary[key] = value[:200]
+            elif isinstance(value, (int, float, bool)) or value is None:
+                summary[key] = value
+            elif isinstance(value, list):
+                summary[f"{key}_items"] = len(value)
+            elif isinstance(value, dict):
+                summary[f"{key}_keys"] = sorted(value)[:20]
+        return summary
+
+    @staticmethod
+    def _returned_lines(result: str) -> int | None:
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("result")
+        if isinstance(value, list):
+            return len(value)
+        if isinstance(value, dict):
+            for key in ("lines", "matches", "files"):
+                if isinstance(value.get(key), list):
+                    return len(value[key])
+        return None
+
+    @staticmethod
+    def _tool_success(result: str) -> bool | None:
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+        return payload.get("ok") if isinstance(payload, dict) else None
 
     @staticmethod
     def _assistant_message(message: dict[str, Any]) -> dict[str, Any]:

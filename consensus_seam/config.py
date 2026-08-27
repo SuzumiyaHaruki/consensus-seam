@@ -21,6 +21,12 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 @dataclass(frozen=True)
+class ResolvedVerificationFixture:
+    source: Path
+    destination: Path
+
+
+@dataclass(frozen=True)
 class LoadedProject:
     manifest_path: Path
     manifest: ProjectManifest
@@ -29,6 +35,15 @@ class LoadedProject:
     capabilities: CapabilitySpec
     modification_policy: ModificationPolicy
     protocol_brief: dict[str, Any]
+    verification_fixtures: tuple[ResolvedVerificationFixture, ...] = ()
+
+    def agent_manifest(self) -> dict[str, Any]:
+        """Return project settings safe to disclose to all three Agents."""
+
+        return self.manifest.model_dump(
+            mode="json",
+            exclude={"capability_checks", "verification_fixtures", "experiment"},
+        )
 
 
 def _read_yaml(path: Path) -> Any:
@@ -85,6 +100,35 @@ def load_project(
     if not isinstance(protocol_brief, dict):
         raise ConfigurationError(f"protocol brief must be a mapping: {protocol_path}")
 
+    fixtures: list[ResolvedVerificationFixture] = []
+    destinations: set[Path] = set()
+    for fixture in manifest.verification_fixtures:
+        source = fixture.source.expanduser()
+        if not source.is_absolute():
+            source = path.parent / source
+        source = source.resolve()
+        if not source.is_file():
+            raise ConfigurationError(f"verification fixture is not a file: {source}")
+        try:
+            source.relative_to(repository)
+        except ValueError:
+            pass
+        else:
+            raise ConfigurationError(
+                "verification fixtures must be outside the Agent-visible target repository"
+            )
+        if fixture.destination in destinations:
+            raise ConfigurationError(
+                f"duplicate verification fixture destination: {fixture.destination}"
+            )
+        destinations.add(fixture.destination)
+        fixtures.append(
+            ResolvedVerificationFixture(
+                source=source,
+                destination=fixture.destination,
+            )
+        )
+
     return LoadedProject(
         manifest_path=path,
         manifest=manifest,
@@ -93,4 +137,5 @@ def load_project(
         capabilities=capabilities,
         modification_policy=policy,
         protocol_brief=protocol_brief,
+        verification_fixtures=tuple(fixtures),
     )

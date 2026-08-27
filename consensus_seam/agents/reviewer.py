@@ -9,7 +9,13 @@ from .base import StructuredAgent
 from ..config import LoadedProject
 from ..languages.go import GoBackend
 from ..llm.base import AgentRuntime
-from ..models import AgentModelConfig, CapabilityReport, InterfaceReport, ReviewReport
+from ..models import (
+    AgentModelConfig,
+    CapabilityReport,
+    InterfaceReport,
+    PatchMetrics,
+    ReviewReport,
+)
 from ..tools import reviewer_tools
 
 
@@ -35,15 +41,18 @@ class IndependentReviewer(StructuredAgent[ReviewReport]):
         interface_report: InterfaceReport,
         worktree: Path,
         git_diff: str,
+        patch_metrics: PatchMetrics,
     ) -> ReviewReport:
         payload = {
             "original_repository": str(project.repository),
             "patched_worktree": str(worktree),
-            "project": project.manifest.model_dump(mode="json"),
+            "project": project.agent_manifest(),
             "capability_spec": project.capabilities.model_dump(mode="json"),
             "capability_report": capability_report.model_dump(mode="json"),
             "interface_report": interface_report.model_dump(mode="json", exclude_none=True),
             "git_diff": git_diff,
+            "patch_metrics": patch_metrics.model_dump(mode="json"),
+            "required_checks": sorted(ReviewReport.required_checks),
         }
         return self._complete(
             json.dumps(payload, indent=2, sort_keys=True),

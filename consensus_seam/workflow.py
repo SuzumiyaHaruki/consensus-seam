@@ -19,7 +19,12 @@ from .models import (
 )
 from .reporting import ArtifactStore
 from .resources import resource_root
-from .verify import BaselineVerifier, CapabilityCheck, DeterministicVerifier
+from .verify import (
+    BaselineVerifier,
+    CapabilityCheck,
+    DeterministicVerifier,
+    materialized_verification_fixtures,
+)
 from .workspace import GitWorktree, git_audit_state
 
 
@@ -45,6 +50,7 @@ class ConsensusWorkflow:
         artifacts = ArtifactStore.create(self.runs_root)
         self._write_run_config(artifacts, project)
         stats_start = self._runtime_stats_count()
+        tool_audit_start = self._runtime_tool_audit_count()
         try:
             analyzer, _, _ = self._agents(project)
             report = analyzer.analyze(project)
@@ -56,6 +62,7 @@ class ConsensusWorkflow:
             )
         finally:
             self._write_runtime_stats(artifacts, stats_start)
+            self._write_tool_audit(artifacts, tool_audit_start)
             artifacts.publish_latest()
 
     def patch(self, project: LoadedProject) -> WorkflowResult:
@@ -68,10 +75,12 @@ class ConsensusWorkflow:
         artifacts = ArtifactStore.create(self.runs_root)
         self._write_run_config(artifacts, project)
         stats_start = self._runtime_stats_count()
+        tool_audit_start = self._runtime_tool_audit_count()
         try:
             return self._execute_patch_loop(project, verify=verify, artifacts=artifacts)
         finally:
             self._write_runtime_stats(artifacts, stats_start)
+            self._write_tool_audit(artifacts, tool_audit_start)
             artifacts.publish_latest()
 
     def _execute_patch_loop(
@@ -229,12 +238,15 @@ class ConsensusWorkflow:
 
                 git_diff = worktree.diff()
                 artifacts.write_text("changes.patch", git_diff)
+                patch_metrics = worktree.patch_metrics()
+                artifacts.write_model("patch-metrics.json", patch_metrics)
                 review = reviewer.review(
                     project,
                     report,
                     interface_report,
                     worktree.path,
                     git_diff,
+                    patch_metrics,
                 )
                 artifacts.write_model("review-report.json", review)
                 artifacts.write_model(
@@ -278,12 +290,13 @@ class ConsensusWorkflow:
                     for name, capability in interface_report.capabilities().items()
                     if capability.implemented
                 }
-                verification = self.verifier.verify(
-                    project,
-                    worktree.path,
-                    capability_checks=checks,
-                    required_capabilities=implemented,
-                )
+                with materialized_verification_fixtures(project, worktree.path):
+                    verification = self.verifier.verify(
+                        project,
+                        worktree.path,
+                        capability_checks=checks,
+                        required_capabilities=implemented,
+                    )
                 artifacts.write_model("verification-report.json", verification)
                 artifacts.write_model(
                     f"logs/verification-a{analysis_round}-p{patch_round}.json",
@@ -354,6 +367,11 @@ class ConsensusWorkflow:
             "run-config.json",
             {
                 "project": project.manifest.name,
+                "experiment": (
+                    None
+                    if project.manifest.experiment is None
+                    else project.manifest.experiment.model_dump(mode="json")
+                ),
                 "source_revisions": {
                     "controller": git_audit_state(resource_root()),
                     "target": git_audit_state(project.repository),
@@ -366,6 +384,10 @@ class ConsensusWorkflow:
                     check.model_dump(mode="json")
                     for check in project.manifest.capability_checks
                 ],
+                "verification_fixtures": [
+                    fixture.model_dump(mode="json")
+                    for fixture in project.manifest.verification_fixtures
+                ],
             },
         )
 
@@ -377,6 +399,15 @@ class ConsensusWorkflow:
         snapshot = getattr(self.runtime, "stats_snapshot", None)
         records = snapshot()[start:] if callable(snapshot) else []
         artifacts.write_json("agent-run-stats.json", records)
+
+    def _runtime_tool_audit_count(self) -> int:
+        snapshot = getattr(self.runtime, "tool_audit_snapshot", None)
+        return len(snapshot()) if callable(snapshot) else 0
+
+    def _write_tool_audit(self, artifacts: ArtifactStore, start: int) -> None:
+        snapshot = getattr(self.runtime, "tool_audit_snapshot", None)
+        records = snapshot()[start:] if callable(snapshot) else []
+        artifacts.write_json("tool-call-audit.json", records)
 
     @staticmethod
     def _selected_patchable(

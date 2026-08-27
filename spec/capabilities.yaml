@@ -6,6 +6,10 @@ capabilities:
       In test mode, every outbound protocol message is captured before entering
       the original uncontrollable send path. A captured message must not continue
       automatically along that path.
+    testing_contract:
+      constructor: NewMessageController(Transport)
+      list_pending: ListPending() returns stable metadata with ID, From, To, Type, and CaptureSequence
+      clear_pending: ClearPending() removes all pending messages
 
   message_injection:
     description: >
@@ -13,6 +17,11 @@ capabilities:
       deterministically deliver it through the original target node's normal
       protocol input boundary. Successful injection consumes exactly that
       pending message; failed injection must leave it pending.
+      Test-controller operations, including Inject and ClearPending, are
+      serialized; outbound capture may occur concurrently.
+    testing_contract:
+      inject: Inject(messageID) delivers through the recorded target's normal protocol input
+      message_id_scope: implementation must declare pending_store_instance or test_session
 
   time_control:
     description: >
@@ -32,6 +41,11 @@ capabilities:
     description: >
       Existing node stop, creation, recovery, and state-ownership semantics may
       be exposed to tests. An Agent must not invent the persistent/volatile split.
+    obligations:
+      stop_boundary: Identify an existing stop/pause boundary and its exact meaning.
+      restart_or_recovery_boundary: Identify an existing restart or recovery path; scheduler resume is not recovery.
+      state_ownership_defined: Determine whether the implementation already owns and separates recoverable state.
+      persistent_volatile_semantics_defined: Determine whether crash-surviving and volatile state are explicitly defined.
 
   observation:
     description: >
@@ -42,6 +56,10 @@ capabilities:
     description: >
       Discover existing proposal, request, transaction, or equivalent workload
       entrypoints. v0.1 does not create new business-input APIs.
+    obligations:
+      workload_entrypoint: Identify input originating outside the protocol as application work.
+      protocol_ingress_excluded: Exclude peer-to-peer protocol message handlers such as Step.
+      timer_and_internal_events_excluded: Exclude Tick, timers, callbacks, and internal events.
 
 prerequisites:
   target_language:

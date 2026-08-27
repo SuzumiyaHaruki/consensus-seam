@@ -107,6 +107,27 @@ On completion, audit-sized artifacts are also published to the Git-tracked
 logs, but excludes patched worktrees. Publishing updates local Git content only;
 the workflow never commits or pushes to a remote repository automatically.
 
+Patch runs additionally emit `patch-metrics.json` and `tool-call-audit.json`.
+Patch metrics separate existing/new production and test files plus added/deleted
+lines. Tool audit records tool names, bounded argument summaries, result sizes,
+item counts, and duration without storing returned source or patch contents.
+
+## Blind evaluation fixtures
+
+Formal benchmark manifests and hidden acceptance tests live under `evaluation/`,
+outside target repositories. `capability_checks`, experiment labels, and fixture
+paths are removed from every Agent prompt. Hidden files are materialized only
+after independent review and are deleted after verification.
+
+For the blind Mini Raft experiment use:
+
+```bash
+consensus-seam run \
+  --project evaluation/mini-raft/project.yaml \
+  --api-key-file /path/to/deepseek-key.txt \
+  --model-profile manifest
+```
+
 See `CODEX_SPEC.md` for the non-goals and `spec/` for the capability and change
 policies. The current implementation boundary and next vertical slice are
 documented in `docs/design-analysis.md`. Inputs needed for live runs are listed in

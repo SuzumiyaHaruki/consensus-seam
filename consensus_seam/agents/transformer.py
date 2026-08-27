@@ -44,7 +44,7 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
                 "Transformer cannot run without selected PATCHABLE capabilities"
             )
         payload = {
-            "project": project.manifest.model_dump(mode="json"),
+            "project": project.agent_manifest(),
             "worktree": str(worktree),
             "patchable_capabilities": sorted(patchable),
             "transform_capabilities": (

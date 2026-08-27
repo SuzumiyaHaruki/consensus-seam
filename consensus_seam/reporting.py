@@ -112,6 +112,10 @@ class ArtifactStore:
                 "included": "reports, patch, statistics, and logs",
                 "excluded": ["patched-worktree*"],
             }
+            run_config_path = staging / "run-config.json"
+            if run_config_path.is_file():
+                run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+                manifest["experiment"] = run_config.get("experiment")
             (staging / "audit-manifest.json").write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",

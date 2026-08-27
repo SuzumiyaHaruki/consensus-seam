@@ -30,6 +30,11 @@ def test_worktree_isolates_changes_and_exports_new_files(tmp_path: Path) -> None
     worktree = GitWorktree.create(repo, tmp_path / "isolated")
     (worktree.path / "pending.go").write_text("package mini\n", encoding="utf-8")
     patch = worktree.diff()
+    metrics = worktree.patch_metrics()
 
     assert "pending.go" in patch
     assert not (repo / "pending.go").exists()
+    assert metrics.new_production_files == ["pending.go"]
+    assert metrics.production_lines_added == 1
+    assert metrics.production_lines_deleted == 0
+    assert metrics.protocol_core_files_modified == []

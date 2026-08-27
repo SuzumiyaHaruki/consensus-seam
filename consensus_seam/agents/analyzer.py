@@ -35,7 +35,7 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
         feedback: dict[str, Any] | None = None,
     ) -> CapabilityReport:
         payload = {
-            "project": project.manifest.model_dump(mode="json"),
+            "project": project.agent_manifest(),
             "resolved_repository": str(project.repository),
             "resolved_working_directory": str(project.working_directory),
             "capability_spec": project.capabilities.model_dump(mode="json"),

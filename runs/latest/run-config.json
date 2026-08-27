@@ -19,6 +19,11 @@
       "name": "MC3 exact injection"
     }
   ],
+  "experiment": {
+    "kind": "engineering_smoke",
+    "oracle_visible_to_agents": true,
+    "research_claim": "First end-to-end successful execution only"
+  },
   "model_profile": "manifest",
   "project": "mini-raft",
   "source_revisions": {

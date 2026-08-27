@@ -50,6 +50,11 @@ capabilities:
 
   lifecycle_control:
     expected_status: INVASIVE
+    expected_obligations:
+      stop_boundary: SATISFIED
+      restart_or_recovery_boundary: MISSING
+      state_ownership_defined: MISSING
+      persistent_volatile_semantics_defined: MISSING
     evidence:
       - file: node.go
         symbol: Node
@@ -70,6 +75,10 @@ capabilities:
 
   external_input:
     expected_status: SUPPORTED
+    expected_obligations:
+      workload_entrypoint: SATISFIED
+      protocol_ingress_excluded: SATISFIED
+      timer_and_internal_events_excluded: SATISFIED
     evidence:
       - file: node.go
         symbol: Node.Propose

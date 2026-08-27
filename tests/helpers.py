@@ -7,6 +7,35 @@ def evidence(symbol: str) -> list[dict[str, Any]]:
     return [{"symbol": symbol, "reason": f"actual code evidence at {symbol}"}]
 
 
+def obligation(status: str, symbol: str, reason: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "evidence": evidence(symbol) if status == "SATISFIED" else [],
+        "reason": reason,
+    }
+
+
+def review_report() -> dict[str, Any]:
+    checks = []
+    for name in (
+        "original_send_suppressed",
+        "protocol_logic_unchanged",
+        "message_snapshot_stable",
+        "exact_target_preserved",
+        "failed_injection_preserves_pending",
+        "existing_tests_unchanged",
+    ):
+        checks.append(
+            {
+                "name": name,
+                "result": "PASS",
+                "evidence": evidence("verified.diff"),
+                "reason": f"test evidence for {name}",
+            }
+        )
+    return {"overall": "PASS", "checks": checks, "issues": [], "risks": []}
+
+
 def capability_report(*, patchable: str | None = "message_injection") -> dict[str, Any]:
     statuses = {
         "message_capture": "SUPPORTED",
@@ -45,6 +74,20 @@ def capability_report(*, patchable: str | None = "message_injection") -> dict[st
             "lifecycle_control": {
                 "status": statuses["lifecycle_control"],
                 "reason": "the implementation does not define restart state ownership",
+                "obligations": {
+                    "stop_boundary": obligation(
+                        "SATISFIED", "Node.Pause", "scheduler pause exists"
+                    ),
+                    "restart_or_recovery_boundary": obligation(
+                        "MISSING", "Node.Resume", "resume is not recovery"
+                    ),
+                    "state_ownership_defined": obligation(
+                        "MISSING", "Node", "recoverable ownership is undefined"
+                    ),
+                    "persistent_volatile_semantics_defined": obligation(
+                        "MISSING", "Node", "persistent split is undefined"
+                    ),
+                },
             },
             "observation": {
                 "status": statuses["observation"],
@@ -54,6 +97,17 @@ def capability_report(*, patchable: str | None = "message_injection") -> dict[st
                 "status": statuses["external_input"],
                 "evidence": evidence("Node.Propose"),
                 "entrypoints": ["Node.Propose"],
+                "obligations": {
+                    "workload_entrypoint": obligation(
+                        "SATISFIED", "Node.Propose", "proposal is application work"
+                    ),
+                    "protocol_ingress_excluded": obligation(
+                        "SATISFIED", "Node.Step", "Step is explicitly excluded"
+                    ),
+                    "timer_and_internal_events_excluded": obligation(
+                        "SATISFIED", "Node.Tick", "Tick is explicitly excluded"
+                    ),
+                },
             },
         },
     }

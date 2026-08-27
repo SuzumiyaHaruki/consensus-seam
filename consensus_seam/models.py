@@ -54,6 +54,12 @@ class SystemBoundary(StrictModel):
     description: str = Field(min_length=1)
 
 
+class ExperimentConfig(StrictModel):
+    kind: Literal["engineering_smoke", "blind_capability", "repair"]
+    oracle_visible_to_agents: bool
+    research_claim: str = Field(min_length=1)
+
+
 class AgentModelConfig(StrictModel):
     model: str = Field(min_length=1)
     thinking: Literal["enabled", "disabled"] = "enabled"
@@ -93,6 +99,19 @@ class CapabilityCheckConfig(StrictModel):
     failure_code: FailureCode
 
 
+class VerificationFixtureConfig(StrictModel):
+    source: Path
+    destination: Path
+
+    @model_validator(mode="after")
+    def destination_must_be_relative(self) -> "VerificationFixtureConfig":
+        if self.destination.is_absolute() or ".." in self.destination.parts:
+            raise ValueError("verification fixture destination must stay in the worktree")
+        if ".git" in self.destination.parts:
+            raise ValueError("verification fixture cannot target .git")
+        return self
+
+
 TransformCapability = Literal[
     "message_capture",
     "message_injection",
@@ -114,11 +133,13 @@ class ProjectManifest(StrictModel):
     protocol: str = Field(min_length=1)
     repository: Path
     system_boundary: SystemBoundary
+    experiment: ExperimentConfig | None = None
     build: CommandConfig
     test: CommandConfig
     working_directory: Path = Path(".")
     transform_capabilities: list[TransformCapability] | None = None
     capability_checks: list[CapabilityCheckConfig] = Field(default_factory=list)
+    verification_fixtures: list[VerificationFixtureConfig] = Field(default_factory=list)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     limits: WorkflowLimits = Field(default_factory=WorkflowLimits)
 
@@ -154,6 +175,8 @@ class ProjectManifest(StrictModel):
 class CapabilityDefinition(StrictModel):
     description: str = Field(min_length=1)
     accepted_v0_forms: list[str] = Field(default_factory=list)
+    obligations: dict[str, str] = Field(default_factory=dict)
+    testing_contract: dict[str, str] = Field(default_factory=dict)
 
 
 class CapabilityPrerequisites(StrictModel):
@@ -200,6 +223,26 @@ class CodeEvidence(StrictModel):
         return self
 
 
+class ObligationStatus(str, Enum):
+    SATISFIED = "SATISFIED"
+    PARTIAL = "PARTIAL"
+    MISSING = "MISSING"
+    UNKNOWN = "UNKNOWN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class ObligationAssessment(StrictModel):
+    status: ObligationStatus
+    evidence: list[CodeEvidence] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def satisfied_requires_evidence(self) -> "ObligationAssessment":
+        if self.status is ObligationStatus.SATISFIED and not self.evidence:
+            raise ValueError("SATISFIED obligation requires code evidence")
+        return self
+
+
 class CapabilityFinding(StrictModel):
     status: CapabilityStatus
     evidence: list[CodeEvidence] = Field(default_factory=list)
@@ -209,6 +252,7 @@ class CapabilityFinding(StrictModel):
     limitations: list[str] = Field(default_factory=list)
     suggested_direction: str | None = None
     entrypoints: list[str] = Field(default_factory=list)
+    obligations: dict[str, "ObligationAssessment"] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def require_supporting_explanation(self) -> "CapabilityFinding":
@@ -246,7 +290,54 @@ class CapabilityReport(StrictModel):
             raise ValueError("invalid capability set (" + "; ".join(details) + ")")
         if self.capabilities["external_input"].status is CapabilityStatus.PATCHABLE:
             raise ValueError("external_input is discovery-only and cannot be PATCHABLE in v0.1")
+        self._validate_lifecycle_obligations()
+        self._validate_external_input_obligations()
         return self
+
+    def _validate_lifecycle_obligations(self) -> None:
+        finding = self.capabilities["lifecycle_control"]
+        required = {
+            "stop_boundary",
+            "restart_or_recovery_boundary",
+            "state_ownership_defined",
+            "persistent_volatile_semantics_defined",
+        }
+        if set(finding.obligations) != required:
+            raise ValueError("lifecycle_control must report all lifecycle obligations")
+        states = {name: finding.obligations[name].status for name in required}
+        if finding.status is CapabilityStatus.SUPPORTED and any(
+            state is not ObligationStatus.SATISFIED for state in states.values()
+        ):
+            raise ValueError("SUPPORTED lifecycle_control requires every obligation SATISFIED")
+        recovery_missing = (
+            states["restart_or_recovery_boundary"] is ObligationStatus.MISSING
+        )
+        semantics_missing = any(
+            states[name] is ObligationStatus.MISSING
+            for name in {
+                "state_ownership_defined",
+                "persistent_volatile_semantics_defined",
+            }
+        )
+        if recovery_missing and semantics_missing and finding.status is not CapabilityStatus.INVASIVE:
+            raise ValueError(
+                "missing recovery and state semantics require lifecycle_control INVASIVE"
+            )
+
+    def _validate_external_input_obligations(self) -> None:
+        finding = self.capabilities["external_input"]
+        required = {
+            "workload_entrypoint",
+            "protocol_ingress_excluded",
+            "timer_and_internal_events_excluded",
+        }
+        if set(finding.obligations) != required:
+            raise ValueError("external_input must report all external-input obligations")
+        if finding.status is CapabilityStatus.SUPPORTED and any(
+            finding.obligations[name].status is not ObligationStatus.SATISFIED
+            for name in required
+        ):
+            raise ValueError("SUPPORTED external_input requires every obligation SATISFIED")
 
     def patchable(self, allowlist: list[str] | set[str] | None = None) -> set[str]:
         result = {
@@ -286,6 +377,10 @@ class InterfaceCapability(StrictModel):
     copy_strategy: str | None = None
     production_mode: str | None = None
     test_mode: str | None = None
+    message_id_scope: Literal[
+        "pending_store_instance", "test_session", "node", "global"
+    ] | None = None
+    controller_operations: Literal["serialized"] | None = None
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -309,6 +404,16 @@ class InterfaceReport(StrictModel):
     def require_one_capability(self) -> "InterfaceReport":
         if not self.capabilities():
             raise ValueError("interface report must describe at least one capability")
+        for name in ("message_capture", "message_injection"):
+            capability = getattr(self, name)
+            if capability is None or not capability.implemented:
+                continue
+            if capability.message_id_scope is None:
+                raise ValueError(f"implemented {name} must declare message_id_scope")
+            if capability.controller_operations != "serialized":
+                raise ValueError(
+                    f"implemented {name} must declare serialized controller operations"
+                )
         return self
 
     def capabilities(self) -> dict[str, InterfaceCapability]:
@@ -340,14 +445,61 @@ class ReviewIssue(StrictModel):
     reason: str = Field(min_length=1)
 
 
+class ReviewCheckResult(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    UNKNOWN = "UNKNOWN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class ReviewCheck(StrictModel):
+    name: str = Field(min_length=1)
+    result: ReviewCheckResult
+    evidence: list[CodeEvidence] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def pass_requires_evidence(self) -> "ReviewCheck":
+        if self.result is ReviewCheckResult.PASS and not self.evidence:
+            raise ValueError("PASS review check requires evidence")
+        return self
+
+
 class ReviewReport(StrictModel):
     overall: ReviewOverall
+    checks: list[ReviewCheck]
     issues: list[ReviewIssue] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+    required_checks: ClassVar[frozenset[str]] = frozenset(
+        {
+            "original_send_suppressed",
+            "protocol_logic_unchanged",
+            "message_snapshot_stable",
+            "exact_target_preserved",
+            "failed_injection_preserves_pending",
+            "existing_tests_unchanged",
+        }
+    )
 
     @model_validator(mode="after")
     def require_consistent_issues(self) -> "ReviewReport":
+        names = [check.name for check in self.checks]
+        if len(names) != len(set(names)):
+            raise ValueError("review check names must be unique")
+        missing = self.required_checks - set(names)
+        if missing:
+            raise ValueError(f"review report is missing checks: {', '.join(sorted(missing))}")
         if self.overall is ReviewOverall.PASS and self.issues:
             raise ValueError("PASS review cannot contain issues")
+        if self.overall is ReviewOverall.PASS and any(
+            check.result not in {
+                ReviewCheckResult.PASS,
+                ReviewCheckResult.NOT_APPLICABLE,
+            }
+            for check in self.checks
+        ):
+            raise ValueError("PASS review cannot contain failed or unknown checks")
         if self.overall is not ReviewOverall.PASS and not self.issues:
             raise ValueError(f"{self.overall.value} review must explain at least one issue")
         return self
@@ -371,6 +523,19 @@ class CommandExecution(StrictModel):
     @property
     def passed(self) -> bool:
         return self.returncode == 0
+
+
+class PatchMetrics(StrictModel):
+    existing_production_files_modified: list[str] = Field(default_factory=list)
+    new_production_files: list[str] = Field(default_factory=list)
+    existing_test_files_modified: list[str] = Field(default_factory=list)
+    new_test_files: list[str] = Field(default_factory=list)
+    other_files_changed: list[str] = Field(default_factory=list)
+    production_lines_added: int = Field(ge=0)
+    production_lines_deleted: int = Field(ge=0)
+    test_lines_added: int = Field(ge=0)
+    test_lines_deleted: int = Field(ge=0)
+    protocol_core_files_modified: list[str] = Field(default_factory=list)
 
 
 class BaselineReport(StrictModel):

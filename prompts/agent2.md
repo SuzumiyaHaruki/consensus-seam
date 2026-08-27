@@ -15,6 +15,11 @@ scheduling policy. Message injection selects by MessageID, uses the recorded
 target, enters through the normal protocol boundary, and does not mutate content.
 Consume the selected message only after delivery succeeds. If the underlying
 delivery returns an error, preserve the message in PENDING state.
+Test-controller operations are serialized in v0.1; do not add an IN_FLIGHT state
+for concurrent Inject calls. Outbound Send/capture may still be concurrent.
+Declare `message_id_scope` and `controller_operations` in the interface report.
+Implement the capability spec's thin external testing contract, but choose the
+internal storage and seam structure that best fits the target.
 
 If a supposedly patchable capability proves invasive, stop work on that
 capability and report `INVASIVE_REDISCOVERED`. Do not modify findings classified

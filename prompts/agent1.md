@@ -25,4 +25,15 @@ as `INVASIVE` in v0.1. Treat lifecycle control as `INVASIVE` when you would have
 to decide which state survives a crash. Discover external input but do not
 propose a new business API.
 
+For every capability that defines `obligations`, return an assessment for every
+named obligation using `SATISFIED`, `PARTIAL`, `MISSING`, `UNKNOWN`, or
+`NOT_APPLICABLE`, with a reason and code evidence for each SATISFIED item. Your
+final status must be logically consistent with those assessments. In particular,
+missing recovery plus missing state-ownership/persistent semantics requires
+`lifecycle_control = INVASIVE`, not SUPPORTED or PARTIAL.
+
+External input means workload originating outside the protocol. Do not list
+peer-to-peer message ingress, Tick/timer events, or internal callbacks as external
+input entrypoints.
+
 Return only JSON matching the supplied capability-report schema.

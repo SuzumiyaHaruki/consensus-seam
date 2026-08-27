@@ -76,6 +76,12 @@ Human ground truth for Mini Raft lives under `evaluation/mini-raft/`, outside th
 target repository visible to source tools. It is used only for post-run comparison
 and is never injected into an Agent prompt.
 
+The same evaluator directory owns the blind project manifest and hidden
+acceptance fixtures. Agents see only a sanitized manifest and target source;
+fixtures are introduced after review for deterministic verification. Reviewer
+PASS reports carry named checks and evidence, while patch/tool metrics provide
+auditable cost and modification data without storing chain-of-thought.
+
 Capability-test routing is now wired through the manifest and workflow. The Mini
 Raft target must provide separate MC1/MC2/MC3 commands; without them, a full run
 returns `SEMANTIC_AMBIGUITY` after build and regression tests.

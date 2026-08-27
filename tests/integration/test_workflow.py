@@ -13,7 +13,7 @@ from consensus_seam.models import WorkflowOutcome
 from consensus_seam.models import AgentModelConfig
 from consensus_seam.llm.base import ToolExecutor
 from consensus_seam.workflow import ConsensusWorkflow
-from tests.helpers import capability_report
+from tests.helpers import capability_report, review_report
 
 
 def git(repo: Path, *args: str) -> None:
@@ -74,6 +74,8 @@ class EditingFakeClient:
                 {
                     "message_injection": {
                         "implemented": True,
+                        "message_id_scope": "test_session",
+                        "controller_operations": "serialized",
                         "entrypoint": {
                             "file": "injection_seam.go",
                             "symbol": "injectForTest",
@@ -83,7 +85,7 @@ class EditingFakeClient:
                     }
                 }
             )
-        return json.dumps({"overall": "PASS", "issues": []})
+        return json.dumps(review_report())
 
 
 class GuardrailFakeRuntime:
@@ -115,7 +117,7 @@ class GuardrailFakeRuntime:
                 report["capabilities"]["message_capture"]["status"] = "PATCHABLE"
             return json.dumps(report)
         if agent == "reviewer":
-            return json.dumps({"overall": "PASS", "issues": []})
+            return json.dumps(review_report())
 
         self.transformer_round += 1
         payload = json.loads(user_prompt)
@@ -125,6 +127,8 @@ class GuardrailFakeRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
+                        "message_id_scope": "test_session",
+                        "controller_operations": "serialized",
                         "entrypoint": {"symbol": "injectForTest"},
                     }
                 }
@@ -143,6 +147,8 @@ class GuardrailFakeRuntime:
                     },
                     "message_injection": {
                         "implemented": True,
+                        "message_id_scope": "test_session",
+                        "controller_operations": "serialized",
                         "entrypoint": {"symbol": "injectForTest"},
                     },
                 }
@@ -163,6 +169,8 @@ class GuardrailFakeRuntime:
             {
                 "message_injection": {
                     "implemented": True,
+                    "message_id_scope": "test_session",
+                    "controller_operations": "serialized",
                     "entrypoint": {
                         "file": "injection_seam.go",
                         "symbol": "injectForTest",
@@ -238,11 +246,13 @@ class ScopedTransformRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
+                        "message_id_scope": "test_session",
+                        "controller_operations": "serialized",
                         "entrypoint": {"symbol": "injectForTest"},
                     }
                 }
             )
-        return json.dumps({"overall": "PASS", "issues": []})
+        return json.dumps(review_report())
 
 
 def test_analyze_writes_validated_artifacts(tmp_path: Path) -> None:
@@ -442,6 +452,8 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
     assert result.outcome is WorkflowOutcome.PASS
     assert (result.run_directory / "baseline-report.json").is_file()
     assert (result.run_directory / "verification-report.json").is_file()
+    assert (result.run_directory / "patch-metrics.json").is_file()
+    assert (result.run_directory / "tool-call-audit.json").is_file()
     run_config = json.loads((result.run_directory / "run-config.json").read_text())
     assert run_config["resolved_models"]["reviewer"]["model"] == "deepseek-v4-pro"
     assert run_config["source_revisions"]["target"]["revision"] is not None

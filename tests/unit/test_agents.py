@@ -80,6 +80,8 @@ def test_transformer_must_cover_exact_patchable_set(tmp_path: Path) -> None:
                     {
                         "message_capture": {
                             "implemented": True,
+                            "message_id_scope": "test_session",
+                            "controller_operations": "serialized",
                             "capture_boundary": {"symbol": "Transport.Send"},
                         }
                     }

@@ -117,3 +117,11 @@ def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
     assert stats[0]["cache_hit_input_tokens"] == 9
     assert stats[0]["cache_miss_input_tokens"] == 21
     assert "reasoning_content" not in stats[0]
+    audit = runtime.tool_audit_snapshot()
+    assert len(audit) == 1
+    assert audit[0]["agent"] == "analyzer"
+    assert audit[0]["tool"] == "echo"
+    assert audit[0]["arguments"] == {"value": "source"}
+    assert audit[0]["output_bytes"] > 0
+    assert audit[0]["success"] is True
+    assert "result" not in audit[0]
