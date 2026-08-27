@@ -1,6 +1,6 @@
 {
   "lifecycle_control": {
-    "reason": "Pause/Resume exist but are explicitly documented as a scheduler pause, not crash recovery (node.go:170), and the Node struct owns all persistent-looking and volatile-looking state in one in-memory object (node.go:46-47) with no recoverable/volatile separation. There is no restart or recovery path and no persistent/volatile semantics. Missing recovery plus missing state-ownership/persistent semantics requires INVASIVE.",
+    "reason": "The node has no restart or recovery path: NewNode always builds fresh in-memory state, and Pause/Resume only toggle a `running` flag whose meaning is explicitly documented as a scheduler pause, not crash recovery. Persistent-looking state (term, vote, log, commit) is held in one in-memory struct with no ownership separation or durable store. Exposing lifecycle control to tests would require deciding which state survives a crash, which the implementation deliberately does not define.",
     "status": "INVASIVE"
   },
   "randomness_control": {

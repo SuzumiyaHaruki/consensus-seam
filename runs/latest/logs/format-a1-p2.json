@@ -1,7 +1,7 @@
 {
-  "command": "gofmt -w message_control.go message_control_test.go",
+  "command": "gofmt -w message_controller.go message_controller_test.go",
   "returncode": 0,
   "stdout": "",
   "stderr": "",
-  "duration_seconds": 0.011541583000507671
+  "duration_seconds": 0.01544774200010579
 }

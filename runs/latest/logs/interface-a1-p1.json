@@ -3,59 +3,60 @@
     "implemented": true,
     "rediscovered_status": null,
     "capture_boundary": {
-      "file": "controller.go",
-      "symbol": "MessageController.Send",
-      "meaning": "MessageController.Send intercepts every outbound protocol message before the wrapped environment Transport is reached; in capture mode it records a stable snapshot and suppresses the original send."
+      "file": "transport.go",
+      "symbol": "Transport.Send",
+      "meaning": "Transport seam; MessageController intercepts every outbound message before the wrapped transport's Send would run"
     },
     "pending_store": {
-      "file": "controller.go",
+      "file": "message_controller.go",
       "symbol": "MessageController.pending",
-      "meaning": "pending map keyed by message ID (msg-<CaptureSequence>), guarded by MessageController.mu"
+      "meaning": "in-memory pending map keyed by MessageID, guarded by the controller mutex"
     },
     "entrypoint": {
-      "file": "node.go",
-      "symbol": "Node.emit",
-      "meaning": "single outbound funnel: every outbound protocol message (heartbeats, vote requests, append entries, responses) reaches MessageController.Send through the node's Transport here."
+      "file": "message_controller.go",
+      "symbol": "MessageController.Send",
+      "meaning": "test-mode Transport.Send: captures a stable snapshot into the pending store and suppresses the original send"
     },
-    "copy_strategy": "deep clone via Message.Clone at capture time; ListPending returns fresh deep clones so the pending store is never mutated",
-    "production_mode": "production mode (default): Send forwards the message unchanged to the wrapped Transport",
-    "test_mode": "capture mode (SetCaptureMode(true)/EnableCapture): Send stores a stable snapshot in the pending store and returns nil, suppressing the original send",
+    "copy_strategy": "Message.Clone() deep snapshot taken at capture time; ListPending returns copies so callers cannot mutate the store",
+    "production_mode": "v0.1 has no production mode; the controller always captures and suppresses, and the wrapped Transport is retained but never invoked",
+    "test_mode": "NewMessageController(Transport) creates an active test-mode controller; Send captures and suppresses from construction; no enable/disable toggle in v0.1",
     "message_id_scope": "pending_store_instance",
     "controller_operations": "serialized",
     "notes": [
-      "NewMessageController(Transport) wraps the environment-owned transport; capture mode is off by default (production mode forwards unchanged).",
-      "In capture mode Send assigns a per-instance CaptureSequence and an ID of the form msg-<CaptureSequence>, stores a Message.Clone() snapshot, and returns nil so the message never continues along the original uncontrollable send path.",
-      "ListPending() returns stable metadata (ID, From, To, Type, CaptureSequence plus full message snapshot) ordered by CaptureSequence; ClearPending() removes all pending messages.",
-      "Test-controller operations (Inject, ListPending, ClearPending) are serialized by a dedicated opMu; outbound capture only takes the store mutex and may occur concurrently with them.",
-      "The recorded target node is resolved at capture time (controller registry, with fallback to the wrapped transport's read-only Node(id) accessor) so injection is deterministic.",
-      "Nodes created with the controller as their Transport self-register via NewNode; explicit Register/Unregister are also available."
+      "Capture happens before the original send and that send is suppressed: MessageController.Send returns nil without invoking the wrapped transport, so a captured message never continues automatically along the original send path.",
+      "No scheduling policy is implemented; the pending store is a simple map with monotonic CaptureSequence ordering.",
+      "Outbound capture (Send) may run concurrently with controller operations; a single mutex guards the store.",
+      "No IN_FLIGHT state: controller operations (Inject, ClearPending) are serialized via the controller mutex."
     ]
   },
   "message_injection": {
     "implemented": true,
     "rediscovered_status": null,
-    "capture_boundary": null,
-    "pending_store": {
-      "file": "controller.go",
-      "symbol": "MessageController.pending",
-      "meaning": "pending map keyed by message ID (msg-<CaptureSequence>), guarded by MessageController.mu"
-    },
-    "entrypoint": {
+    "capture_boundary": {
       "file": "node.go",
       "symbol": "Node.Step",
-      "meaning": "normal protocol input boundary: verifies To == node.id, processes synchronously under the mutex, and clones the message before handling it"
+      "meaning": "normal protocol input boundary used for injection delivery"
     },
-    "copy_strategy": "injected message is rebuilt from the stored snapshot with fresh entry clones; Node.Step clones it again before processing, so content is never mutated",
-    "production_mode": "no injection in production mode; Inject only applies to messages captured by the same controller instance",
-    "test_mode": "test mode: Inject delivers a captured message through the recorded target's Node.Step and consumes it only on nil error, leaving it pending on failure",
+    "pending_store": {
+      "file": "message_controller.go",
+      "symbol": "MessageController.pending",
+      "meaning": "shared pending store; the selected message is removed only after delivery succeeds"
+    },
+    "entrypoint": {
+      "file": "message_controller.go",
+      "symbol": "MessageController.Inject",
+      "meaning": "selects a pending message by MessageID and delivers it through the recorded target's normal protocol input"
+    },
+    "copy_strategy": "delivers a fresh Message.Clone() of the pending snapshot; content and destination are never mutated",
+    "production_mode": "injection is a test-only controller operation with no production counterpart",
+    "test_mode": "Inject(messageID) looks up the pending message by ID, calls the recorded target node's Step with a clone, and consumes the message only on success",
     "message_id_scope": "pending_store_instance",
     "controller_operations": "serialized",
     "notes": [
-      "Inject(messageID) selects a pending message by ID, uses the recorded target (captured at Send time, re-resolved at Inject time), and delivers it through the target's normal Node.Step boundary.",
-      "The message is consumed (removed from the pending store) only after delivery succeeds; on any delivery error (ErrPaused, ErrUnknownNode) it remains pending, and an unknown ID returns ErrUnknownMessage without side effects.",
-      "Inject, ListPending, and ClearPending are serialized via opMu; outbound capture may occur concurrently. No IN_FLIGHT state was introduced for concurrent Inject calls.",
-      "Outbound messages produced while processing an injected message re-enter the same capture funnel (capture mode) or the wrapped transport (production mode).",
-      "message_id_scope is pending_store_instance: IDs are unique within the MessageController instance that captured the message."
+      "If the underlying delivery returns an error (e.g., ErrPaused), the message is preserved in PENDING state and the error is returned.",
+      "Injection selects by MessageID and uses the recorded target (the message To field); the target node must be registered via Register.",
+      "Controller operations Inject and ClearPending are serialized; outbound capture may proceed concurrently.",
+      "Delivery enters through the normal protocol boundary (Node.Step), which validates message.To, clones on entry, and processes under the node mutex."
     ]
   },
   "time_control": null,

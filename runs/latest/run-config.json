@@ -22,7 +22,7 @@
   "experiment": {
     "kind": "blind_capability",
     "oracle_visible_to_agents": false,
-    "research_claim": "Blind capability classification and low-intrusion message-control transformation"
+    "research_claim": "Oracle-blind, contract-aware capability classification and low-intrusion message-control transformation"
   },
   "model_profile": "manifest",
   "project": "mini-raft",
@@ -48,8 +48,8 @@
   },
   "source_revisions": {
     "controller": {
-      "dirty": true,
-      "revision": "c1d98868e831a921d9dc578cf993c3812efe525f"
+      "dirty": false,
+      "revision": "cd67695e05dd7fcae22ab5e8d3620bb166f0a4b9"
     },
     "target": {
       "dirty": false,
