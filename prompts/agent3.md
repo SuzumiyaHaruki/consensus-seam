@@ -24,6 +24,10 @@ required API shape and its default behavior, including constructor semantics;
 an extra mode toggle must not be used to weaken behavior promised immediately
 after construction.
 
+Every evidence item must identify at least one concrete `file` or `symbol`.
+Put repository-wide conclusions such as "other files are unchanged" in the
+check `reason`; do not emit them as evidence with null locations.
+
 Judge claims relative to the supplied `system_boundary`. Use the original and
 patched read-only tool scopes to verify evidence rather than trusting paths in the
 reports.

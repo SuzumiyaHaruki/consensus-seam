@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 CAPABILITY_NAMES = frozenset(
@@ -464,6 +464,17 @@ class ReviewCheck(StrictModel):
     result: ReviewCheckResult
     evidence: list[CodeEvidence] = Field(default_factory=list)
     reason: str = Field(min_length=1)
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def discard_unlocated_supplementary_evidence(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return [
+            item
+            for item in value
+            if not isinstance(item, dict) or item.get("file") or item.get("symbol")
+        ]
 
     @model_validator(mode="after")
     def pass_requires_evidence(self) -> "ReviewCheck":

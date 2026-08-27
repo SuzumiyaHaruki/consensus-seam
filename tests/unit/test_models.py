@@ -120,3 +120,29 @@ def test_reviewer_must_pass_testing_contract_conformance() -> None:
     report = ReviewReport.model_validate(payload)
     with pytest.raises(ValueError, match="testing_contract_conformance"):
         report.validate_for_interface(interface)
+
+
+def test_reviewer_discards_unlocated_supplementary_evidence() -> None:
+    payload = review_report()
+    payload["checks"][0]["evidence"].append(
+        {
+            "file": None,
+            "symbol": None,
+            "reason": "repository-wide conclusion belongs in the check reason",
+        }
+    )
+    report = ReviewReport.model_validate(payload)
+    assert len(report.checks[0].evidence) == 1
+
+
+def test_reviewer_pass_still_requires_one_located_evidence_item() -> None:
+    payload = review_report()
+    payload["checks"][0]["evidence"] = [
+        {
+            "file": None,
+            "symbol": None,
+            "reason": "not concrete code evidence",
+        }
+    ]
+    with pytest.raises(ValidationError, match="PASS review check requires evidence"):
+        ReviewReport.model_validate(payload)
