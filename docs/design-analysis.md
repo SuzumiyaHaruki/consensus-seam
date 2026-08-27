@@ -38,8 +38,13 @@ already defines state ownership across restart.
   source tree is not edited.
 - Configured commands execute without an implicit shell.
 - Agent prompts and specs are included in built wheels as runtime resources.
-- A deterministic `FakeLLMClient` makes orchestration testable without a model
-  provider.
+- A bounded DeepSeek Chat Completions runtime executes role-scoped local tools and
+  preserves thinking-mode reasoning content between tool turns.
+- A deterministic `FakeLLMClient` keeps orchestration testable without credentials.
+- Go receiver methods such as `RawNode.Ready` are resolved through a small
+  `go/parser`/`go/ast` helper rather than only a regular expression.
+- Target manifests define `system_boundary`, per-Agent models, and named
+  capability checks. Full runs reject unverified implementation claims.
 
 ## Deliberately incomplete after the framework milestone
 
@@ -53,16 +58,12 @@ following with generated Go tests:
 4. the same seed produces the same protocol-relevant random choices;
 5. ambiguous lifecycle recovery is classified `INVASIVE` and not modified.
 
-A production Agent adapter must also be tool-capable: the small `LLMClient`
-protocol handles prompts and schemas, but the real adapter must provide the
-documented source inspection/editing tools in the repository/worktree named in
-the prompt. A plain remote text-completion client cannot inspect local source by
-itself.
+A live authenticated DeepSeek run is still required to validate model behavior,
+tool-choice quality, token usage, and retry behavior against the real service.
 
-Capability-test failure classification will become meaningful when the Mini Raft
-target registers separate MC1/MC2/MC3 commands. Until then, the full `run` path
-executes baseline, patched build, and the target test command; the verification
-report explicitly notes when no separately named capability checks were supplied.
+Capability-test routing is now wired through the manifest and workflow. The Mini
+Raft target must provide separate MC1/MC2/MC3 commands; without them, a full run
+returns `SEMANTIC_AMBIGUITY` after build and regression tests.
 
 ## Main engineering risks for the next phase
 

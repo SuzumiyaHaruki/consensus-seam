@@ -3,11 +3,48 @@ language: go
 protocol: raft
 repository: /absolute/path/to/mini_raft
 
+system_boundary:
+  kind: protocol_library
+  description: >
+    Analyze the Mini Raft protocol implementation. External applications and
+    real network behavior are outside this target boundary.
+
 build:
   command: go test -run '^$' ./...
 
 test:
   command: go test ./...
+
+capability_checks:
+  - name: MC1 capture
+    capability: message_capture
+    command: go test ./... -run '^TestMessageCapture$'
+    failure_code: MESSAGE_CAPTURE_FAILED
+  - name: MC2 suppression
+    capability: message_capture
+    command: go test ./... -run '^TestMessageSuppression$'
+    failure_code: MESSAGE_SUPPRESSION_FAILED
+  - name: MC3 exact injection
+    capability: message_injection
+    command: go test ./... -run '^TestExactMessageInjection$'
+    failure_code: MESSAGE_INJECTION_FAILED
+
+llm:
+  analyzer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768
+  transformer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768
+  reviewer:
+    model: deepseek-v4-pro
+    thinking: enabled
+    reasoning_effort: high
+    max_tokens: 32768
 
 working_directory: .
 

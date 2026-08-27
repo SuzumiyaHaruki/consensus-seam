@@ -8,7 +8,8 @@ from typing import Any
 from .agents import CapabilityAnalyzer, IndependentReviewer, LowIntrusionTransformer
 from .config import LoadedProject
 from .languages.go import GoBackend
-from .llm.base import LLMClient
+from .llm.base import AgentRuntime
+from .llm.profiles import ModelProfile, resolve_model_profile
 from .models import (
     FailureRoute,
     ReviewOverall,
@@ -16,7 +17,7 @@ from .models import (
     WorkflowResult,
 )
 from .reporting import ArtifactStore
-from .verify import BaselineVerifier, DeterministicVerifier
+from .verify import BaselineVerifier, CapabilityCheck, DeterministicVerifier
 from .workspace import GitWorktree
 
 
@@ -25,22 +26,24 @@ class ConsensusWorkflow:
 
     def __init__(
         self,
-        client: LLMClient,
+        runtime: AgentRuntime,
         *,
         runs_root: Path,
         backend: GoBackend | None = None,
+        model_profile: ModelProfile = "manifest",
     ) -> None:
         self.backend = backend or GoBackend()
-        self.analyzer = CapabilityAnalyzer(client)
-        self.transformer = LowIntrusionTransformer(client)
-        self.reviewer = IndependentReviewer(client)
+        self.runtime = runtime
+        self.model_profile = model_profile
         self.baseline_verifier = BaselineVerifier(self.backend)
         self.verifier = DeterministicVerifier(self.backend)
         self.runs_root = runs_root
 
     def analyze(self, project: LoadedProject) -> WorkflowResult:
         artifacts = ArtifactStore.create(self.runs_root)
-        report = self.analyzer.analyze(project)
+        self._write_run_config(artifacts, project)
+        analyzer, _, _ = self._agents(project)
+        report = analyzer.analyze(project)
         artifacts.write_model("capability-report.json", report)
         artifacts.write_unresolved(report)
         return WorkflowResult(
@@ -56,6 +59,8 @@ class ConsensusWorkflow:
 
     def _patch_loop(self, project: LoadedProject, *, verify: bool) -> WorkflowResult:
         artifacts = ArtifactStore.create(self.runs_root)
+        self._write_run_config(artifacts, project)
+        analyzer, transformer, reviewer = self._agents(project)
         if verify:
             baseline = self.baseline_verifier.run(project)
             artifacts.write_model("baseline-report.json", baseline)
@@ -66,7 +71,7 @@ class ConsensusWorkflow:
                     reason="BASELINE_FAILED",
                 )
 
-        report = self.analyzer.analyze(project)
+        report = analyzer.analyze(project)
         artifacts.write_model("capability-report.json", report)
         if not report.patchable():
             artifacts.write_unresolved(report)
@@ -80,7 +85,7 @@ class ConsensusWorkflow:
         limits = project.manifest.limits
         for analysis_round in range(1, limits.agent1_reanalysis_rounds + 1):
             if analysis_round > 1:
-                report = self.analyzer.analyze(project, feedback=agent1_feedback)
+                report = analyzer.analyze(project, feedback=agent1_feedback)
                 artifacts.write_model("capability-report.json", report)
                 if not report.patchable():
                     artifacts.write_unresolved(report)
@@ -102,7 +107,7 @@ class ConsensusWorkflow:
                     project.repository,
                     artifacts.run_directory / worktree_name,
                 )
-                interface_report = self.transformer.transform(
+                interface_report = transformer.transform(
                     project,
                     report,
                     worktree.path,
@@ -160,7 +165,7 @@ class ConsensusWorkflow:
 
                 git_diff = worktree.diff()
                 artifacts.write_text("changes.patch", git_diff)
-                review = self.reviewer.review(
+                review = reviewer.review(
                     project,
                     report,
                     interface_report,
@@ -195,7 +200,26 @@ class ConsensusWorkflow:
                         run_directory=artifacts.run_directory,
                     )
 
-                verification = self.verifier.verify(project, worktree.path)
+                checks = [
+                    CapabilityCheck(
+                        name=item.name,
+                        capability=item.capability,
+                        command=item.command,
+                        failure_code=item.failure_code,
+                    )
+                    for item in project.manifest.capability_checks
+                ]
+                implemented = {
+                    name
+                    for name, capability in interface_report.capabilities().items()
+                    if capability.implemented
+                }
+                verification = self.verifier.verify(
+                    project,
+                    worktree.path,
+                    capability_checks=checks,
+                    required_capabilities=implemented,
+                )
                 artifacts.write_model("verification-report.json", verification)
                 artifacts.write_model(
                     f"logs/verification-a{analysis_round}-p{patch_round}.json",
@@ -235,4 +259,43 @@ class ConsensusWorkflow:
             outcome=WorkflowOutcome.FAILED,
             run_directory=artifacts.run_directory,
             reason="Agent 1 reanalysis budget exhausted",
+        )
+
+    def _agents(
+        self,
+        project: LoadedProject,
+    ) -> tuple[CapabilityAnalyzer, LowIntrusionTransformer, IndependentReviewer]:
+        models = resolve_model_profile(project.manifest.llm, self.model_profile)
+        return (
+            CapabilityAnalyzer(
+                self.runtime,
+                model=models.analyzer,
+                backend=self.backend,
+            ),
+            LowIntrusionTransformer(
+                self.runtime,
+                model=models.transformer,
+                backend=self.backend,
+            ),
+            IndependentReviewer(
+                self.runtime,
+                model=models.reviewer,
+                backend=self.backend,
+            ),
+        )
+
+    def _write_run_config(self, artifacts: ArtifactStore, project: LoadedProject) -> None:
+        models = resolve_model_profile(project.manifest.llm, self.model_profile)
+        artifacts.write_json(
+            "run-config.json",
+            {
+                "project": project.manifest.name,
+                "system_boundary": project.manifest.system_boundary.model_dump(mode="json"),
+                "model_profile": self.model_profile,
+                "resolved_models": models.model_dump(mode="json"),
+                "capability_checks": [
+                    check.model_dump(mode="json")
+                    for check in project.manifest.capability_checks
+                ],
+            },
         )

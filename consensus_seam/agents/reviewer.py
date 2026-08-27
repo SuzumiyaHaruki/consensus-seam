@@ -7,12 +7,25 @@ from pathlib import Path
 
 from .base import StructuredAgent
 from ..config import LoadedProject
-from ..models import CapabilityReport, InterfaceReport, ReviewReport
+from ..languages.go import GoBackend
+from ..llm.base import AgentRuntime
+from ..models import AgentModelConfig, CapabilityReport, InterfaceReport, ReviewReport
+from ..tools import reviewer_tools
 
 
 class IndependentReviewer(StructuredAgent[ReviewReport]):
     prompt_name = "agent3.md"
     output_type = ReviewReport
+
+    def __init__(
+        self,
+        runtime: AgentRuntime,
+        *,
+        model: AgentModelConfig,
+        backend: GoBackend,
+    ) -> None:
+        super().__init__(runtime, model=model)
+        self.backend = backend
 
     def review(
         self,
@@ -31,4 +44,7 @@ class IndependentReviewer(StructuredAgent[ReviewReport]):
             "interface_report": interface_report.model_dump(mode="json", exclude_none=True),
             "git_diff": git_diff,
         }
-        return self._complete(json.dumps(payload, indent=2, sort_keys=True))
+        return self._complete(
+            json.dumps(payload, indent=2, sort_keys=True),
+            tools=reviewer_tools(project.repository, worktree, self.backend),
+        )

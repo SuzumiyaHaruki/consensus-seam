@@ -32,6 +32,65 @@ class CommandConfig(StrictModel):
     command: str = Field(min_length=1)
 
 
+class FailureCode(str, Enum):
+    BASELINE_FAILED = "BASELINE_FAILED"
+    BUILD_FAILED = "BUILD_FAILED"
+    MESSAGE_CAPTURE_FAILED = "MESSAGE_CAPTURE_FAILED"
+    MESSAGE_SUPPRESSION_FAILED = "MESSAGE_SUPPRESSION_FAILED"
+    MESSAGE_INJECTION_FAILED = "MESSAGE_INJECTION_FAILED"
+    MESSAGE_BYPASS_SUSPECTED = "MESSAGE_BYPASS_SUSPECTED"
+    TIME_CONTROL_FAILED = "TIME_CONTROL_FAILED"
+    RANDOMNESS_CONTROL_FAILED = "RANDOMNESS_CONTROL_FAILED"
+    LIFECYCLE_CONTROL_FAILED = "LIFECYCLE_CONTROL_FAILED"
+    OBSERVATION_FAILED = "OBSERVATION_FAILED"
+    REGRESSION_FAILED = "REGRESSION_FAILED"
+    SEMANTIC_AMBIGUITY = "SEMANTIC_AMBIGUITY"
+
+
+class SystemBoundary(StrictModel):
+    kind: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+
+
+class AgentModelConfig(StrictModel):
+    model: str = Field(min_length=1)
+    thinking: Literal["enabled", "disabled"] = "enabled"
+    reasoning_effort: Literal["low", "high", "max"] = "high"
+    max_tokens: int = Field(default=32768, ge=1024, le=384000)
+
+
+class LLMConfig(StrictModel):
+    analyzer: AgentModelConfig = Field(
+        default_factory=lambda: AgentModelConfig(
+            model="deepseek-v4-flash", reasoning_effort="max"
+        )
+    )
+    transformer: AgentModelConfig = Field(
+        default_factory=lambda: AgentModelConfig(
+            model="deepseek-v4-flash", reasoning_effort="max"
+        )
+    )
+    reviewer: AgentModelConfig = Field(
+        default_factory=lambda: AgentModelConfig(
+            model="deepseek-v4-pro", reasoning_effort="high"
+        )
+    )
+
+
+class CapabilityCheckConfig(StrictModel):
+    name: str = Field(min_length=1)
+    capability: Literal[
+        "message_capture",
+        "message_injection",
+        "time_control",
+        "randomness_control",
+        "lifecycle_control",
+        "observation",
+    ]
+    command: str = Field(min_length=1)
+    failure_code: FailureCode
+
+
 class WorkflowLimits(StrictModel):
     agent1_reanalysis_rounds: int = Field(default=2, ge=1, le=10)
     agent2_patch_rounds: int = Field(default=3, ge=1, le=10)
@@ -42,10 +101,36 @@ class ProjectManifest(StrictModel):
     language: Literal["go"]
     protocol: str = Field(min_length=1)
     repository: Path
+    system_boundary: SystemBoundary
     build: CommandConfig
     test: CommandConfig
     working_directory: Path = Path(".")
+    capability_checks: list[CapabilityCheckConfig] = Field(default_factory=list)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
     limits: WorkflowLimits = Field(default_factory=WorkflowLimits)
+
+    @model_validator(mode="after")
+    def validate_capability_checks(self) -> "ProjectManifest":
+        names = [check.name for check in self.capability_checks]
+        if len(names) != len(set(names)):
+            raise ValueError("capability check names must be unique")
+        allowed_codes = {
+            "message_capture": {
+                FailureCode.MESSAGE_CAPTURE_FAILED,
+                FailureCode.MESSAGE_SUPPRESSION_FAILED,
+            },
+            "message_injection": {FailureCode.MESSAGE_INJECTION_FAILED},
+            "time_control": {FailureCode.TIME_CONTROL_FAILED},
+            "randomness_control": {FailureCode.RANDOMNESS_CONTROL_FAILED},
+            "lifecycle_control": {FailureCode.LIFECYCLE_CONTROL_FAILED},
+            "observation": {FailureCode.OBSERVATION_FAILED},
+        }
+        for check in self.capability_checks:
+            if check.failure_code not in allowed_codes[check.capability]:
+                raise ValueError(
+                    f"{check.failure_code.value} is not valid for {check.capability}"
+                )
+        return self
 
 
 class CapabilityDefinition(StrictModel):
@@ -247,21 +332,6 @@ class ReviewReport(StrictModel):
         if self.overall is not ReviewOverall.PASS and not self.issues:
             raise ValueError(f"{self.overall.value} review must explain at least one issue")
         return self
-
-
-class FailureCode(str, Enum):
-    BASELINE_FAILED = "BASELINE_FAILED"
-    BUILD_FAILED = "BUILD_FAILED"
-    MESSAGE_CAPTURE_FAILED = "MESSAGE_CAPTURE_FAILED"
-    MESSAGE_SUPPRESSION_FAILED = "MESSAGE_SUPPRESSION_FAILED"
-    MESSAGE_INJECTION_FAILED = "MESSAGE_INJECTION_FAILED"
-    MESSAGE_BYPASS_SUSPECTED = "MESSAGE_BYPASS_SUSPECTED"
-    TIME_CONTROL_FAILED = "TIME_CONTROL_FAILED"
-    RANDOMNESS_CONTROL_FAILED = "RANDOMNESS_CONTROL_FAILED"
-    LIFECYCLE_CONTROL_FAILED = "LIFECYCLE_CONTROL_FAILED"
-    OBSERVATION_FAILED = "OBSERVATION_FAILED"
-    REGRESSION_FAILED = "REGRESSION_FAILED"
-    SEMANTIC_AMBIGUITY = "SEMANTIC_AMBIGUITY"
 
 
 class FailureRoute(str, Enum):

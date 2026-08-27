@@ -9,7 +9,9 @@ from consensus_seam.agents.analyzer import CapabilityAnalyzer
 from consensus_seam.agents.transformer import LowIntrusionTransformer
 from consensus_seam.config import LoadedProject
 from consensus_seam.llm.client import FakeLLMClient
+from consensus_seam.languages.go import GoBackend
 from consensus_seam.models import (
+    AgentModelConfig,
     CapabilitySpec,
     ModificationPolicy,
     ProjectManifest,
@@ -26,6 +28,10 @@ def loaded_project(tmp_path: Path) -> LoadedProject:
             "language": "go",
             "protocol": "raft",
             "repository": str(repo),
+            "system_boundary": {
+                "kind": "protocol_library",
+                "description": "Mini Raft protocol core only",
+            },
             "build": {"command": "go test ./..."},
             "test": {"command": "go test ./..."},
         }
@@ -49,7 +55,11 @@ def loaded_project(tmp_path: Path) -> LoadedProject:
 
 def test_analyzer_retries_invalid_json(tmp_path: Path) -> None:
     client = FakeLLMClient(["not-json", json.dumps(capability_report())])
-    analyzer = CapabilityAnalyzer(client)
+    analyzer = CapabilityAnalyzer(
+        client,
+        model=AgentModelConfig(model="fake-analyzer"),
+        backend=GoBackend(),
+    )
     result = analyzer.analyze(loaded_project(tmp_path))
     assert result.target == "mini-raft"
     assert len(client.calls) == 2
@@ -59,7 +69,9 @@ def test_analyzer_retries_invalid_json(tmp_path: Path) -> None:
 def test_transformer_must_cover_exact_patchable_set(tmp_path: Path) -> None:
     project = loaded_project(tmp_path)
     report = CapabilityAnalyzer(
-        FakeLLMClient([json.dumps(capability_report())])
+        FakeLLMClient([json.dumps(capability_report())]),
+        model=AgentModelConfig(model="fake-analyzer"),
+        backend=GoBackend(),
     ).analyze(project)
     transformer = LowIntrusionTransformer(
         FakeLLMClient(
@@ -73,7 +85,9 @@ def test_transformer_must_cover_exact_patchable_set(tmp_path: Path) -> None:
                     }
                 )
             ]
-        )
+        ),
+        model=AgentModelConfig(model="fake-transformer"),
+        backend=GoBackend(),
     )
     with pytest.raises(ValueError, match="cover exactly"):
         transformer.transform(project, report, tmp_path / "worktree")

@@ -9,6 +9,8 @@ from consensus_seam.cli import main
 from consensus_seam.config import load_project
 from consensus_seam.llm.client import FakeLLMClient
 from consensus_seam.models import WorkflowOutcome
+from consensus_seam.models import AgentModelConfig
+from consensus_seam.llm.base import ToolExecutor
 from consensus_seam.workflow import ConsensusWorkflow
 from tests.helpers import capability_report
 
@@ -40,21 +42,32 @@ class EditingFakeClient:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(
+    def run(
         self,
         system_prompt: str,
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
+        *,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
     ) -> str:
         self.calls += 1
         if self.calls == 1:
             return json.dumps(capability_report())
         if self.calls == 2:
-            worktree = Path(json.loads(user_prompt)["worktree"])
-            (worktree / "injection_seam.go").write_text(
-                "package mini\n\nfunc injectForTest() {}\n",
-                encoding="utf-8",
+            assert tools is not None
+            result = json.loads(
+                tools.execute(
+                    "write_file",
+                    json.dumps(
+                        {
+                            "path": "injection_seam.go",
+                            "content": "package mini\n\nfunc injectForTest() {}\n",
+                        }
+                    ),
+                )
             )
+            assert result["ok"] is True
             return json.dumps(
                 {
                     "message_injection": {
@@ -82,6 +95,9 @@ def test_analyze_writes_validated_artifacts(tmp_path: Path) -> None:
                 "language: go",
                 "protocol: raft",
                 f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
                 "build:",
                 "  command: go test ./...",
                 "test:",
@@ -111,6 +127,9 @@ def test_patch_stops_when_analysis_finds_no_patchable_capability(tmp_path: Path)
                 "language: go",
                 "protocol: raft",
                 f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
                 "build: {command: 'go test ./...'}",
                 "test: {command: 'go test ./...'}",
             ]
@@ -138,6 +157,9 @@ def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
                 "language: go",
                 "protocol: raft",
                 f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
                 "build: {command: 'git diff --check'}",
                 "test: {command: 'git diff --check'}",
             ]
@@ -163,8 +185,16 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
                 "language: go",
                 "protocol: raft",
                 f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
                 "build: {command: 'git diff --check'}",
                 "test: {command: 'git diff --check'}",
+                "capability_checks:",
+                "  - name: MC3 exact injection",
+                "    capability: message_injection",
+                "    command: git diff --check",
+                "    failure_code: MESSAGE_INJECTION_FAILED",
             ]
         ),
         encoding="utf-8",
@@ -174,6 +204,39 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
     assert result.outcome is WorkflowOutcome.PASS
     assert (result.run_directory / "baseline-report.json").is_file()
     assert (result.run_directory / "verification-report.json").is_file()
+    run_config = json.loads((result.run_directory / "run-config.json").read_text())
+    assert run_config["resolved_models"]["reviewer"]["model"] == "deepseek-v4-pro"
+
+
+def test_run_refuses_success_without_capability_check(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = tmp_path / "project.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "name: mini-raft",
+                "language: go",
+                "protocol: raft",
+                f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
+                "build: {command: 'git diff --check'}",
+                "test: {command: 'git diff --check'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")
+    result = workflow.run(load_project(manifest))
+    assert result.outcome is WorkflowOutcome.PARTIAL
+    assert result.reason == "SEMANTIC_AMBIGUITY"
+    verification = json.loads(
+        (result.run_directory / "verification-report.json").read_text()
+    )
+    assert "MESSAGE_INJECTION_FAILED" in verification["details"][0]
 
 
 def test_cli_analyze_command(tmp_path: Path, capsys: Any) -> None:
@@ -187,6 +250,9 @@ def test_cli_analyze_command(tmp_path: Path, capsys: Any) -> None:
                 "language: go",
                 "protocol: raft",
                 f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
                 "build: {command: 'go test ./...'}",
                 "test: {command: 'go test ./...'}",
             ]

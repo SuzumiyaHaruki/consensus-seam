@@ -7,11 +7,12 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Iterable
 
-from .base import LLMClientError
+from ..models import AgentModelConfig
+from .base import AgentRuntimeError, ToolExecutor
 
 
 class FakeLLMClient:
-    """Consume predetermined responses in order for tests and local demos."""
+    """A deterministic AgentRuntime for tests and response fixtures."""
 
     def __init__(self, responses: Iterable[str]) -> None:
         self._responses = deque(responses)
@@ -26,26 +27,27 @@ class FakeLLMClient:
         responses = [value if isinstance(value, str) else json.dumps(value) for value in values]
         return cls(responses)
 
-    def complete(
+    def run(
         self,
         system_prompt: str,
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
+        *,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
     ) -> str:
         self.calls.append(
             {
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "response_schema": response_schema,
+                "model": model.model_dump(mode="json"),
+                "tools": [] if tools is None else tools.definitions,
             }
         )
         if not self._responses:
-            raise LLMClientError("FakeLLMClient has no response remaining")
+            raise AgentRuntimeError("FakeLLMClient has no response remaining")
         return self._responses.popleft()
-
-
-class UnconfiguredLLMClient:
-    """Fail clearly until a real provider adapter is deliberately selected."""
 
     def complete(
         self,
@@ -53,6 +55,28 @@ class UnconfiguredLLMClient:
         user_prompt: str,
         response_schema: dict[str, Any] | None = None,
     ) -> str:
-        raise LLMClientError(
-            "no LLM adapter configured; pass --responses for deterministic framework runs"
+        """Compatibility shim for code written against the v0.1 text client."""
+
+        return self.run(
+            system_prompt,
+            user_prompt,
+            response_schema,
+            model=AgentModelConfig(model="fake"),
+        )
+
+
+class UnconfiguredLLMClient:
+    """Fail clearly until a real provider adapter is deliberately selected."""
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+    ) -> str:
+        raise AgentRuntimeError(
+            "no Agent runtime configured; pass --responses or set DEEPSEEK_API_KEY"
         )

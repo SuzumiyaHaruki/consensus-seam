@@ -6,6 +6,11 @@ or `NOT_APPLICABLE`, with code evidence. Never infer behavior from a function
 name or from the protocol brief. State the real execution boundary and the
 deployment layers it does not cover.
 
+All `SUPPORTED` and `PARTIAL` decisions are relative to the supplied
+`system_boundary`. Do not treat transport, storage, or deployment layers outside
+that boundary as code this target must modify. Still list those excluded layers
+as limitations when they matter to interpreting the result.
+
 For message capture, identify message creation, the original send path, a point
 where that path can be suppressed, bypasses such as heartbeats/retries/snapshots/
 forwarded requests, and whether the message can be copied into a stable snapshot.

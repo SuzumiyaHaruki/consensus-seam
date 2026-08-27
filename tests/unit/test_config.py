@@ -15,6 +15,9 @@ def write_manifest(path: Path, repo: Path, working_directory: str = ".") -> None
                 "language: go",
                 "protocol: raft",
                 f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
                 "build:",
                 "  command: go test ./...",
                 "test:",
@@ -42,4 +45,25 @@ def test_working_directory_cannot_escape_repository(tmp_path: Path) -> None:
     manifest = tmp_path / "project.yaml"
     write_manifest(manifest, repo, "..")
     with pytest.raises(ConfigurationError, match="must stay inside repository"):
+        load_project(manifest)
+
+
+def test_system_boundary_is_required(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifest = tmp_path / "project.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "name: mini-raft",
+                "language: go",
+                "protocol: raft",
+                f"repository: {repo}",
+                "build: {command: 'go test ./...'}",
+                "test: {command: 'go test ./...'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError, match="system_boundary"):
         load_project(manifest)

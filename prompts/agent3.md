@@ -12,3 +12,7 @@ and distribution are preserved. Reject invented recovery semantics.
 
 You do not perform dynamic verification and must not modify source. Return only
 JSON matching the supplied review-report schema.
+
+Judge claims relative to the supplied `system_boundary`. Use the original and
+patched read-only tool scopes to verify evidence rather than trusting paths in the
+reports.

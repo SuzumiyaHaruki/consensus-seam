@@ -12,6 +12,19 @@ from ..routing import route_failure
 from .capability import CapabilityCheck
 
 
+REQUIRED_CHECK_CODES: dict[str, set[FailureCode]] = {
+    "message_capture": {
+        FailureCode.MESSAGE_CAPTURE_FAILED,
+        FailureCode.MESSAGE_SUPPRESSION_FAILED,
+    },
+    "message_injection": {FailureCode.MESSAGE_INJECTION_FAILED},
+    "time_control": {FailureCode.TIME_CONTROL_FAILED},
+    "randomness_control": {FailureCode.RANDOMNESS_CONTROL_FAILED},
+    "lifecycle_control": {FailureCode.LIFECYCLE_CONTROL_FAILED},
+    "observation": {FailureCode.OBSERVATION_FAILED},
+}
+
+
 class DeterministicVerifier:
     def __init__(self, backend: LanguageBackend) -> None:
         self.backend = backend
@@ -22,6 +35,7 @@ class DeterministicVerifier:
         patched_worktree: Path,
         *,
         capability_checks: Iterable[CapabilityCheck] = (),
+        required_capabilities: Iterable[str] = (),
     ) -> VerificationReport:
         relative_working_directory = project.working_directory.relative_to(project.repository)
         working_directory = patched_worktree / relative_working_directory
@@ -47,8 +61,32 @@ class DeterministicVerifier:
                 route=route_failure(code),
             )
 
+        checks = list(capability_checks)
+        required = set(required_capabilities)
+        selected_checks = [check for check in checks if check.capability in required]
+        missing: list[str] = []
+        for capability in sorted(required):
+            expected_codes = REQUIRED_CHECK_CODES.get(capability, set())
+            actual_codes = {
+                check.failure_code
+                for check in selected_checks
+                if check.capability == capability
+            }
+            for code in sorted(expected_codes - actual_codes, key=lambda item: item.value):
+                missing.append(f"{capability}:{code.value}")
+        if missing:
+            code = FailureCode.SEMANTIC_AMBIGUITY
+            return VerificationReport(
+                passed=False,
+                build=build,
+                existing_tests=existing_tests,
+                failure_code=code,
+                route=route_failure(code),
+                details=["missing deterministic capability checks: " + ", ".join(missing)],
+            )
+
         executions = []
-        for check in capability_checks:
+        for check in selected_checks:
             execution = self.backend.test(working_directory, check.command)
             executions.append(execution)
             if not execution.passed:
@@ -69,10 +107,9 @@ class DeterministicVerifier:
             capability_tests=executions,
             details=(
                 []
-                if executions
+                if executions or not required
                 else [
-                    "No separately configured capability checks; the target test command "
-                    "is expected to include generated target-language tests."
+                    "No deterministic capability checks were required for this patch."
                 ]
             ),
         )

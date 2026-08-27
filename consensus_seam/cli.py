@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from .config import load_project
 from .llm.client import FakeLLMClient, UnconfiguredLLMClient
+from .llm.deepseek import DeepSeekClient
+from .llm.runtime import ToolCallingAgentRuntime
 from .workflow import ConsensusWorkflow
 
 
@@ -33,6 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
             type=Path,
             default=Path(__file__).resolve().parents[1] / "runs",
         )
+        subparser.add_argument(
+            "--model-profile",
+            choices=("manifest", "mixed", "all-flash", "all-pro"),
+            default="manifest",
+            help="override per-Agent models for controlled experiments",
+        )
     return parser
 
 
@@ -40,12 +49,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         project = load_project(args.project)
-        client = (
-            FakeLLMClient.from_json_file(args.responses)
-            if args.responses is not None
-            else UnconfiguredLLMClient()
+        if args.responses is not None:
+            runtime = FakeLLMClient.from_json_file(args.responses)
+        elif api_key := os.environ.get("DEEPSEEK_API_KEY"):
+            deepseek = DeepSeekClient(
+                api_key,
+                base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            )
+            runtime = ToolCallingAgentRuntime(deepseek)
+        else:
+            runtime = UnconfiguredLLMClient()
+        workflow = ConsensusWorkflow(
+            runtime,
+            runs_root=args.runs_root.resolve(),
+            model_profile=args.model_profile,
         )
-        workflow = ConsensusWorkflow(client, runs_root=args.runs_root.resolve())
         result = getattr(workflow, args.command)(project)
         print(result.model_dump_json(indent=2))
         return 0 if result.outcome.value not in {"FAILED", "PARTIAL"} else 1

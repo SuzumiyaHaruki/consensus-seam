@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -57,13 +59,83 @@ class GoBackend(LanguageBackend):
         )
 
     def find_symbol(self, repo: Path, symbol: str) -> list[str]:
-        return self._search(repo, rf"\b(func|type|var|const)\s+(\([^)]*\)\s*)?{symbol}\b")
+        if symbol.count(".") == 1:
+            receiver, method = symbol.split(".", 1)
+            valid = all(
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", item)
+                for item in (receiver, method)
+            )
+            if not valid:
+                return []
+            return [
+                f"{item['file']}:{item['line']}:{receiver}.{method}"
+                for item in self.go_find_method(repo, receiver, method)
+            ]
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", symbol):
+            return []
+        return self._search(
+            repo,
+            rf"\b(func|type|var|const)\s+(\([^)]*\)\s*)?{re.escape(symbol)}\b",
+        )
 
     def find_references(self, repo: Path, symbol: str) -> list[str]:
-        return self._search(repo, rf"\b{symbol}\b")
+        return self._search(repo, rf"\b{re.escape(symbol)}\b")
 
     def syntax_check(self, repo: Path) -> CommandExecution:
         return self.run_command(repo, "go test -run=^$ ./...")
+
+    def go_find_type(self, repo: Path, name: str) -> list[dict[str, object]]:
+        return self._ast_query(repo, "type", name=name)
+
+    def go_find_method(
+        self,
+        repo: Path,
+        receiver: str,
+        method: str,
+    ) -> list[dict[str, object]]:
+        return self._ast_query(repo, "method", name=method, receiver=receiver)
+
+    @staticmethod
+    def _ast_query(
+        repo: Path,
+        kind: str,
+        *,
+        name: str,
+        receiver: str | None = None,
+    ) -> list[dict[str, object]]:
+        helper = Path(__file__).resolve().parent / "go_ast" / "main.go"
+        command = [
+            "go",
+            "run",
+            str(helper),
+            "-root",
+            str(repo),
+            "-kind",
+            kind,
+            "-name",
+            name,
+        ]
+        if receiver is not None:
+            command.extend(["-receiver", receiver])
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("Go executable is required for AST symbol queries") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Go AST symbol query timed out") from exc
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.strip() or "Go AST symbol query failed")
+        payload = json.loads(completed.stdout)
+        if not isinstance(payload, list):
+            raise RuntimeError("Go AST helper returned an invalid response")
+        return payload
 
     @staticmethod
     def _search(repo: Path, pattern: str) -> list[str]:

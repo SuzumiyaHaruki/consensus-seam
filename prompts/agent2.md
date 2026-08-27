@@ -15,3 +15,7 @@ capability and report `INVASIVE_REDISCOVERED`. Do not modify findings classified
 `SUPPORTED`, `PARTIAL`, `INVASIVE`, `UNKNOWN`, or `NOT_APPLICABLE`.
 
 Return only JSON matching the supplied interface-report schema.
+
+Use the supplied local tools to inspect and edit only the isolated worktree. The
+configured capability checks are acceptance tests, not permission to weaken or
+rewrite those tests.

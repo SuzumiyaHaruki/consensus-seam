@@ -8,7 +8,8 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from ..llm.base import LLMClient
+from ..llm.base import AgentRuntime, ToolExecutor
+from ..models import AgentModelConfig
 from ..resources import resource_root
 
 
@@ -25,21 +26,23 @@ class StructuredAgent(Generic[OutputT]):
 
     def __init__(
         self,
-        client: LLMClient,
+        runtime: AgentRuntime,
         *,
+        model: AgentModelConfig,
         prompt_directory: Path | None = None,
         max_attempts: int = 2,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
-        self.client = client
+        self.runtime = runtime
+        self.model = model
         self.prompt_directory = prompt_directory or resource_root() / "prompts"
         self.max_attempts = max_attempts
 
     def _system_prompt(self) -> str:
         return (self.prompt_directory / self.prompt_name).read_text(encoding="utf-8")
 
-    def _complete(self, user_prompt: str) -> OutputT:
+    def _complete(self, user_prompt: str, *, tools: ToolExecutor | None = None) -> OutputT:
         validation_error = ""
         for attempt in range(1, self.max_attempts + 1):
             retry_prompt = user_prompt
@@ -48,10 +51,12 @@ class StructuredAgent(Generic[OutputT]):
                     "\n\nYour previous response was rejected. Return corrected JSON only. "
                     f"Validation error:\n{validation_error}"
                 )
-            raw = self.client.complete(
+            raw = self.runtime.run(
                 self._system_prompt(),
                 retry_prompt,
                 self.output_type.model_json_schema(),
+                model=self.model,
+                tools=tools,
             )
             try:
                 payload = json.loads(raw)
