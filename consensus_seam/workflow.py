@@ -88,12 +88,16 @@ class ConsensusWorkflow:
         self._write_run_config(artifacts, project)
         stats_start = self._runtime_stats_count()
         tool_audit_start = self._runtime_tool_audit_count()
+        completed = False
         try:
-            return operation(artifacts)
+            result = operation(artifacts)
+            completed = True
+            return result
         finally:
             self._write_runtime_stats(artifacts, stats_start)
             self._write_tool_audit(artifacts, tool_audit_start)
-            artifacts.publish_latest()
+            if completed:
+                artifacts.publish_latest()
 
     def patch(self, project: LoadedProject) -> WorkflowResult:
         return self._patch_loop(project, verify=False)

@@ -35,6 +35,13 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
         feedback: dict[str, Any] | None = None,
         invocation_id: str | None = None,
     ) -> CapabilityReport:
+        def validate_target(report: CapabilityReport) -> None:
+            if report.target != project.manifest.name:
+                raise ValueError(
+                    f"capability report target {report.target!r} does not match "
+                    f"project {project.manifest.name!r}"
+                )
+
         payload = {
             "project": project.agent_manifest(),
             "resolved_repository": str(project.repository),
@@ -46,11 +53,7 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
         report = self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
             tools=analyzer_tools(project.repository, self.backend),
+            post_validate=validate_target,
             invocation_id=invocation_id,
         )
-        if report.target != project.manifest.name:
-            raise ValueError(
-                f"capability report target {report.target!r} does not match "
-                f"project {project.manifest.name!r}"
-            )
         return report

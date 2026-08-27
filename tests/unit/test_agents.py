@@ -68,6 +68,24 @@ def test_analyzer_retries_invalid_json(tmp_path: Path) -> None:
     assert "previous response was rejected" in client.calls[1]["user_prompt"]
 
 
+def test_analyzer_retries_target_name_mismatch(tmp_path: Path) -> None:
+    wrong = capability_report()
+    wrong["target"] = "mini-raft with explanatory suffix"
+    client = FakeLLMClient([json.dumps(wrong), json.dumps(capability_report())])
+    analyzer = CapabilityAnalyzer(
+        client,
+        model=AgentModelConfig(model="fake-analyzer"),
+        backend=GoBackend(),
+    )
+    result = analyzer.analyze(loaded_project(tmp_path), invocation_id="analyzer-a1")
+    assert result.target == "mini-raft"
+    assert [call["invocation_id"] for call in client.calls] == [
+        "analyzer-a1-attempt1",
+        "analyzer-a1-attempt2",
+    ]
+    assert "does not match project" in client.calls[1]["user_prompt"]
+
+
 def test_transformer_must_cover_exact_patchable_set(tmp_path: Path) -> None:
     project = loaded_project(tmp_path)
     report = CapabilityAnalyzer(

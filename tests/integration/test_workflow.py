@@ -13,7 +13,7 @@ from consensus_seam.llm.client import FakeLLMClient
 from consensus_seam.llm.runtime import ToolCallingAgentRuntime
 from consensus_seam.models import WorkflowOutcome
 from consensus_seam.models import AgentModelConfig
-from consensus_seam.llm.base import ToolExecutor
+from consensus_seam.llm.base import AgentRuntimeError, ToolExecutor
 from consensus_seam.workflow import ConsensusWorkflow, ExperimentPreconditionError
 from tests.helpers import capability_report, review_report, write_project_manifest
 
@@ -501,3 +501,26 @@ def test_formal_experiment_requires_clean_revisions(
     with pytest.raises(ExperimentPreconditionError, match=dirty_repository):
         workflow.analyze(load_project(manifest))
     assert not (tmp_path / "runs").exists()
+
+
+def test_exception_does_not_replace_latest_audit_export(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifest = write_project_manifest(tmp_path, repo)
+    latest = tmp_path / "runs" / "latest"
+    latest.mkdir(parents=True)
+    marker = latest / "marker.json"
+    marker.write_text('{"source":"previous-complete-run"}\n', encoding="utf-8")
+    workflow = ConsensusWorkflow(FakeLLMClient([]), runs_root=tmp_path / "runs")
+    with pytest.raises(AgentRuntimeError, match="no response remaining"):
+        workflow.analyze(load_project(manifest))
+    assert marker.read_text(encoding="utf-8") == (
+        '{"source":"previous-complete-run"}\n'
+    )
+    failed_runs = [
+        path
+        for path in (tmp_path / "runs").iterdir()
+        if path.is_dir() and path.name != "latest"
+    ]
+    assert len(failed_runs) == 1
+    assert (failed_runs[0] / "agent-run-stats.json").is_file()
