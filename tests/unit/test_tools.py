@@ -89,6 +89,25 @@ def test_apply_patch_cannot_escape_or_delete(tmp_path: Path) -> None:
     assert applied["ok"] is True
     assert "func Tick" in (repo / "node.go").read_text(encoding="utf-8")
 
+    # 模型偶尔会给出正确上下文但错误的 hunk 行数；工具应重算行数，
+    # 同时继续依赖 git apply 校验真实上下文。
+    (repo / "recount.go").write_text(
+        "package mini\n\nfunc Old() {}\n",
+        encoding="utf-8",
+    )
+    recount_patch = """diff --git a/recount.go b/recount.go
+--- a/recount.go
++++ b/recount.go
+@@ -3,99 +3,99 @@
+-func Old() {}
++func New() {}
+"""
+    recounted = json.loads(
+        registry.execute("apply_patch", json.dumps({"patch": recount_patch}))
+    )
+    assert recounted["ok"] is True
+    assert "func New" in (repo / "recount.go").read_text(encoding="utf-8")
+
     delete_patch = """diff --git a/node.go b/node.go
 deleted file mode 100644
 --- a/node.go

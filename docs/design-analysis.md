@@ -138,8 +138,9 @@ Controller 负责：
 开放式接口生成无法在实验前预知最终 Go API，因此不强制预写能够直接调用未知符号的隐藏测试。`patch` 是一个可以独立结束的完整主流程：
 
 1. `patch` 发现并生成目标原生接口；
-2. 候选通过格式化、构建和独立 Reviewer；
-3. 系统输出 `changes.patch`、包含完整代码的候选 worktree、`interface-report.json` 和 `USAGE.md`。
+2. Controller 按 `PATCHABLE` 能力分别调用 Transformer，并在同一候选 worktree 中累积修改；
+3. 候选通过格式化、构建和独立 Reviewer；
+4. 系统输出 `changes.patch`、包含完整代码的候选 worktree、`interface-report.json` 和 `USAGE.md`。
 
 到这里接口生成已经完成。使用者可以直接审阅、测试或集成候选代码，是否执行 `repair` 不影响主流程产物的生成。
 

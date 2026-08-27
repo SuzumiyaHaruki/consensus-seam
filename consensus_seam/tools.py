@@ -518,7 +518,9 @@ class LocalToolFactory:
         root = self._root(self.writable_scope or "")
         self._validate_patch_paths(args.patch)
         for mode in ("--check", "--apply"):
-            command = ["git", "apply", "--whitespace=nowarn"]
+            # 模型生成的 unified diff 偶尔只有 hunk 行数统计不准确；
+            # --recount 只重算行数，仍然要求文件路径和上下文完全匹配。
+            command = ["git", "apply", "--recount", "--whitespace=nowarn"]
             if mode == "--check":
                 command.append("--check")
             completed = subprocess.run(

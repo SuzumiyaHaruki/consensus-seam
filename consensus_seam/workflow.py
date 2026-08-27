@@ -344,13 +344,14 @@ class ConsensusWorkflow:
                 artifacts.run_directory / f"repaired-worktree-p{repair_round}",
             )
             worktree.apply_patch(current_patch)
-            repaired_subset = transformer.transform(
+            repaired_subset = self._transform_selected_capabilities(
                 project,
                 report,
-                worktree.path,
+                worktree,
+                transformer,
                 selected_capabilities=repair_capabilities,
                 feedback=feedback,
-                invocation_id=f"transformer-repair-p{repair_round}",
+                invocation_prefix=f"transformer-repair-p{repair_round}",
             )
             artifacts.write_model(
                 f"logs/interface-repair-p{repair_round}.json",
@@ -560,13 +561,14 @@ class ConsensusWorkflow:
                     project.repository,
                     artifacts.run_directory / worktree_name,
                 )
-                interface_report = transformer.transform(
+                interface_report = self._transform_selected_capabilities(
                     project,
                     report,
-                    worktree.path,
+                    worktree,
+                    transformer,
                     selected_capabilities=self._selected_patchable(project, report),
                     feedback=agent2_feedback,
-                    invocation_id=f"transformer-a{analysis_round}-p{patch_round}",
+                    invocation_prefix=f"transformer-a{analysis_round}-p{patch_round}",
                 )
                 artifacts.write_model("interface-report.json", interface_report)
                 artifacts.write_usage(report, interface_report)
@@ -850,6 +852,47 @@ class ConsensusWorkflow:
         for name, capability in repaired.capabilities().items():
             setattr(merged, name, capability)
         return merged
+
+    def _transform_selected_capabilities(
+        self,
+        project: LoadedProject,
+        report: CapabilityReport,
+        worktree: GitWorktree,
+        transformer: LowIntrusionTransformer,
+        *,
+        selected_capabilities: set[str],
+        feedback: dict[str, Any] | None,
+        invocation_prefix: str,
+    ) -> InterfaceReport:
+        """按能力拆分 Agent 2 调用，并在同一 worktree 中累积修改。
+
+        七项能力彼此是独立研究单位。让一次模型工具循环同时实现多个能力，
+        会使大型目标的源码探索和编辑次数相乘；逐项调用既保留跨能力复用
+        （后一个调用能看到前一个调用的修改），也让每项能力拥有独立预算。
+        """
+
+        combined: InterfaceReport | None = None
+        for capability in sorted(selected_capabilities):
+            partial = transformer.transform(
+                project,
+                report,
+                worktree.path,
+                selected_capabilities={capability},
+                feedback=feedback,
+                invocation_id=f"{invocation_prefix}-{capability}",
+            )
+            combined = (
+                partial
+                if combined is None
+                else self._merge_interface_reports(combined, partial)
+            )
+            # 发现侵入性后，调用方会丢弃整个候选；无需让其余能力继续产生
+            # 无法保留的修改和模型成本。
+            if partial.rediscovered():
+                break
+        if combined is None:
+            raise ValueError("Transformer requires at least one selected capability")
+        return combined
 
     def _agents(
         self,

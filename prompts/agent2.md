@@ -48,7 +48,7 @@ Declare the message-ID scope. Record in the interface report:
 - all operating paths supported by this run;
 - uncovered paths, their reasons, and required setup.
 
-Before patching an existing file, read the exact target range and use its current content as patch context. If two `apply_patch` calls for the same file fail, read the target range again before another attempt instead of guessing stale context.
+Before patching an existing file, read the exact target range and use its current content as patch context. `apply_patch` automatically recounts unified-diff hunk lengths but still requires exact surrounding context. If two `apply_patch` calls for the same file fail, read the target range again before another attempt instead of guessing stale context.
 
 If source inspection shows that a supposedly patchable capability requires core protocol changes or invented target semantics, stop work on that capability and report `INVASIVE_REDISCOVERED`. Do not force an implementation.
 

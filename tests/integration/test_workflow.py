@@ -194,6 +194,54 @@ class PostHocRepairRuntime:
         return json.dumps(review_report())
 
 
+class SplitCapabilityRuntime:
+    """确认多个 PATCHABLE 能力使用独立 Transformer 工具循环。"""
+
+    def __init__(self) -> None:
+        self.transform_calls: list[str] = []
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
+    ) -> str:
+        if agent == "analyzer":
+            report = capability_report()
+            capture = report["capabilities"]["message_capture"]
+            capture.update(
+                {
+                    "status": "PATCHABLE",
+                    "gap": "stable capture identity is missing",
+                    "existing_test_interface_complete": False,
+                    "test_support_reason": "capture needs a test-facing pending store",
+                    "suggested_changes": ["add a low-intrusion pending accessor"],
+                }
+            )
+            return json.dumps(report)
+        if agent == "transformer":
+            payload = json.loads(user_prompt)
+            selected = payload["patchable_capabilities"]
+            assert len(selected) == 1
+            capability = selected[0]
+            self.transform_calls.append(capability)
+            return json.dumps(
+                {
+                    capability: {
+                        "implemented": True,
+                        "message_id_scope": "test_session",
+                        "implementation_approach": ["target-native test seam"],
+                    }
+                }
+            )
+        return json.dumps(review_report())
+
+
 class GuardrailFakeRuntime:
     def __init__(self, mode: str) -> None:
         self.mode = mode
@@ -255,13 +303,7 @@ class GuardrailFakeRuntime:
                     "message_capture": {
                         "implemented": False,
                         "rediscovered_status": "INVASIVE_REDISCOVERED",
-                    },
-                    "message_injection": {
-                        "implemented": True,
-                        "message_id_scope": "test_session",
-                        "controller_operations": "serialized",
-                        "entrypoint": {"symbol": "injectForTest"},
-                    },
+                    }
                 }
             )
 
@@ -444,6 +486,28 @@ def test_transform_scope_does_not_hide_unselected_patchable_findings(
     }
     run_config = json.loads((result.run_directory / "run-config.json").read_text())
     assert run_config["transform_capabilities"] == ["message_injection"]
+
+
+def test_patch_splits_multiple_capabilities_into_independent_transform_calls(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
+    runtime = SplitCapabilityRuntime()
+
+    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(
+        load_project(manifest)
+    )
+
+    assert result.outcome is WorkflowOutcome.PASS
+    assert runtime.transform_calls == ["message_capture", "message_injection"]
+    interface = json.loads(
+        (result.run_directory / "interface-report.json").read_text(encoding="utf-8")
+    )
+    assert interface["message_capture"]["implemented"] is True
+    assert interface["message_injection"]["implemented"] is True
 
 
 def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
