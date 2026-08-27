@@ -911,22 +911,31 @@ class ConsensusWorkflow:
         feedback: dict[str, Any] | None,
         invocation_prefix: str,
     ) -> InterfaceReport:
-        """按能力拆分 Agent 2 调用，并在同一 worktree 中累积修改。
+        """按实现单元拆分 Agent 2 调用，并在同一 worktree 中累积修改。
 
-        七项能力彼此是独立研究单位。让一次模型工具循环同时实现多个能力，
-        会使大型目标的源码探索和编辑次数相乘；逐项调用既保留跨能力复用
-        （后一个调用能看到前一个调用的修改），也让每项能力拥有独立预算。
+        大多数能力是独立研究单位；消息捕获和消息注入则共同定义同一缓存
+        控制面。当两者同时被选择时必须交给同一次 Transformer 调用，避免
+        分别生成彼此无关的缓存和入口。其余能力仍逐项调用，控制大型目标的
+        源码探索与编辑预算。
         """
 
         combined: InterfaceReport | None = None
-        for capability in sorted(selected_capabilities):
+        remaining = set(selected_capabilities)
+        units: list[tuple[str, set[str]]] = []
+        message_control = {"message_capture", "message_injection"}
+        if message_control <= remaining:
+            units.append(("message_control", message_control))
+            remaining -= message_control
+        units.extend((capability, {capability}) for capability in sorted(remaining))
+
+        for unit_name, capabilities in units:
             partial = transformer.transform(
                 project,
                 report,
                 worktree.path,
-                selected_capabilities={capability},
+                selected_capabilities=capabilities,
                 feedback=feedback,
-                invocation_id=f"{invocation_prefix}-{capability}",
+                invocation_id=f"{invocation_prefix}-{unit_name}",
             )
             combined = (
                 partial

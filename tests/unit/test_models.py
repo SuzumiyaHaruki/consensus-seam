@@ -56,6 +56,35 @@ def test_patchable_capability_requires_reason_and_suggested_changes() -> None:
         CapabilityReport.model_validate(payload)
 
 
+def test_supported_injection_requires_supported_capture_cache() -> None:
+    payload = capability_report()
+    capture = payload["capabilities"]["message_capture"]
+    capture.update(
+        {
+            "status": "PATCHABLE",
+            "gap": "some paths have no explicit cache facade",
+            "existing_test_interface_complete": False,
+            "test_support_reason": "message output is observable but not retained",
+            "suggested_changes": ["add a target-native cache facade"],
+        }
+    )
+    injection = payload["capabilities"]["message_injection"]
+    injection.update(
+        {
+            "status": "SUPPORTED",
+            "gap": None,
+            "existing_test_interface_complete": True,
+            "test_support_reason": "incorrectly claims complete cache-linked injection",
+            "suggested_changes": [],
+        }
+    )
+    with pytest.raises(
+        ValidationError,
+        match="SUPPORTED message_injection requires SUPPORTED message_capture",
+    ):
+        CapabilityReport.model_validate(payload)
+
+
 def test_external_input_cannot_be_patchable() -> None:
     payload = capability_report(patchable="external_input")
     with pytest.raises(ValidationError, match="discovery-only"):
@@ -158,6 +187,23 @@ def test_reviewer_cannot_skip_exact_target_check_for_injection() -> None:
             check["evidence"] = []
     report = ReviewReport.model_validate(payload)
     with pytest.raises(ValueError, match="applicable checks PASS"):
+        report.validate_for_interface(interface)
+
+
+def test_reviewer_cannot_skip_message_cache_coherence_check() -> None:
+    interface = InterfaceReport.model_validate(
+        {
+            "message_capture": {"implemented": True},
+            "message_injection": {"implemented": True},
+        }
+    )
+    payload = review_report()
+    for check in payload["checks"]:
+        if check["name"] == "message_cache_injection_coherence":
+            check["result"] = "NOT_APPLICABLE"
+            check["evidence"] = []
+    report = ReviewReport.model_validate(payload)
+    with pytest.raises(ValueError, match="message_cache_injection_coherence"):
         report.validate_for_interface(interface)
 
 

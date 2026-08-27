@@ -47,6 +47,7 @@ def review_report() -> dict[str, Any]:
         "original_send_suppressed",
         "protocol_logic_unchanged",
         "exact_target_preserved",
+        "message_cache_injection_coherence",
         "existing_tests_unchanged",
         "testing_contract_conformance",
     ):

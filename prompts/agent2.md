@@ -15,9 +15,9 @@ When Agent 1 reports `existing_test_interface_complete=false`, use its `suggeste
 
 Do not change protocol conditions, message semantics, persistence semantics, crash/restart semantics, or business input. Generated source and tests must use the target language.
 
-The public interface shape must fit the target. Do not assume a `Transport` exists, and do not invent a meaningless transport layer merely to match a fixed constructor. Constructors, node collections, test environments, or other necessary setup may follow existing target conventions, but every prerequisite must be documented in the interface report's locations, modes, and notes.
+The public interface shape must fit the target. Do not assume a particular transport abstraction exists, and do not invent a meaningless transport layer merely to match a fixed constructor. Constructors, node collections, test environments, or other necessary setup may follow existing target conventions, but every prerequisite must be documented in the interface report's locations, modes, and notes.
 
-Agent 1 reports materially distinct in-scope paths in `execution_paths`. Attempt to implement every discovered path that can be supported without crossing the low-intrusion boundary. Do not silently implement only the easiest path. At the same time, do not change core protocol semantics merely to force complete coverage.
+Agent 1 reports materially distinct in-scope paths in `execution_paths`. Their number and architecture are target discoveries, not global assumptions. Attempt to implement every discovered path that can be supported without crossing the low-intrusion boundary. Do not silently implement only the easiest path. At the same time, do not change core protocol semantics merely to force complete coverage.
 
 List successfully supported paths in `covered_paths`. List every remaining discovered path in `uncovered_paths` with a concrete reason in `notes`. Paths outside the supplied system boundary do not need implementation.
 
@@ -34,19 +34,23 @@ The basic message-capture objective is to:
 
 - route controlled protocol output into a test-visible cache before it continues;
 - prevent cached messages from automatically continuing along the original path;
+- retain instances as explicit control state across capture operations until a declared test action consumes or removes them;
 - let test code inspect, remove, or clear cached message instances using a target-native reference;
 - avoid implementing message-selection or scheduling policy.
+
+Do not satisfy this objective merely by returning a one-shot message batch, exposing a channel, or documenting that the test author can create an unrelated slice or map. Build or extend a target-native test facade. Reuse an existing cache as the authoritative store when possible; wrap or extend its operations instead of copying it into a parallel cache.
 
 A numeric message ID is optional. Reuse an existing queue record, handle, index, token, pointer, or message object when it lets serialized test code operate on one exact cached instance safely. If a new control ID is useful for unstable order, duplicate values, replay, or an external controller, keep it outside the protocol message schema and document its scope. Do not add a second cache merely to manufacture IDs.
 
 The basic message-injection objective is to:
 
 - accept one cached message instance specified by the test;
+- obtain or consume it through the same authoritative cache exposed by message capture;
 - use a target object or routing mechanism that actually exists in the target;
 - deliver through the declared normal protocol input entrypoint;
 - preserve sender, receiver, and content.
 
-Cache removal and protocol input may be separate operations under test control or one convenience wrapper. State which form is implemented and what happens on success, synchronous failure, and unconfirmed asynchronous send. A combined wrapper must not report confirmed success while the target may silently drop the attempt. A separate take-and-step interface may deliberately leave retry, requeue, or loss policy to the test. Do not invent an acknowledgement protocol merely to claim coverage.
+When both message capabilities are selected, design them as one coherent message-control seam backed by one authoritative cache, even though the interface report retains separate capability fields. Cache removal and protocol input may be explicit paired facade operations or one combined wrapper. A raw ingress call on an arbitrary caller-held message is not sufficient. State what happens to the selected cache entry on success, synchronous failure, and unconfirmed asynchronous send. A combined wrapper must not report confirmed success while the target may silently drop the attempt. A separate take-and-input facade may deliberately leave retry, requeue, or loss policy to the test. Do not invent an acknowledgement protocol merely to claim coverage.
 
 If the selected entrypoint returns synchronous errors, preserve the target's existing error semantics and document them in `notes`. Do not invent a new protocol error model or a wait-for-quiescence operation merely to make targets uniform.
 

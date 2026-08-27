@@ -30,11 +30,11 @@
 
 ## 剩余维护风险
 
-`consensus_seam/workflow.py` 目前是最大的 Python 文件。它的主要体积来自显式状态转移和失败路由，不属于同代码块复制；如果以后增加第五种工作流，应优先按“首次生成”和“生成后修复”拆分编排模块，而不是继续扩展该文件。
+`consensus_seam/workflow.py` 目前是最大的 Python 文件。它的主要体积来自显式状态转移和失败路由，不属于同代码块复制；消息捕获与注入共享一次 Transformer 调用，其余能力仍复用同一逐项循环，没有新增第二套编排。如果以后增加第五种工作流，应优先按“首次生成”和“生成后修复”拆分编排模块，而不是继续扩展该文件。
 
 ## 验证
 
-- `pytest`：65 项通过；
+- `pytest`：67 项通过；
 - `git diff --check`：通过；
 - `python3 -m compileall -q consensus_seam`：通过；
-- 当前生产 Python 文件共 5005 个物理行，其中 `workflow.py` 为 1073 行。
+- 当前生产 Python 文件共 5028 个物理行，其中 `workflow.py` 为 1082 行。

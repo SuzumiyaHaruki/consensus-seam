@@ -195,10 +195,10 @@ class PostHocRepairRuntime:
 
 
 class SplitCapabilityRuntime:
-    """确认多个 PATCHABLE 能力使用独立 Transformer 工具循环。"""
+    """确认消息捕获与注入共享一个 Transformer 工具循环。"""
 
     def __init__(self) -> None:
-        self.transform_calls: list[str] = []
+        self.transform_calls: list[list[str]] = []
 
     def run(
         self,
@@ -227,15 +227,19 @@ class SplitCapabilityRuntime:
         if agent == "transformer":
             payload = json.loads(user_prompt)
             selected = payload["patchable_capabilities"]
-            assert len(selected) == 1
-            capability = selected[0]
-            self.transform_calls.append(capability)
+            assert selected == ["message_capture", "message_injection"]
+            self.transform_calls.append(selected)
             return json.dumps(
                 {
-                    capability: {
+                    "message_capture": {
                         "implemented": True,
                         "message_id_scope": "test_session",
-                        "implementation_approach": ["target-native test seam"],
+                        "implementation_approach": ["shared target-native message cache"],
+                    },
+                    "message_injection": {
+                        "implemented": True,
+                        "message_id_scope": "test_session",
+                        "implementation_approach": ["shared target-native message cache"],
                     }
                 }
             )
@@ -388,6 +392,12 @@ class GuardrailFakeRuntime:
                     "message_capture": {
                         "implemented": False,
                         "rediscovered_status": "INVASIVE_REDISCOVERED",
+                    },
+                    "message_injection": {
+                        "implemented": True,
+                        "implementation_approach": [
+                            "joint message-control candidate discarded with capture"
+                        ],
                     }
                 }
             )
@@ -573,7 +583,7 @@ def test_transform_scope_does_not_hide_unselected_patchable_findings(
     assert run_config["transform_capabilities"] == ["message_injection"]
 
 
-def test_patch_splits_multiple_capabilities_into_independent_transform_calls(
+def test_patch_groups_capture_and_injection_into_one_transform_call(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -587,7 +597,7 @@ def test_patch_splits_multiple_capabilities_into_independent_transform_calls(
     )
 
     assert result.outcome is WorkflowOutcome.PASS
-    assert runtime.transform_calls == ["message_capture", "message_injection"]
+    assert runtime.transform_calls == [["message_capture", "message_injection"]]
     interface = json.loads(
         (result.run_directory / "interface-report.json").read_text(encoding="utf-8")
     )

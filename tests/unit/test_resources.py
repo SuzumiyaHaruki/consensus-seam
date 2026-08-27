@@ -6,12 +6,18 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert (root / "prompts" / "agent1.md").is_file()
     assert (root / "spec" / "capabilities.yaml").is_file()
     capabilities = (root / "spec" / "capabilities.yaml").read_text(encoding="utf-8")
-    assert "a Transport abstraction is not assumed" in capabilities
+    assert "universal wrapper type are not assumed" in capabilities
     assert "materially distinct execution paths" in capabilities
+    assert "target may have zero, one, or many such paths" in capabilities
+    assert "could build its own slice or map" in capabilities
+    assert "same authoritative cache used by" in capabilities
     assert "NewMessageController(Transport)" not in capabilities
     analyzer_prompt = (root / "prompts" / "agent1.md").read_text(encoding="utf-8")
     transformer_prompt = (root / "prompts" / "agent2.md").read_text(encoding="utf-8")
     reviewer_prompt = (root / "prompts" / "agent3.md").read_text(encoding="utf-8")
+    generic_agent_contract = capabilities + analyzer_prompt + transformer_prompt + reviewer_prompt
+    for target_specific_term in ("RawNode", "InteractionEnv", "Ready.Messages"):
+        assert target_specific_term not in generic_agent_contract
     assert "execution_paths" in analyzer_prompt
     assert "top-level `evidence` array" in analyzer_prompt
     assert "existing_test_interface_complete" in analyzer_prompt
@@ -22,8 +28,11 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert "mutable aliases" in transformer_prompt
     assert "A numeric message ID is optional" in transformer_prompt
     assert "message-selection or scheduling policy" in transformer_prompt
-    assert "separate take-and-step interface" in transformer_prompt
+    assert "separate take-and-input facade" in transformer_prompt
+    assert "one coherent message-control seam" in transformer_prompt
     assert "usage_examples" in transformer_prompt
     assert "no universal ID form" in capabilities
     assert "residual, non-blocking limitations" in reviewer_prompt
     assert "silent best-effort send is not confirmed success" in reviewer_prompt
+    assert "A standalone protocol-ingress API does not establish this relationship" in reviewer_prompt
+    assert "message_cache_injection_coherence" in reviewer_prompt

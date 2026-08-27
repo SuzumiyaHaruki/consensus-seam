@@ -14,12 +14,12 @@ Minimal shape example:
   "evidence": [
     {
       "file": "rawnode.go",
-      "symbol": "(*RawNode).Ready",
+      "symbol": "ProtocolController.Outbound",
       "line": 133,
-      "reason": "Ready exposes protocol output to the application."
+      "reason": "Outbound exposes protocol output to the application."
     }
   ],
-  "execution_paths": ["RawNode synchronous Ready path"]
+  "execution_paths": ["synchronous protocol-output path"]
 }
 ```
 
@@ -44,11 +44,13 @@ For every capability, distinguish underlying primitives from a complete test-fac
 
 If the existing test interface is incomplete and at least one suggested change is low-intrusion, classify the capability as `PATCHABLE`, not `SUPPORTED`. A `SUPPORTED` capability must have `existing_test_interface_complete=true` and no non-empty `gap`. Before assigning status, check every item in that capability's `testing_contract`.
 
-Do not assume that a target has a `Transport`, a global node registry, a fixed controller constructor, or synchronous error returns.
+Do not assume that a target has a particular transport abstraction, node registry, controller constructor, or synchronous error returns.
 
-For message capture, identify the protocol-output point, existing continuation path, and suppression point for each materially distinct in-scope path. Distinguish protocol output, application transport, and a real network send. Paths outside the supplied system boundary remain limitations.
+For message capture, first discover how many materially distinct in-scope paths the target actually has. Do not assume particular node abstractions, a test environment, a transport path, or any fixed number of paths. For each discovered path, identify the protocol-output point, cache owner, existing continuation path, suppression point, cache operations, and consumer scope. Distinguish protocol output, application transport, and a real network send. Paths outside the supplied system boundary remain limitations.
 
-Ready, an outbound slice, a send hook, or an existing queue may be a capture primitive or a complete cache depending on its behavior. Judge the functional contract: controlled output must stop before automatic continuation, test code must be able to inspect the cache and operate on a specified cached instance, and cache changes must stay coherent. Do not require a second store or a numeric ID when an existing target-native queue, record, handle, index, token, or pointer already provides exact control.
+Do not equate message observability with a controllable cache. A one-shot result, outbound collection, channel handoff, send hook, or queue that the claimed consumer cannot control is only a capture primitive. The fact that test code could copy such output into its own new collection does not mean that the target already provides the capability. A complete existing cache must retain captured instances until declared test operations consume or remove them, expose enumeration and exact-instance remove or clear operations through a target-provided test facade, and prevent automatic continuation while controlled. An existing target-native cache may be adapted and remain authoritative; do not require a second store or numeric IDs.
+
+Assign aggregate `SUPPORTED` for message capture only if every materially relevant discovered path already has that complete cache facade for its claimed consumer scope. One complete harness or wrapper path does not cover another path that merely returns, emits, or internally queues messages. If any missing path can receive the facade through a low-intrusion change, use `PATCHABLE` and list every path-specific gap.
 
 For message injection, separately identify for each materially distinct path:
 
@@ -59,7 +61,7 @@ For message injection, separately identify for each materially distinct path:
 
 A target ID is only an identifier. Do not claim that target-object binding exists merely because a message contains a target ID.
 
-Step or an equivalent handler is an injection primitive. Determine whether test code can combine it with the controlled cache to operate on one concrete cached instance through the real target binding. Cache removal and Step may be separate test-owned operations or one convenience wrapper. The test, not ConsensusSeam, decides which message to operate on and when.
+A normal protocol ingress handler is only an injection primitive. A complete injection interface must operate on the same authoritative cache used by capture and make the relationship explicit: it may expose a cache Take followed by a target-bound ingress operation, or a combined Inject operation. In either form, identify the exact cached instance, the real target binding, cache consumption behavior, and synchronous or asynchronous failure semantics. Do not call a path SUPPORTED merely because test code could independently save an outbound value and later call the ingress handler. The test, not ConsensusSeam, decides which cached message to operate on and when.
 
 Treat dispersed wall-clock use without explicit Tick or an injectable Clock as `INVASIVE` in v0.1. For lifecycle control, the minimum is an existing way to make a node unavailable and restore availability. Identify whether the mechanism is pause/resume, graceful stop/restart, reconstruction from storage, or external process control. Pause/resume may satisfy availability simulation but must not be described as production crash recovery. Use `NOT_APPLICABLE` for persistence obligations when the claimed mode intentionally makes no crash-fidelity claim; never invent a persistent/volatile split.
 

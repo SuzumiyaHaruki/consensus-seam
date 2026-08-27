@@ -16,10 +16,15 @@ Compilation, passing old tests, and Transformer claims are not sufficient by the
 
 For message control, inspect every `covered_paths` entry: verify that its original continuation path is suppressed and that a selected message reaches its normal target entrypoint. Check that `uncovered_paths` accounts for all other paths reported by Agent 1. Apply the contract generically, without requiring target-specific type names or architecture:
 
+- verify that the path exposes explicit retained cache state and test control operations, not merely a one-shot result, observable channel, raw outbound slice, inaccessible queue, or a statement that the test could build its own cache;
+- verify that one complete harness path is not used to claim coverage for another discovered path lacking its own callable cache facade;
 - verify the claimed consumer can actually call each entrypoint; distinguish external, same-package, and internal-harness scope;
 - verify returned snapshots do not expose mutable aliases into internal state;
 - verify any handles or metadata stay consistent across every existing cache mutation path instead of relying on fragile parallel-container alignment;
 - verify the report states whether cache removal and protocol input are separate test-owned operations or one wrapper, and that any claimed success matches the real input boundary; a silent best-effort send is not confirmed success.
+- verify that capture and injection use one authoritative cache relationship: the injected or taken instance must be the concrete instance selected from that cache, with explicit consumption and failure semantics. A standalone protocol-ingress API does not establish this relationship.
+
+Record the joint cache-to-injection conclusion under the required check name `message_cache_injection_coherence`.
 
 These are reviews of the existing capability contract, not new target-specific requirements. If satisfying one would require changing core protocol semantics, require the path to be reported as uncovered rather than forcing an invasive patch.
 
@@ -42,7 +47,7 @@ You do not perform dynamic verification and must not modify source. Use the sepa
 
 A PASS must contain every supplied `required_checks` item. Each applicable PASS check must cite a concrete file or symbol. Use `NOT_APPLICABLE` with a specific reason when a check does not apply. Repository-wide statements belong in a check's `reason`, not in evidence with both file and symbol missing.
 
-`testing_contract_conformance` checks the global capability semantics and this run's interface-report declarations. It must not require a fixed constructor, a fixed `Transport`, or the absence of setup that already fits the target architecture.
+`testing_contract_conformance` checks the global capability semantics and this run's interface-report declarations. It must not require a fixed constructor, a fixed transport abstraction, or the absence of setup that already fits the target architecture.
 
 Do not output chain-of-thought or hidden reasoning.
 

@@ -422,6 +422,15 @@ class CapabilityReport(StrictModel):
             raise ValueError("invalid capability set (" + "; ".join(details) + ")")
         if self.capabilities["external_input"].status is CapabilityStatus.PATCHABLE:
             raise ValueError("external_input is discovery-only and cannot be PATCHABLE in v0.1")
+        if (
+            self.capabilities["message_injection"].status
+            is CapabilityStatus.SUPPORTED
+            and self.capabilities["message_capture"].status
+            is not CapabilityStatus.SUPPORTED
+        ):
+            raise ValueError(
+                "SUPPORTED message_injection requires SUPPORTED message_capture"
+            )
         self._validate_lifecycle_obligations()
         self._validate_external_input_obligations()
         return self
@@ -646,6 +655,7 @@ class ReviewReport(StrictModel):
             "original_send_suppressed",
             "protocol_logic_unchanged",
             "exact_target_preserved",
+            "message_cache_injection_coherence",
             "existing_tests_unchanged",
             "testing_contract_conformance",
         }
@@ -691,6 +701,10 @@ class ReviewReport(StrictModel):
         injection = interface_report.message_injection
         if injection is not None and injection.implemented:
             required.add("exact_target_preserved")
+        if (capture is not None and capture.implemented) or (
+            injection is not None and injection.implemented
+        ):
+            required.add("message_cache_injection_coherence")
         results = {check.name: check.result for check in self.checks}
         invalid = {
             name
