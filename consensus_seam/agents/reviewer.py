@@ -57,4 +57,5 @@ class IndependentReviewer(StructuredAgent[ReviewReport]):
         return self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
             tools=reviewer_tools(project.repository, worktree, self.backend),
+            post_validate=lambda report: report.validate_for_interface(interface_report),
         )

@@ -80,3 +80,23 @@ def test_reviewer_pass_requires_all_named_checks() -> None:
     payload["checks"] = payload["checks"][:-1]
     with pytest.raises(ValidationError, match="missing checks"):
         ReviewReport.model_validate(payload)
+
+
+def test_reviewer_cannot_mark_applicable_injection_check_not_applicable() -> None:
+    interface = InterfaceReport.model_validate(
+        {
+            "message_injection": {
+                "implemented": True,
+                "message_id_scope": "test_session",
+                "controller_operations": "serialized",
+            }
+        }
+    )
+    payload = review_report()
+    for check in payload["checks"]:
+        if check["name"] == "failed_injection_preserves_pending":
+            check["result"] = "NOT_APPLICABLE"
+            check["evidence"] = []
+    report = ReviewReport.model_validate(payload)
+    with pytest.raises(ValueError, match="applicable checks PASS"):
+        report.validate_for_interface(interface)

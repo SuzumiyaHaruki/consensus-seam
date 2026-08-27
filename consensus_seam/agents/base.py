@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Generic, TypeVar
+from typing import Callable, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -43,7 +43,13 @@ class StructuredAgent(Generic[OutputT]):
     def _system_prompt(self) -> str:
         return (self.prompt_directory / self.prompt_name).read_text(encoding="utf-8")
 
-    def _complete(self, user_prompt: str, *, tools: ToolExecutor | None = None) -> OutputT:
+    def _complete(
+        self,
+        user_prompt: str,
+        *,
+        tools: ToolExecutor | None = None,
+        post_validate: Callable[[OutputT], None] | None = None,
+    ) -> OutputT:
         validation_error = ""
         for attempt in range(1, self.max_attempts + 1):
             retry_prompt = user_prompt
@@ -62,8 +68,11 @@ class StructuredAgent(Generic[OutputT]):
             )
             try:
                 payload = json.loads(raw)
-                return self.output_type.model_validate(payload)
-            except (json.JSONDecodeError, ValidationError) as exc:
+                result = self.output_type.model_validate(payload)
+                if post_validate is not None:
+                    post_validate(result)
+                return result
+            except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 validation_error = str(exc)
         raise AgentOutputError(
             f"{self.__class__.__name__} returned invalid output after "

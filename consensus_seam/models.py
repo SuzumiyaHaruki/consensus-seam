@@ -504,6 +504,30 @@ class ReviewReport(StrictModel):
             raise ValueError(f"{self.overall.value} review must explain at least one issue")
         return self
 
+    def validate_for_interface(self, interface_report: InterfaceReport) -> None:
+        if self.overall is not ReviewOverall.PASS:
+            return
+        required = {"protocol_logic_unchanged", "existing_tests_unchanged"}
+        capture = interface_report.message_capture
+        if capture is not None and capture.implemented:
+            required.update({"original_send_suppressed", "message_snapshot_stable"})
+        injection = interface_report.message_injection
+        if injection is not None and injection.implemented:
+            required.update(
+                {"exact_target_preserved", "failed_injection_preserves_pending"}
+            )
+        results = {check.name: check.result for check in self.checks}
+        invalid = {
+            name
+            for name in required
+            if results.get(name) is not ReviewCheckResult.PASS
+        }
+        if invalid:
+            raise ValueError(
+                "PASS review requires applicable checks PASS: "
+                + ", ".join(sorted(invalid))
+            )
+
 
 class FailureRoute(str, Enum):
     AGENT1 = "AGENT1"
