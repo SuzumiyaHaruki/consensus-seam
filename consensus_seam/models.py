@@ -331,6 +331,13 @@ class CapabilityFinding(StrictModel):
     limitations: list[str] = Field(default_factory=list)
     suggested_direction: str | None = None
     entrypoints: list[str] = Field(default_factory=list)
+    usage_examples: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Short target-language examples for directly usable existing interfaces. "
+            "They document usage and do not define test policy."
+        ),
+    )
     existing_test_interface_complete: bool = Field(
         default=False,
         description=(
@@ -420,7 +427,7 @@ class CapabilityReport(StrictModel):
         return self
 
     def _validate_lifecycle_obligations(self) -> None:
-        """防止把 scheduler pause 误报为完整 crash/recovery 支持。"""
+        """保持 v0.1 可用性控制简单，同时记录但不发明 crash 语义。"""
 
         finding = self.capabilities["lifecycle_control"]
         required = {
@@ -433,24 +440,11 @@ class CapabilityReport(StrictModel):
             raise ValueError("lifecycle_control must report all lifecycle obligations")
         states = {name: finding.obligations[name].status for name in required}
         if finding.status is CapabilityStatus.SUPPORTED and any(
-            state is not ObligationStatus.SATISFIED for state in states.values()
+            states[name] is not ObligationStatus.SATISFIED
+            for name in {"stop_boundary", "restart_or_recovery_boundary"}
         ):
-            raise ValueError("SUPPORTED lifecycle_control requires every obligation SATISFIED")
-        # recovery 和状态语义同时缺失时，增加生命周期测试接口必然需要
-        # 发明持久/易失边界，因此 overall 只能是 INVASIVE。
-        recovery_missing = (
-            states["restart_or_recovery_boundary"] is ObligationStatus.MISSING
-        )
-        semantics_missing = any(
-            states[name] is ObligationStatus.MISSING
-            for name in {
-                "state_ownership_defined",
-                "persistent_volatile_semantics_defined",
-            }
-        )
-        if recovery_missing and semantics_missing and finding.status is not CapabilityStatus.INVASIVE:
             raise ValueError(
-                "missing recovery and state semantics require lifecycle_control INVASIVE"
+                "SUPPORTED lifecycle_control requires unavailable and restore boundaries"
             )
 
     def _validate_external_input_obligations(self) -> None:
@@ -511,6 +505,13 @@ class InterfaceCapability(StrictModel):
     capture_boundary: CodeLocation | None = None
     pending_store: CodeLocation | None = None
     entrypoint: CodeLocation | None = None
+    public_entrypoints: list[CodeLocation] = Field(
+        default_factory=list,
+        description=(
+            "Every generated or wrapped callable entrypoint intended for the "
+            "declared test consumer. Internal hooks belong in other location fields."
+        ),
+    )
     copy_strategy: str | None = None
     production_mode: str | None = None
     test_mode: str | None = None
@@ -529,6 +530,13 @@ class InterfaceCapability(StrictModel):
         description=(
             "Actual low-intrusion techniques used by Agent 2, such as wrapper, "
             "hook, dependency injection, configuration, accessor, or harness extension."
+        ),
+    )
+    usage_examples: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Short target-language examples showing setup and interface calls. "
+            "Test scheduling and message-selection policy stay with the user."
         ),
     )
     notes: list[str] = Field(default_factory=list)
@@ -554,16 +562,10 @@ class InterfaceReport(StrictModel):
 
     @model_validator(mode="after")
     def require_one_capability(self) -> "InterfaceReport":
-        # 消息 ID 范围属于基本接口语义；并发模型和错误细节可以按目标原有
-        # 结构记录在 notes 中，不再作为所有目标的统一强制字段。
+        # 控制引用可以是 ID、handle、下标、缓存记录或目标原生形式；模型保留
+        # message_id_scope 以兼容已有结果，但不再把数字 ID 作为功能合同。
         if not self.capabilities():
             raise ValueError("interface report must describe at least one capability")
-        for name in ("message_capture", "message_injection"):
-            capability = getattr(self, name)
-            if capability is None or not capability.implemented:
-                continue
-            if capability.message_id_scope is None:
-                raise ValueError(f"implemented {name} must declare message_id_scope")
         return self
 
     def capabilities(self) -> dict[str, InterfaceCapability]:

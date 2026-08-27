@@ -630,8 +630,9 @@ def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
     assert result.outcome is WorkflowOutcome.PASS
     assert "injection_seam.go" in (result.run_directory / "changes.patch").read_text()
     usage = (result.run_directory / "USAGE.md").read_text(encoding="utf-8")
-    assert "测试接口使用报告" in usage
+    assert "测试接口清单" in usage
     assert "injectForTest" in usage
+    assert (result.run_directory / "AUDIT.md").is_file()
     assert not (repo / "injection_seam.go").exists()
 
 

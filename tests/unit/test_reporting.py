@@ -41,6 +41,9 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
     report_payload["capabilities"]["message_injection"]["limitations"] = [
         "This limitation describes the target before transformation."
     ]
+    report_payload["capabilities"]["message_injection"]["usage_examples"] = [
+        "err := node.Step(ctx, msg)"
+    ]
     report = CapabilityReport.model_validate(report_payload)
     interface = InterfaceReport.model_validate(
         {
@@ -51,6 +54,16 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
                     "file": "injection_seam.go",
                     "symbol": "InjectForTest",
                 },
+                "public_entrypoints": [
+                    {
+                        "file": "injection_seam.go",
+                        "symbol": "InjectForTest",
+                    },
+                    {
+                        "file": "injection_seam.go",
+                        "symbol": "ClearPendingForTest",
+                    },
+                ],
                 "implementation_approach": [
                     "通过 hook 捕获消息。",
                     "使用控制对象按 ID 保存并选择消息。",
@@ -59,6 +72,9 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
                 "covered_paths": ["RawNode synchronous ingress"],
                 "uncovered_paths": ["Node asynchronous ingress：目标入口不返回处理结果"],
                 "notes": ["先创建测试控制器，再按消息 ID 调用注入入口。"],
+                "usage_examples": [
+                    "pending := controller.Pending()\nerr := controller.Inject(pending[0])"
+                ],
             }
         }
     )
@@ -68,24 +84,24 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
     review = ReviewReport.model_validate(review_payload)
     path = artifacts.write_usage(report, interface, review)
     content = path.read_text(encoding="utf-8")
+    audit = (artifacts.run_directory / "AUDIT.md").read_text(encoding="utf-8")
 
+    assert "快速接口矩阵" in content
     assert "Node.Status" in content
     assert "InjectForTest" in content
-    assert "通过 hook 捕获消息" in content
-    assert "按 ID 保存并选择消息" in content
+    assert "ClearPendingForTest" in content
     assert "进程内测试路径" in content
-    assert "修改前测试接口是否完整：否" in content
-    assert "Analyzer 建议（修改前）" in content
-    assert "实际实现方式" in content
+    assert "err := node.Step(ctx, msg)" in content
+    assert "controller.Inject(pending[0])" in content
     assert "Node asynchronous ingress" in content
-    assert "RawNode synchronous ingress" in content
-    assert "未覆盖路径" in content
-    assert "独立 Reviewer 结论" in content
+    assert "Reviewer 最终结论" in content
     assert "非阻塞剩余风险" in content
     assert "The remaining setup cost" in content
-    injection_section = content.split("\n## 消息注入\n", 1)[1].split(
-        "\n## 时间控制\n", 1
-    )[0]
-    assert "当前缺口" not in injection_section
-    assert "修改前已知限制（供对照）" in injection_section
-    assert "### 当前限制" not in injection_section
+    assert "Analyzer 建议（修改前）" not in content
+    assert "通过 hook 捕获消息" not in content
+
+    assert "测试接口审计报告" in audit
+    assert "Analyzer 建议（修改前）" in audit
+    assert "实际实现方式" in audit
+    assert "通过 hook 捕获消息" in audit
+    assert "修改前已知限制（供对照）" in audit

@@ -18,8 +18,8 @@ For message control, inspect every `covered_paths` entry: verify that its origin
 
 - verify the claimed consumer can actually call each entrypoint; distinguish external, same-package, and internal-harness scope;
 - verify returned snapshots do not expose mutable aliases into internal state;
-- verify IDs and metadata stay consistent across every existing mutation path instead of relying on fragile parallel-container alignment;
-- verify successful injection and record consumption occur only after the declared input boundary accepts the message; a silent best-effort send is not confirmed success.
+- verify any handles or metadata stay consistent across every existing cache mutation path instead of relying on fragile parallel-container alignment;
+- verify the report states whether cache removal and protocol input are separate test-owned operations or one wrapper, and that any claimed success matches the real input boundary; a silent best-effort send is not confirmed success.
 
 These are reviews of the existing capability contract, not new target-specific requirements. If satisfying one would require changing core protocol semantics, require the path to be reported as uncovered rather than forcing an invasive patch.
 
@@ -33,6 +33,10 @@ Triage every concern before choosing `overall`:
 - use `risks` only for residual, non-blocking limitations that remain compatible with every applicable check passing.
 
 Do not return `PASS` while describing in `risks` a condition under which the advertised interface is unreachable, corrupts its own control state, reports unconfirmed delivery as success, or otherwise fails its declared basic contract.
+
+Verify that `usage_examples` use real symbols, match the declared consumer scope and setup, and demonstrate interface mechanics without embedding a message-selection policy, fault schedule, assertion strategy, or correctness oracle that belongs to the test author.
+
+Verify that `public_entrypoints` contains only entrypoints callable by the declared test consumer and includes every generated or wrapped operation that the usage guide needs to expose. Internal stores and hooks must not be presented as public API.
 
 You do not perform dynamic verification and must not modify source. Use the separate `original` and `patched` read-only scopes to verify code evidence.
 

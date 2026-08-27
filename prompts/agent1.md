@@ -39,7 +39,7 @@ Use an aggregate capability status. Use `SUPPORTED` only when every materially r
 For every capability, distinguish underlying primitives from a complete test-facing interface. Populate `existing_test_interface_complete`, `test_support_reason`, and `suggested_changes`:
 
 - `existing_test_interface_complete=true` only when existing public/test-support APIs directly satisfy the full capability contract without new target code;
-- use `false` when useful primitives exist but the capability still needs state, coordination, stable selection, hooks, dependency injection, configuration, accessors, or test-harness support;
+- use `false` when useful primitives exist but the capability still needs state, coordination, exact cached-instance operations, hooks, dependency injection, configuration, accessors, or test-harness support;
 - `suggested_changes` may include a wrapper, hook, dependency injection, configuration option, read-only accessor, test-harness extension, or a low-intrusion combination. Do not restrict the Transformer to wrappers.
 
 If the existing test interface is incomplete and at least one suggested change is low-intrusion, classify the capability as `PATCHABLE`, not `SUPPORTED`. A `SUPPORTED` capability must have `existing_test_interface_complete=true` and no non-empty `gap`. Before assigning status, check every item in that capability's `testing_contract`.
@@ -48,7 +48,7 @@ Do not assume that a target has a `Transport`, a global node registry, a fixed c
 
 For message capture, identify the protocol-output point, existing continuation path, and suppression point for each materially distinct in-scope path. Distinguish protocol output, application transport, and a real network send. Paths outside the supplied system boundary remain limitations.
 
-Ready, an outbound slice, or a send hook is only a capture primitive. Unless the target already provides a pending store with stable control-plane IDs plus callable list and clear operations, message capture still needs additional test support and is not `SUPPORTED`. A wrapper may own the pending store while a hook or small source change connects the output path. The control-plane ID is assigned by the test-control layer when it captures a concrete message; it is not part of the protocol message format.
+Ready, an outbound slice, a send hook, or an existing queue may be a capture primitive or a complete cache depending on its behavior. Judge the functional contract: controlled output must stop before automatic continuation, test code must be able to inspect the cache and operate on a specified cached instance, and cache changes must stay coherent. Do not require a second store or a numeric ID when an existing target-native queue, record, handle, index, token, or pointer already provides exact control.
 
 For message injection, separately identify for each materially distinct path:
 
@@ -59,9 +59,11 @@ For message injection, separately identify for each materially distinct path:
 
 A target ID is only an identifier. Do not claim that target-object binding exists merely because a message contains a target ID.
 
-Step or an equivalent handler is only an injection primitive. Unless test code can select one concrete captured message through the declared stable control-plane ID and deliver it through the real target binding, message injection still needs additional test support and is not `SUPPORTED`.
+Step or an equivalent handler is an injection primitive. Determine whether test code can combine it with the controlled cache to operate on one concrete cached instance through the real target binding. Cache removal and Step may be separate test-owned operations or one convenience wrapper. The test, not ConsensusSeam, decides which message to operate on and when.
 
-Treat dispersed wall-clock use without explicit Tick or an injectable Clock as `INVASIVE` in v0.1. Treat lifecycle control as `INVASIVE` when it would require deciding which state survives a crash. Do not invent a persistent/volatile split.
+Treat dispersed wall-clock use without explicit Tick or an injectable Clock as `INVASIVE` in v0.1. For lifecycle control, the minimum is an existing way to make a node unavailable and restore availability. Identify whether the mechanism is pause/resume, graceful stop/restart, reconstruction from storage, or external process control. Pause/resume may satisfy availability simulation but must not be described as production crash recovery. Use `NOT_APPLICABLE` for persistence obligations when the claimed mode intentionally makes no crash-fidelity claim; never invent a persistent/volatile split.
+
+For directly usable existing interfaces, add a short target-language snippet to `usage_examples` when the setup and call can be stated from source evidence. The snippet documents mechanics only; do not invent message-selection, fault-scheduling, assertion, or oracle policy for the test.
 
 For every capability that defines `obligations`, assess every named obligation as `SATISFIED`, `PARTIAL`, `MISSING`, `UNKNOWN`, or `NOT_APPLICABLE`. Every `SATISFIED` item requires code evidence, and the overall capability status must be consistent with the obligation results.
 

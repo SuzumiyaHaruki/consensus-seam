@@ -20,7 +20,10 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert "covered_paths" in transformer_prompt
     assert "uncovered_paths" in transformer_prompt
     assert "mutable aliases" in transformer_prompt
-    assert "parallel containers" in transformer_prompt
-    assert "attempted asynchronous send" in transformer_prompt
+    assert "A numeric message ID is optional" in transformer_prompt
+    assert "message-selection or scheduling policy" in transformer_prompt
+    assert "separate take-and-step interface" in transformer_prompt
+    assert "usage_examples" in transformer_prompt
+    assert "no universal ID form" in capabilities
     assert "residual, non-blocking limitations" in reviewer_prompt
     assert "silent best-effort send is not confirmed success" in reviewer_prompt

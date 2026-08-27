@@ -42,7 +42,7 @@ Agent 3 发现违反能力合同、路径覆盖声明或接口报告的问题时
 
 全局能力规范只描述行为，不规定所有目标必须使用相同的 Go 接口。`Transport`、`RawNode` 或某个节点注册表只能是具体目标的实现选择，不能成为通用前提。
 
-Analyzer 必须区分“底层原语存在”和“测试接口完整存在”。例如 `Ready` 能输出消息、`Step` 能接收消息，并不等于系统已经提供消息控制能力；如果还缺少保存、控制面 ID、按 ID 选择或清空操作，就仍需 Agent 2 进行低侵入改造，能力应判为 `PATCHABLE`。控制面 ID 属于测试控制层，不要求修改协议消息格式。
+Analyzer 必须区分“底层原语存在”和“测试接口完整存在”。例如 `Ready` 能输出消息、`Step` 能接收消息，但测试方还需要让消息先进入可见缓存、准确操作某个缓存实例，并明确缓存变化与正常输入入口的关系。目标已有队列、记录、下标、handle 或可选控制 ID 都可以成为引用形式；全局合同规定功能，不规定统一 API 形状或数字 ID。
 
 低侵入改造可以是包装、hook、依赖注入、配置项、只读 accessor 或扩展目标已有测试 harness。包装只是其中一种方案，不限制 Transformer 采用其他允许方式。已有接口可以直接满足测试需求时仍然是 `SUPPORTED`。
 
@@ -155,7 +155,8 @@ consensus-seam repair  --project /绝对路径/project.yaml \
 
 - `capability-report.json`：七项能力分类、证据和限制；
 - `interface-report.json`：Agent 2 实际补充的接口；
-- `USAGE.md`：区分修改前分析、修改后接口、Reviewer 阻塞问题与非阻塞剩余风险的使用说明；
+- `USAGE.md`：面向测试方的简洁接口矩阵、调用入口、示例和剩余限制；
+- `AUDIT.md`：修改前分析、路径证据、实现方式和 Reviewer 结论的完整审计说明；
 - `changes.patch`：最终候选修改；
 - `review-report.json`：Agent 3 审查；
 - `verification-report.json`：构建、原测试和能力检查；

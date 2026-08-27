@@ -4,18 +4,24 @@ capabilities:
   message_capture:
     description: >
       Across the materially distinct execution paths discovered inside the system
-      boundary, test code can capture protocol output before it automatically
-      continues along its original path. A captured message must not continue
-      automatically. Safely unimplemented paths must be reported explicitly.
+      boundary, protocol output enters a test-visible controllable cache before it
+      automatically continues along its original path. The test decides when and
+      how cached messages are processed. Safely unimplemented paths must be
+      reported explicitly.
     testing_contract:
       activation: >
         The target may use a constructor, test environment, or wrapper that fits
         its own architecture. The interface shape and required setup must be
         declared in the interface report; a Transport abstraction is not assumed.
-      list_pending: >
-        A callable entrypoint lists pending messages with at least a stable
-        message ID, sender, receiver, message type, and capture order.
-      clear_pending: A callable entrypoint clears the current pending messages.
+      cache_visibility: >
+        Test code can enumerate or inspect cached message instances, including
+        enough target-native content to decide what to do and the current cache
+        order. The framework does not decide which message a test should choose.
+      instance_operation: >
+        Test code can act on one specified cached instance and can remove or clear
+        cached messages. The reference may be a target-native record, handle,
+        index, pointer, token, or optional control ID; no universal ID form is
+        required.
       consumer_scope: >
         For every claimed path, declare whether its entrypoints are callable by
         external consumers, same-package tests, or only an internal harness. An
@@ -26,33 +32,36 @@ capabilities:
         nested objects. Reuse a target-native clone operation when available;
         otherwise copy the mutable parts or explicitly narrow the claim.
       store_consistency: >
-        New IDs or metadata must remain consistent with every existing mutation
-        path for the underlying pending messages. Do not rely on parallel stores
-        staying aligned when an existing public API can mutate only one of them.
+        Any new handles or metadata remain consistent with every existing mutation
+        path for the underlying cache. Prefer one authoritative cache; do not rely
+        on parallel stores staying aligned when a public API can mutate only one.
       path_coverage: >
         The Analyzer discovers materially distinct in-scope paths. The
         implementation covers every low-intrusion path it can and explicitly
         records covered and uncovered paths.
       test_support_gap: >
-        A raw outbound message API is only an underlying primitive. Unless an
-        existing test interface already stores captured messages and supplies
-        stable control-plane IDs plus list and clear operations, additional test
-        support is required and the capability is not SUPPORTED. A wrapper,
-        hook, or low-intrusion combination may implement the missing behavior.
+        A raw outbound message API is an underlying primitive. It is already
+        complete only when test code can keep output from automatically continuing,
+        inspect the controlled cache, and operate on specified cached instances.
+        Existing target-native queues and slices may satisfy this contract without
+        a second store or numeric IDs; otherwise a wrapper, hook, or low-intrusion
+        combination may add the missing behavior.
 
   message_injection:
     description: >
-      Test code can select one previously captured legal message and deliver it
-      through the recorded target's normal protocol input entrypoint. Successful
-      injection consumes only the selected message and preserves sender,
-      receiver, and content.
+      Test code can specify one previously cached legal message instance and
+      deliver it through the recorded target's normal protocol input entrypoint.
+      The test owns the choice and scheduling policy; the interface provides
+      target-native cache and ingress operations with explicit cache effects.
     testing_contract:
-      inject: A callable entrypoint selects and delivers a pending message by stable ID.
-      message_id_scope: The implementation declares whether IDs belong to a pending store, test session, node, or global scope.
-      control_identity: >
-        Message IDs are assigned by the test-control layer to captured message
-        instances. They are not protocol-message fields and need not be derived
-        from term, index, type, or payload.
+      exact_instance: >
+        The test can refer to and operate on one concrete cached instance using a
+        target-native record, handle, index, token, pointer, or optional control
+        ID. ConsensusSeam does not provide the policy for choosing that instance.
+      operation_shape: >
+        Cache removal and protocol input may be separate operations controlled by
+        the test or one convenience wrapper. Neither form is globally required;
+        the report must state the actual cache effect and error behavior.
       target_binding: >
         Use target-object ownership or routing that actually exists in the target.
         A target ID alone is not a target-object binding. Existing constructors,
@@ -62,10 +71,10 @@ capabilities:
         Injection enters the normal protocol input boundary for the declared
         path and does not mutate protocol state directly.
       success_and_consumption: >
-        Report success and consume the selected record only after the declared
-        input boundary has accepted it. If an asynchronous transport can silently
-        drop an attempted delivery and exposes no acknowledgement, retain the
-        record, expose an honest uncertain outcome, or list that path as uncovered.
+        A combined injection wrapper must not report confirmed success while an
+        asynchronous path may silently drop the attempt. A separate take-and-step
+        interface may leave retry, requeue, or deliberate loss policy to the test;
+        its responsibilities must be explicit rather than hidden.
       consumer_scope: >
         The interface report distinguishes externally callable, same-package,
         and internal-harness injection entrypoints. A path is covered only for
@@ -109,17 +118,21 @@ capabilities:
 
   lifecycle_control:
     description: >
-      Existing node stop, creation, recovery, and state-ownership semantics may
-      be exposed to tests. An Agent must not invent the persistent/volatile split.
+      Test code can make a node unavailable and make it available again using an
+      existing target-native pause, stop, resume, restart, reconstruction, or
+      process-control boundary. The report names the actual mechanism and must not
+      claim production crash fidelity unless the target defines it.
     obligations:
-      stop_boundary: Identify an existing stop or pause boundary and its exact meaning.
-      restart_or_recovery_boundary: Identify an existing restart or recovery path; scheduler resume is not recovery.
-      state_ownership_defined: Determine whether recoverable-state ownership and boundaries are already defined.
-      persistent_volatile_semantics_defined: Determine whether crash-surviving and volatile state are explicitly defined.
+      stop_boundary: Identify how the node becomes unavailable and whether this is pause, graceful stop, or crash-like reconstruction.
+      restart_or_recovery_boundary: Identify how availability is restored and whether the same instance resumes or a new instance is created.
+      state_ownership_defined: Record target-defined recoverable-state ownership when relevant; use NOT_APPLICABLE for an availability-only mode that makes no crash claim.
+      persistent_volatile_semantics_defined: Record target-defined persistent/volatile semantics when relevant; use NOT_APPLICABLE rather than inventing them for pause/resume.
     testing_contract:
       test_support_assessment: >
-        Test support may compose or expose existing stop, create, and recovery
-        APIs, but it must not invent state ownership or persistence semantics.
+        The v0.1 minimum is unavailable-and-restore control with its mechanism
+        stated honestly. Test support may compose existing pause, stop, create,
+        resume, or restart APIs, but it must not equate pause with a production
+        crash or invent state ownership and persistence semantics.
 
   observation:
     description: >

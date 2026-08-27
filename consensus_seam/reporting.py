@@ -42,6 +42,37 @@ def _format_location(location: CodeLocation | None) -> str | None:
     return f"{value}：{location.meaning}" if location.meaning else value
 
 
+def _markdown_cell(values: list[str], *, limit: int = 3) -> str:
+    """把接口列表压缩成不会破坏 Markdown 表格的单元格。"""
+
+    cleaned = [value.replace("|", "\\|") for value in values if value]
+    visible = cleaned[:limit]
+    result = "<br>".join(f"`{value}`" for value in visible)
+    if len(cleaned) > limit:
+        suffix = f"等 {len(cleaned)} 项"
+        result = f"{result}<br>{suffix}" if result else suffix
+    return result or "—"
+
+
+def _generated_locations(capability: object | None) -> list[str]:
+    """提取 Agent 2 报告中测试方可调用的公开入口。"""
+
+    if capability is None:
+        return []
+    values: list[str] = []
+    locations = list(getattr(capability, "public_entrypoints", ()))
+    if not locations:
+        legacy = getattr(capability, "entrypoint", None)
+        locations = [] if legacy is None else [legacy]
+    for location in locations:
+        if location is None:
+            continue
+        value = location.symbol or location.file
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
 class ArtifactStore:
     """一次运行的结构化产物目录。"""
 
@@ -120,7 +151,122 @@ class ArtifactStore:
         interface_report: InterfaceReport | None = None,
         review_report: ReviewReport | None = None,
     ) -> Path:
-        """按分析、实现、审查三个时间点生成中文结构的接口说明。"""
+        """生成面向测试方的简洁接口矩阵、调用入口和示例。"""
+
+        # 详细分析单独保存，USAGE 不再承担完整审计报告的职责。
+        self._write_audit(report, interface_report, review_report)
+        generated = interface_report.capabilities() if interface_report else {}
+        lines = [
+            f"# {report.target} 测试接口清单",
+            "",
+            "本文件面向测试接口使用者，只回答有哪些入口、如何使用以及哪些路径仍有限制。",
+            "详细分类、源码证据、修改方式和审查过程见 `AUDIT.md` 与三份 JSON 报告。",
+            "",
+            "## 快速接口矩阵",
+            "",
+            "| 能力 | 修改前状态 | 目标已有入口 | 本次生成入口 | 当前结论 |",
+            "|---|---|---|---|---|",
+        ]
+        for name, title in CAPABILITY_DISPLAY_ORDER:
+            finding = report.capabilities[name]
+            capability = generated.get(name)
+            existing = finding.entrypoints or [
+                item.symbol or item.file or ""
+                for item in finding.evidence
+                if item.symbol or item.file
+            ]
+            new_entries = _generated_locations(capability)
+            if capability is not None and capability.implemented:
+                covered = len(capability.covered_paths)
+                uncovered = len(capability.uncovered_paths)
+                conclusion = "已生成接口"
+                if covered or uncovered:
+                    conclusion += f"；覆盖 {covered} 条路径"
+                    if uncovered:
+                        conclusion += f"，未覆盖 {uncovered} 条"
+            elif finding.status is CapabilityStatus.SUPPORTED:
+                conclusion = "直接复用目标已有接口"
+            elif finding.status is CapabilityStatus.PATCHABLE:
+                conclusion = "尚需低侵入补充"
+            else:
+                conclusion = finding.status.value
+            lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        title,
+                        f"`{finding.status.value}`",
+                        _markdown_cell(existing),
+                        _markdown_cell(new_entries),
+                        conclusion,
+                    )
+                )
+                + " |"
+            )
+
+        lines.extend(["", "## 接口详情与示例", ""])
+        for name, title in CAPABILITY_DISPLAY_ORDER:
+            finding = report.capabilities[name]
+            capability = generated.get(name)
+            lines.extend([f"### {title}", ""])
+            if finding.entrypoints:
+                lines.append("**目标已有入口**")
+                lines.append("")
+                lines.extend(f"- `{item}`" for item in finding.entrypoints)
+                lines.append("")
+            locations = _generated_locations(capability)
+            if locations:
+                lines.append("**本次生成入口**")
+                lines.append("")
+                lines.extend(f"- `{item}`" for item in locations)
+                lines.append("")
+            if capability is not None and capability.implemented:
+                if capability.test_mode:
+                    lines.extend(["**启用与使用范围**", "", capability.test_mode, ""])
+                if capability.uncovered_paths:
+                    lines.append("**仍未覆盖**")
+                    lines.append("")
+                    lines.extend(f"- {item}" for item in capability.uncovered_paths)
+                    lines.append("")
+            examples = list(finding.usage_examples)
+            if capability is not None:
+                examples.extend(capability.usage_examples)
+            if examples:
+                lines.append("**调用示例**")
+                lines.append("")
+                for example in examples:
+                    lines.extend(["```go", example.rstrip(), "```", ""])
+            if not finding.entrypoints and not locations and not examples:
+                reason = finding.test_support_reason or finding.reason or finding.gap
+                lines.extend([reason or "本次没有可直接列出的调用入口。", ""])
+
+        if review_report is not None:
+            lines.extend(
+                [
+                    "## Reviewer 最终结论",
+                    "",
+                    f"- 总体结论：`{review_report.overall.value}`",
+                ]
+            )
+            if review_report.issues:
+                lines.append("- 阻塞问题：")
+                lines.extend(f"  - {issue.reason}" for issue in review_report.issues)
+            if review_report.risks:
+                lines.append("- 非阻塞剩余风险：")
+                lines.extend(f"  - {risk}" for risk in review_report.risks)
+            if not review_report.issues and not review_report.risks:
+                lines.append("- Reviewer 未报告阻塞问题或剩余风险。")
+            lines.append("")
+
+        return self.write_text("USAGE.md", "\n".join(lines).rstrip() + "\n")
+
+    def _write_audit(
+        self,
+        report: CapabilityReport,
+        interface_report: InterfaceReport | None = None,
+        review_report: ReviewReport | None = None,
+    ) -> Path:
+        """按分析、实现、审查三个时间点生成完整中文审计说明。"""
 
         machine_reports = ["`capability-report.json`"]
         if interface_report is not None:
@@ -128,7 +274,7 @@ class ArtifactStore:
         if review_report is not None:
             machine_reports.append("`review-report.json`")
         lines = [
-            f"# {report.target} 测试接口使用报告",
+            f"# {report.target} 测试接口审计报告",
             "",
             "本报告同时列出目标系统已有接口和本次 Agent 生成的接口。",
             "Analyzer 内容描述修改前状态；生成接口和 Reviewer 内容描述候选修改后状态。",
@@ -196,7 +342,7 @@ class ArtifactStore:
                 details = [
                     ("生产路径", generated.production_mode),
                     ("测试路径", generated.test_mode),
-                    ("消息 ID 范围", generated.message_id_scope),
+                    ("可选消息 ID 范围", generated.message_id_scope),
                     ("复制策略", generated.copy_strategy),
                 ]
                 present_details = [(label, value) for label, value in details if value]
@@ -256,7 +402,7 @@ class ArtifactStore:
             if not review_report.issues and not review_report.risks:
                 lines.extend(["- Reviewer 未报告阻塞问题或剩余风险。", ""])
 
-        return self.write_text("USAGE.md", "\n".join(lines).rstrip() + "\n")
+        return self.write_text("AUDIT.md", "\n".join(lines).rstrip() + "\n")
 
     def publish_latest(self) -> Path:
         """原子替换 Git 跟踪的 latest 审计导出。
@@ -296,8 +442,9 @@ class ArtifactStore:
             (staging / "APPLY.md").write_text(
                 """# 应用最近一次已验证补丁
 
-修改目标仓库前，先审查 `changes.patch`、`review-report.json` 和
-`verification-report.json`，并在 `run-config.json` 中确认目标提交版本。
+修改目标仓库前，先阅读 `USAGE.md` 和 `AUDIT.md`，再审查
+`changes.patch`、`review-report.json` 和 `verification-report.json`，并在
+`run-config.json` 中确认目标提交版本。
 
 然后在目标仓库中运行：
 

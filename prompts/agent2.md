@@ -26,38 +26,40 @@ For every claimed path, state the actual consumer scope of its entrypoints: exte
 Apply these target-independent interface-hygiene rules:
 
 - returned snapshots must not expose mutable aliases into protocol or controller state; use an existing clone operation when available, copy mutable nested data when necessary, or narrow and document the claim;
-- new metadata must have one authoritative relationship to the underlying state and remain consistent with every existing mutation path; do not assume two parallel containers stay index-aligned when an existing public API can mutate only one;
+- new handles or metadata must have one authoritative relationship to the underlying cache and remain consistent with every existing mutation path; prefer reusing one target-native cache over adding a parallel container;
 - new configuration values must preserve the target's existing legal domain or reject invalid inputs explicitly; do not silently create states the target normally considers impossible;
 - `notes` and `uncovered_paths` describe the candidate after your changes. Do not repeat an Analyzer gap as a remaining limitation when your implementation has resolved it.
 
 The basic message-capture objective is to:
 
-- obtain protocol output in the declared test path;
-- prevent captured messages from automatically continuing along the original path;
-- provide callable operations to list and clear pending records;
-- avoid implementing a scheduling policy.
+- route controlled protocol output into a test-visible cache before it continues;
+- prevent cached messages from automatically continuing along the original path;
+- let test code inspect, remove, or clear cached message instances using a target-native reference;
+- avoid implementing message-selection or scheduling policy.
 
-The pending-message ID is test-control identity assigned at capture time. A wrapper may own it, but source hooks or other low-intrusion changes may feed that state. Do not add the ID to the target's protocol message schema or derive it from protocol term/index/payload identity.
+A numeric message ID is optional. Reuse an existing queue record, handle, index, token, pointer, or message object when it lets serialized test code operate on one exact cached instance safely. If a new control ID is useful for unstable order, duplicate values, replay, or an external controller, keep it outside the protocol message schema and document its scope. Do not add a second cache merely to manufacture IDs.
 
 The basic message-injection objective is to:
 
-- select one previously captured message;
+- accept one cached message instance specified by the test;
 - use a target object or routing mechanism that actually exists in the target;
 - deliver through the declared normal protocol input entrypoint;
-- consume only the selected message after success;
 - preserve sender, receiver, and content.
 
-An attempted asynchronous send is not automatically a successful injection. Consume the selected pending record only after the declared normal input boundary has accepted it. If the target exposes no acknowledgement and may silently drop the attempt, retain the record, return an honest uncertain outcome using existing target semantics, or report that path as uncovered. Do not invent an acknowledgement protocol merely to claim coverage.
+Cache removal and protocol input may be separate operations under test control or one convenience wrapper. State which form is implemented and what happens on success, synchronous failure, and unconfirmed asynchronous send. A combined wrapper must not report confirmed success while the target may silently drop the attempt. A separate take-and-step interface may deliberately leave retry, requeue, or loss policy to the test. Do not invent an acknowledgement protocol merely to claim coverage.
 
 If the selected entrypoint returns synchronous errors, preserve the target's existing error semantics and document them in `notes`. Do not invent a new protocol error model or a wait-for-quiescence operation merely to make targets uniform.
 
-Declare the message-ID scope. Record in the interface report:
+Record in the interface report:
 
 - the actual new or modified entrypoints;
+- every test-consumer-callable generated or wrapped entrypoint in `public_entrypoints`; keep internal capture hooks and stores in their dedicated location fields instead of presenting them as public API;
 - whether the production path changes;
 - how the test path is enabled and used;
 - all operating paths supported by this run;
 - uncovered paths, their reasons, and required setup.
+
+For every implemented capability, include at least one concise target-language snippet in `usage_examples`. Show only setup and interface mechanics. Leave the choice of message, delivery order, fault schedule, assertions, and correctness oracle to the test author.
 
 Before patching an existing file, read the exact target range and use its current content as patch context. `apply_patch` automatically recounts unified-diff hunk lengths but still requires exact surrounding context. If two `apply_patch` calls for the same file fail, read the target range again before another attempt instead of guessing stale context.
 
