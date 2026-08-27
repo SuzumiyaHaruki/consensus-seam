@@ -7,22 +7,9 @@ from pathlib import Path
 
 from ..config import LoadedProject
 from ..languages.base import LanguageBackend
-from ..models import FailureCode, FailureRoute, VerificationReport
+from ..models import CAPABILITY_CHECK_CODES, FailureCode, VerificationReport
 from ..routing import route_failure
 from .capability import CapabilityCheck
-
-
-REQUIRED_CHECK_CODES: dict[str, set[FailureCode]] = {
-    "message_capture": {
-        FailureCode.MESSAGE_CAPTURE_FAILED,
-        FailureCode.MESSAGE_SUPPRESSION_FAILED,
-    },
-    "message_injection": {FailureCode.MESSAGE_INJECTION_FAILED},
-    "time_control": {FailureCode.TIME_CONTROL_FAILED},
-    "randomness_control": {FailureCode.RANDOMNESS_CONTROL_FAILED},
-    "lifecycle_control": {FailureCode.LIFECYCLE_CONTROL_FAILED},
-    "observation": {FailureCode.OBSERVATION_FAILED},
-}
 
 
 class DeterministicVerifier:
@@ -66,7 +53,7 @@ class DeterministicVerifier:
         selected_checks = [check for check in checks if check.capability in required]
         missing: list[str] = []
         for capability in sorted(required):
-            expected_codes = REQUIRED_CHECK_CODES.get(capability, set())
+            expected_codes = CAPABILITY_CHECK_CODES.get(capability, frozenset())
             actual_codes = {
                 check.failure_code
                 for check in selected_checks

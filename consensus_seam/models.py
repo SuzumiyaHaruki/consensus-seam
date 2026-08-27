@@ -38,15 +38,31 @@ class FailureCode(str, Enum):
     MESSAGE_CAPTURE_FAILED = "MESSAGE_CAPTURE_FAILED"
     MESSAGE_SUPPRESSION_FAILED = "MESSAGE_SUPPRESSION_FAILED"
     MESSAGE_INJECTION_FAILED = "MESSAGE_INJECTION_FAILED"
-    # Reserved for a future deterministic bypass detector. Manifest capability
-    # checks cannot emit this code in v0.1.
-    MESSAGE_BYPASS_SUSPECTED = "MESSAGE_BYPASS_SUSPECTED"
     TIME_CONTROL_FAILED = "TIME_CONTROL_FAILED"
     RANDOMNESS_CONTROL_FAILED = "RANDOMNESS_CONTROL_FAILED"
     LIFECYCLE_CONTROL_FAILED = "LIFECYCLE_CONTROL_FAILED"
     OBSERVATION_FAILED = "OBSERVATION_FAILED"
     REGRESSION_FAILED = "REGRESSION_FAILED"
     SEMANTIC_AMBIGUITY = "SEMANTIC_AMBIGUITY"
+
+
+CAPABILITY_CHECK_CODES: dict[str, frozenset[FailureCode]] = {
+    "message_capture": frozenset(
+        {
+            FailureCode.MESSAGE_CAPTURE_FAILED,
+            FailureCode.MESSAGE_SUPPRESSION_FAILED,
+        }
+    ),
+    "message_injection": frozenset({FailureCode.MESSAGE_INJECTION_FAILED}),
+    "time_control": frozenset({FailureCode.TIME_CONTROL_FAILED}),
+    "randomness_control": frozenset({FailureCode.RANDOMNESS_CONTROL_FAILED}),
+    "lifecycle_control": frozenset({FailureCode.LIFECYCLE_CONTROL_FAILED}),
+    "observation": frozenset({FailureCode.OBSERVATION_FAILED}),
+}
+
+CAPABILITY_FAILURE_CODES = frozenset(
+    code for codes in CAPABILITY_CHECK_CODES.values() for code in codes
+)
 
 
 class SystemBoundary(StrictModel):
@@ -153,19 +169,8 @@ class ProjectManifest(StrictModel):
         names = [check.name for check in self.capability_checks]
         if len(names) != len(set(names)):
             raise ValueError("capability check names must be unique")
-        allowed_codes = {
-            "message_capture": {
-                FailureCode.MESSAGE_CAPTURE_FAILED,
-                FailureCode.MESSAGE_SUPPRESSION_FAILED,
-            },
-            "message_injection": {FailureCode.MESSAGE_INJECTION_FAILED},
-            "time_control": {FailureCode.TIME_CONTROL_FAILED},
-            "randomness_control": {FailureCode.RANDOMNESS_CONTROL_FAILED},
-            "lifecycle_control": {FailureCode.LIFECYCLE_CONTROL_FAILED},
-            "observation": {FailureCode.OBSERVATION_FAILED},
-        }
         for check in self.capability_checks:
-            if check.failure_code not in allowed_codes[check.capability]:
+            if check.failure_code not in CAPABILITY_CHECK_CODES[check.capability]:
                 raise ValueError(
                     f"{check.failure_code.value} is not valid for {check.capability}"
                 )
@@ -186,7 +191,9 @@ class CapabilityPrerequisites(StrictModel):
 class CapabilitySpec(StrictModel):
     version: int = Field(ge=1)
     capabilities: dict[str, CapabilityDefinition]
-    prerequisites: CapabilityPrerequisites | dict = Field(default_factory=dict)
+    prerequisites: CapabilityPrerequisites = Field(
+        default_factory=CapabilityPrerequisites
+    )
 
     @model_validator(mode="after")
     def require_v0_capabilities(self) -> "CapabilitySpec":
@@ -532,7 +539,6 @@ class ReviewReport(StrictModel):
 class FailureRoute(str, Enum):
     AGENT1 = "AGENT1"
     AGENT2 = "AGENT2"
-    AGENT3 = "AGENT3"
     NEEDS_HUMAN = "NEEDS_HUMAN"
     NONE = "NONE"
 

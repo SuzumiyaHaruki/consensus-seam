@@ -32,9 +32,6 @@ class PassingBackend(LanguageBackend):
     def find_references(self, repo: Path, symbol: str) -> list[str]:
         return []
 
-    def syntax_check(self, repo: Path) -> CommandExecution:
-        return self._passed("syntax")
-
 
 def project(tmp_path: Path) -> LoadedProject:
     original = tmp_path / "original"

@@ -51,23 +51,6 @@ class FakeLLMClient:
             raise AgentRuntimeError("FakeLLMClient has no response remaining")
         return self._responses.popleft()
 
-    def complete(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        response_schema: dict[str, Any] | None = None,
-    ) -> str:
-        """Compatibility shim for code written against the v0.1 text client."""
-
-        return self.run(
-            system_prompt,
-            user_prompt,
-            response_schema,
-            agent="fake",
-            model=AgentModelConfig(model="fake"),
-        )
-
-
 class UnconfiguredLLMClient:
     """Fail clearly until a real provider adapter is deliberately selected."""
 

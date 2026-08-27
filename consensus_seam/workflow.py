@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -47,19 +48,36 @@ class ConsensusWorkflow:
         self.runs_root = runs_root
 
     def analyze(self, project: LoadedProject) -> WorkflowResult:
+        return self._with_artifacts(
+            project,
+            lambda artifacts: self._execute_analysis(project, artifacts),
+        )
+
+    def _execute_analysis(
+        self,
+        project: LoadedProject,
+        artifacts: ArtifactStore,
+    ) -> WorkflowResult:
+        analyzer, _, _ = self._agents(project)
+        report = analyzer.analyze(project)
+        artifacts.write_model("capability-report.json", report)
+        self._write_unresolved(artifacts, report, project)
+        return WorkflowResult(
+            outcome=WorkflowOutcome.ANALYZED,
+            run_directory=artifacts.run_directory,
+        )
+
+    def _with_artifacts(
+        self,
+        project: LoadedProject,
+        operation: Callable[[ArtifactStore], WorkflowResult],
+    ) -> WorkflowResult:
         artifacts = ArtifactStore.create(self.runs_root)
         self._write_run_config(artifacts, project)
         stats_start = self._runtime_stats_count()
         tool_audit_start = self._runtime_tool_audit_count()
         try:
-            analyzer, _, _ = self._agents(project)
-            report = analyzer.analyze(project)
-            artifacts.write_model("capability-report.json", report)
-            self._write_unresolved(artifacts, report, project)
-            return WorkflowResult(
-                outcome=WorkflowOutcome.ANALYZED,
-                run_directory=artifacts.run_directory,
-            )
+            return operation(artifacts)
         finally:
             self._write_runtime_stats(artifacts, stats_start)
             self._write_tool_audit(artifacts, tool_audit_start)
@@ -72,16 +90,14 @@ class ConsensusWorkflow:
         return self._patch_loop(project, verify=True)
 
     def _patch_loop(self, project: LoadedProject, *, verify: bool) -> WorkflowResult:
-        artifacts = ArtifactStore.create(self.runs_root)
-        self._write_run_config(artifacts, project)
-        stats_start = self._runtime_stats_count()
-        tool_audit_start = self._runtime_tool_audit_count()
-        try:
-            return self._execute_patch_loop(project, verify=verify, artifacts=artifacts)
-        finally:
-            self._write_runtime_stats(artifacts, stats_start)
-            self._write_tool_audit(artifacts, tool_audit_start)
-            artifacts.publish_latest()
+        return self._with_artifacts(
+            project,
+            lambda artifacts: self._execute_patch_loop(
+                project,
+                verify=verify,
+                artifacts=artifacts,
+            ),
+        )
 
     def _execute_patch_loop(
         self,
@@ -308,10 +324,6 @@ class ConsensusWorkflow:
                         outcome=WorkflowOutcome.PASS,
                         run_directory=artifacts.run_directory,
                     )
-                if verification.route is FailureRoute.AGENT1:
-                    agent1_feedback = verification.model_dump(mode="json")
-                    requested_reanalysis = True
-                    break
                 if verification.route is FailureRoute.AGENT2:
                     agent2_feedback = verification.model_dump(mode="json")
                     continue

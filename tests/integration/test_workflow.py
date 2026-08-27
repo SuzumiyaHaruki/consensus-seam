@@ -13,7 +13,7 @@ from consensus_seam.models import WorkflowOutcome
 from consensus_seam.models import AgentModelConfig
 from consensus_seam.llm.base import ToolExecutor
 from consensus_seam.workflow import ConsensusWorkflow
-from tests.helpers import capability_report, review_report
+from tests.helpers import capability_report, review_report, write_project_manifest
 
 
 def git(repo: Path, *args: str) -> None:
@@ -258,25 +258,7 @@ class ScopedTransformRuntime:
 def test_analyze_writes_validated_artifacts(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build:",
-                "  command: go test ./...",
-                "test:",
-                "  command: go test ./...",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo)
     workflow = ConsensusWorkflow(
         FakeLLMClient([json.dumps(capability_report())]),
         runs_root=tmp_path / "runs",
@@ -291,23 +273,7 @@ def test_analyze_writes_validated_artifacts(tmp_path: Path) -> None:
 def test_live_runtime_stats_are_written_without_reasoning_content(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'go test ./...'}",
-                "test: {command: 'go test ./...'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo)
     workflow = ConsensusWorkflow(
         ToolCallingAgentRuntime(AnalyzerChatClient()),
         runs_root=tmp_path / "runs",
@@ -323,23 +289,7 @@ def test_live_runtime_stats_are_written_without_reasoning_content(tmp_path: Path
 def test_patch_stops_when_analysis_finds_no_patchable_capability(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'go test ./...'}",
-                "test: {command: 'go test ./...'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo)
     workflow = ConsensusWorkflow(
         FakeLLMClient([json.dumps(capability_report(patchable=None))]),
         runs_root=tmp_path / "runs",
@@ -355,24 +305,11 @@ def test_transform_scope_does_not_hide_unselected_patchable_findings(
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_git_repository(repo)
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "transform_capabilities:",
-                "  - message_injection",
-                "build: {command: 'git diff --check'}",
-                "test: {command: 'git diff --check'}",
-            ]
-        ),
-        encoding="utf-8",
+    manifest = write_project_manifest(
+        tmp_path,
+        repo,
+        command="git diff --check",
+        extra=("transform_capabilities:", "  - message_injection"),
     )
     runtime = ScopedTransformRuntime()
     workflow = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs")
@@ -397,23 +334,7 @@ def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_git_repository(repo)
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'git diff --check'}",
-                "test: {command: 'git diff --check'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
     workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")
     result = workflow.patch(load_project(manifest))
     assert result.outcome is WorkflowOutcome.PASS
@@ -425,27 +346,17 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_git_repository(repo)
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'git diff --check'}",
-                "test: {command: 'git diff --check'}",
-                "capability_checks:",
-                "  - name: MC3 exact injection",
-                "    capability: message_injection",
-                "    command: git diff --check",
-                "    failure_code: MESSAGE_INJECTION_FAILED",
-            ]
+    manifest = write_project_manifest(
+        tmp_path,
+        repo,
+        command="git diff --check",
+        extra=(
+            "capability_checks:",
+            "  - name: MC3 exact injection",
+            "    capability: message_injection",
+            "    command: git diff --check",
+            "    failure_code: MESSAGE_INJECTION_FAILED",
         ),
-        encoding="utf-8",
     )
     workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")
     result = workflow.run(load_project(manifest))
@@ -466,23 +377,7 @@ def test_run_refuses_success_without_capability_check(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_git_repository(repo)
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'git diff --check'}",
-                "test: {command: 'git diff --check'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
     workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")
     result = workflow.run(load_project(manifest))
     assert result.outcome is WorkflowOutcome.PARTIAL
@@ -512,23 +407,7 @@ def test_existing_go_tests_are_protected_and_bad_worktree_is_discarded(
         "-m",
         "add existing test",
     )
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'git diff --check'}",
-                "test: {command: 'git diff --check'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
     workflow = ConsensusWorkflow(
         GuardrailFakeRuntime("protected_test"), runs_root=tmp_path / "runs"
     )
@@ -547,23 +426,7 @@ def test_rediscovered_invasive_change_always_uses_fresh_worktree(
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_git_repository(repo)
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'git diff --check'}",
-                "test: {command: 'git diff --check'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
     workflow = ConsensusWorkflow(
         GuardrailFakeRuntime("rediscovered"), runs_root=tmp_path / "runs"
     )
@@ -582,23 +445,7 @@ def test_rediscovered_invasive_change_always_uses_fresh_worktree(
 def test_cli_analyze_command(tmp_path: Path, capsys: Any) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    manifest = tmp_path / "project.yaml"
-    manifest.write_text(
-        "\n".join(
-            [
-                "name: mini-raft",
-                "language: go",
-                "protocol: raft",
-                f"repository: {repo}",
-                "system_boundary:",
-                "  kind: protocol_library",
-                "  description: Mini Raft protocol core only",
-                "build: {command: 'go test ./...'}",
-                "test: {command: 'go test ./...'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = write_project_manifest(tmp_path, repo)
     responses = tmp_path / "responses.json"
     responses.write_text(json.dumps([capability_report()]), encoding="utf-8")
     exit_code = main(

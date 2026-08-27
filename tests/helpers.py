@@ -1,6 +1,32 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
+
+
+def write_project_manifest(
+    directory: Path,
+    repository: Path,
+    *,
+    command: str = "go test ./...",
+    extra: Iterable[str] = (),
+) -> Path:
+    manifest = directory / "project.yaml"
+    lines = [
+        "name: mini-raft",
+        "language: go",
+        "protocol: raft",
+        f"repository: {repository}",
+        "system_boundary:",
+        "  kind: protocol_library",
+        "  description: Mini Raft protocol core only",
+        *extra,
+        f"build: {{command: '{command}'}}",
+        f"test: {{command: '{command}'}}",
+    ]
+    manifest.write_text("\n".join(lines), encoding="utf-8")
+    return manifest
 
 
 def evidence(symbol: str) -> list[dict[str, Any]]:

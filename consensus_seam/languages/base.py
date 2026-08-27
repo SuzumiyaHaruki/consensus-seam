@@ -32,10 +32,6 @@ class LanguageBackend(ABC):
     def find_references(self, repo: Path, symbol: str) -> list[str]:
         raise NotImplementedError
 
-    @abstractmethod
-    def syntax_check(self, repo: Path) -> CommandExecution:
-        raise NotImplementedError
-
     def run_command(
         self,
         repo: Path,

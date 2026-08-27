@@ -96,9 +96,6 @@ class GoBackend(LanguageBackend):
                 ]
         return self._search(repo, rf"\b{re.escape(symbol)}\b")
 
-    def syntax_check(self, repo: Path) -> CommandExecution:
-        return self.run_command(repo, "go test -run=^$ ./...")
-
     def go_find_type(self, repo: Path, name: str) -> list[dict[str, object]]:
         return self._ast_query(repo, "type", name=name)
 

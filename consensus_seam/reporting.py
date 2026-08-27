@@ -32,15 +32,6 @@ class ArtifactStore:
             suffix += 1
         return cls(candidate)
 
-    @classmethod
-    def open_existing(cls, run_directory: Path) -> "ArtifactStore":
-        path = run_directory.resolve()
-        if not path.is_dir():
-            raise ValueError(f"run directory does not exist: {path}")
-        store = cls.__new__(cls)
-        store.run_directory = path
-        return store
-
     def _path(self, name: str) -> Path:
         path = (self.run_directory / name).resolve()
         try:
