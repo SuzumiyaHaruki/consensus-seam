@@ -1,626 +1,123 @@
 diff --git a/raft.go b/raft.go
-index 94c2363..2893cd4 100644
+index 94c2363..9213769 100644
 --- a/raft.go
 +++ b/raft.go
-@@ -137,6 +137,20 @@ type Config struct {
+@@ -137,6 +137,15 @@ type Config struct {
  	// leadership every HeartbeatTick ticks.
  	HeartbeatTick int
  
 +	// RandomizedElectionTimeout, if non-zero, fixes the randomized election
-+	// timeout to the given value instead of drawing a random value from
-+	// [ElectionTick, 2*ElectionTick). The value is applied when the node is
-+	// created and re-applied on every state transition that would otherwise
-+	// re-randomize the timeout.
-+	//
-+	// This option is intended for deterministic tests: nodes created from
-+	// identical Configs with this field set exhibit identical election timing.
-+	// If it is zero (the default), the randomized election timeout is drawn
-+	// uniformly at random from [ElectionTick, 2*ElectionTick), as usual.
-+	// Values outside that range are permitted, but deviate from the range of
-+	// the randomized default.
++	// timeout to this value on every state change, instead of drawing a new
++	// random value from [ElectionTick, 2*ElectionTick-1] (the default
++	// behavior). It must be within that range; Config.validate rejects other
++	// values. Setting it makes election timing deterministic and repeatable
++	// across state changes, which is useful in tests. A value of 0 preserves
++	// the randomized behavior.
 +	RandomizedElectionTimeout int
 +
  	// Storage is the storage for raft. raft generates entries and states to be
  	// stored in storage. raft reads the persisted entries and states out of
  	// Storage when it needs. raft reads out the previous state and configuration
-@@ -417,6 +431,10 @@ type raft struct {
+@@ -304,6 +313,12 @@ func (c *Config) validate() error {
+ 		return errors.New("election tick must be greater than heartbeat tick")
+ 	}
+ 
++	if c.RandomizedElectionTimeout != 0 &&
++		(c.RandomizedElectionTimeout < c.ElectionTick ||
++			c.RandomizedElectionTimeout > 2*c.ElectionTick-1) {
++		return errors.New("randomized election timeout must be in [election tick, 2*election tick - 1] or 0")
++	}
++
+ 	if c.Storage == nil {
+ 		return errors.New("storage cannot be nil")
+ 	}
+@@ -417,8 +432,12 @@ type raft struct {
  	// [electiontimeout, 2 * electiontimeout - 1]. It gets reset
  	// when raft changes its state to follower or candidate.
  	randomizedElectionTimeout int
-+	// fixedElectionTimeout, when true, pins randomizedElectionTimeout to
-+	// Config.RandomizedElectionTimeout and suppresses re-randomization on
-+	// reset. It is intended for deterministic tests.
-+	fixedElectionTimeout      bool
- 	disableProposalForwarding bool
- 	stepDownOnRemoval         bool
+-	disableProposalForwarding bool
+-	stepDownOnRemoval         bool
++	// randomizedElectionTimeoutOverride, when non-zero, is honored by
++	// resetRandomizedElectionTimeout instead of drawing a new random value.
++	// It is set once from Config.RandomizedElectionTimeout.
++	randomizedElectionTimeoutOverride int
++	disableProposalForwarding         bool
++	stepDownOnRemoval                 bool
  
-@@ -461,6 +479,8 @@ func newRaft(c *Config) *raft {
- 		disableProposalForwarding:   c.DisableProposalForwarding,
- 		disableConfChangeValidation: c.DisableConfChangeValidation,
- 		stepDownOnRemoval:           c.StepDownOnRemoval,
-+		fixedElectionTimeout:        c.RandomizedElectionTimeout != 0,
-+		randomizedElectionTimeout:   c.RandomizedElectionTimeout,
- 		traceLogger:                 c.TraceLogger,
+ 	tick func()
+ 	step stepFunc
+@@ -445,23 +464,24 @@ func newRaft(c *Config) *raft {
  	}
  
-@@ -2047,6 +2067,9 @@ func (r *raft) pastElectionTimeout() bool {
+ 	r := &raft{
+-		id:                          c.ID,
+-		lead:                        None,
+-		isLearner:                   false,
+-		raftLog:                     raftlog,
+-		maxMsgSize:                  entryEncodingSize(c.MaxSizePerMsg),
+-		maxUncommittedSize:          entryPayloadSize(c.MaxUncommittedEntriesSize),
+-		trk:                         tracker.MakeProgressTracker(c.MaxInflightMsgs, c.MaxInflightBytes),
+-		electionTimeout:             c.ElectionTick,
+-		heartbeatTimeout:            c.HeartbeatTick,
+-		logger:                      c.Logger,
+-		checkQuorum:                 c.CheckQuorum,
+-		preVote:                     c.PreVote,
+-		readOnly:                    newReadOnly(c.ReadOnlyOption),
+-		disableProposalForwarding:   c.DisableProposalForwarding,
+-		disableConfChangeValidation: c.DisableConfChangeValidation,
+-		stepDownOnRemoval:           c.StepDownOnRemoval,
+-		traceLogger:                 c.TraceLogger,
++		id:                                c.ID,
++		lead:                              None,
++		isLearner:                         false,
++		raftLog:                           raftlog,
++		maxMsgSize:                        entryEncodingSize(c.MaxSizePerMsg),
++		maxUncommittedSize:                entryPayloadSize(c.MaxUncommittedEntriesSize),
++		trk:                               tracker.MakeProgressTracker(c.MaxInflightMsgs, c.MaxInflightBytes),
++		electionTimeout:                   c.ElectionTick,
++		heartbeatTimeout:                  c.HeartbeatTick,
++		randomizedElectionTimeoutOverride: c.RandomizedElectionTimeout,
++		logger:                            c.Logger,
++		checkQuorum:                       c.CheckQuorum,
++		preVote:                           c.PreVote,
++		readOnly:                          newReadOnly(c.ReadOnlyOption),
++		disableProposalForwarding:         c.DisableProposalForwarding,
++		disableConfChangeValidation:       c.DisableConfChangeValidation,
++		stepDownOnRemoval:                 c.StepDownOnRemoval,
++		traceLogger:                       c.TraceLogger,
+ 	}
+ 
+ 	traceInitState(r)
+@@ -2047,6 +2067,10 @@ func (r *raft) pastElectionTimeout() bool {
  }
  
  func (r *raft) resetRandomizedElectionTimeout() {
-+	if r.fixedElectionTimeout {
++	if r.randomizedElectionTimeoutOverride != 0 {
++		r.randomizedElectionTimeout = r.randomizedElectionTimeoutOverride
 +		return
 +	}
  	r.randomizedElectionTimeout = r.electionTimeout + globalRand.Intn(r.electionTimeout)
  }
  
-diff --git a/rafttest/doc.go b/rafttest/doc.go
-index bba9a1a..3c89e38 100644
---- a/rafttest/doc.go
-+++ b/rafttest/doc.go
-@@ -13,4 +13,10 @@
- // limitations under the License.
- 
- // Package rafttest provides functional tests for etcd's raft implementation.
-+//
-+// The InteractionEnv test environment supports message capture: protocol
-+// messages produced during Ready handling (ProcessReady and the asynchronous
-+// storage-thread handlers) are parked in the env's pending store with stable
-+// control-plane IDs instead of continuing automatically. Tests can list them
-+// with ListPending and discard them with ClearPending.
- package rafttest
-diff --git a/rafttest/inject.go b/rafttest/inject.go
-new file mode 100644
-index 0000000..d5bd59f
---- /dev/null
-+++ b/rafttest/inject.go
-@@ -0,0 +1,101 @@
-+// Copyright 2024 The etcd Authors
-+//
-+// Licensed under the Apache License, Version 2.0 (the "License");
-+// you may not use this file except in compliance with the License.
-+// You may obtain a copy of the License at
-+//
-+//     http://www.apache.org/licenses/LICENSE-2.0
-+//
-+// Unless required by applicable law or agreed to in writing, software
-+// distributed under the License is distributed on an "AS IS" BASIS,
-+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+// See the License for the specific language governing permissions and
-+// limitations under the License.
-+
-+package rafttest
-+
-+import (
-+	"fmt"
-+
-+	"go.etcd.io/raft/v3/raftpb"
-+)
-+
-+// InjectByID selects the pending message with the given stable control-plane ID
-+// from the env's pending store (see ListPending) and delivers it through the
-+// normal protocol input entrypoint of its recorded recipient: the recipient is
-+// bound to the env node env.Nodes[Msg.To-1] and the message is handed to that
-+// node's RawNode.Step unchanged, so sender (Msg.From), receiver (Msg.To), and
-+// content are preserved. The delivered message is returned unchanged.
-+//
-+// Only the selected message is consumed: after a successful delivery it is
-+// removed from the pending store and from the in-flight Messages queue, so it
-+// cannot be delivered again by DeliverMsgs or Stabilize. If no pending message
-+// carries the given ID, or the recipient node is not part of the env, an error
-+// is returned and nothing is consumed. If the recipient's Step entrypoint
-+// returns an error, the target's existing error semantics are preserved: the
-+// error is returned and the message is left pending so that the caller can
-+// retry it, drop it (DeliverMsgs with Drop), or discard it (ClearPending).
-+func (env *InteractionEnv) InjectByID(id uint64) (raftpb.Message, error) {
-+	idx := -1
-+	for i := range env.pending {
-+		if env.pending[i].ID == id {
-+			idx = i
-+			break
-+		}
-+	}
-+	if idx == -1 {
-+		return raftpb.Message{}, fmt.Errorf("no pending message with ID %d", id)
-+	}
-+	p := env.pending[idx]
-+	toIdx := int(p.Msg.To - 1)
-+	if toIdx < 0 || toIdx >= len(env.Nodes) {
-+		return raftpb.Message{}, fmt.Errorf("pending message %d targets node %d, which is not part of the env", id, p.Msg.To)
-+	}
-+	// Deliver through the normal protocol input entrypoint of the recipient,
-+	// preserving the captured message unchanged.
-+	if err := env.Nodes[toIdx].Step(p.Msg); err != nil {
-+		return p.Msg, err
-+	}
-+	// Consume only the selected message. env.pending and env.Messages remain
-+	// aligned (capturePending appends the same messages to both, and
-+	// DeliverMsgs/ClearPending remove from both), so the pending index is also
-+	// the Messages index.
-+	env.pending = append(env.pending[:idx], env.pending[idx+1:]...)
-+	env.Messages = append(env.Messages[:idx], env.Messages[idx+1:]...)
-+	return p.Msg, nil
-+}
-+
-+// injectByID selects the captured message with the given stable control-plane
-+// ID from the node's pending store (capture mode only; see startNodeWithCapture)
-+// and delivers it through the normal protocol input entrypoint of its recorded
-+// recipient: the message is routed via the node's iface into the recipient's
-+// receive queue, which the recipient's run loop feeds into Node.Step. Only the
-+// selected message is consumed from the node's pending store; sender, receiver,
-+// and content are preserved, and the delivered message is returned unchanged.
-+//
-+// Delivery is asynchronous and follows the harness's existing network
-+// semantics: like any other iface.send, the message can be dropped when the
-+// recipient is disconnected, matches a dropmap entry, or has a full receive
-+// queue. Returns an error if no captured message carries the given ID.
-+func (n *node) injectByID(id uint64) (raftpb.Message, error) {
-+	n.mu.Lock()
-+	idx := -1
-+	for i := range n.captured {
-+		if n.captured[i].ID == id {
-+			idx = i
-+			break
-+		}
-+	}
-+	if idx == -1 {
-+		n.mu.Unlock()
-+		return raftpb.Message{}, fmt.Errorf("no captured message with ID %d", id)
-+	}
-+	p := n.captured[idx]
-+	n.captured = append(n.captured[:idx], n.captured[idx+1:]...)
-+	n.mu.Unlock()
-+
-+	// Route the message through the existing iface; the recipient's run loop
-+	// consumes it and hands it to Node.Step, the normal protocol input.
-+	n.iface.send(p.Msg)
-+	return p.Msg, nil
-+}
-diff --git a/rafttest/inject_test.go b/rafttest/inject_test.go
-new file mode 100644
-index 0000000..ca98d9f
---- /dev/null
-+++ b/rafttest/inject_test.go
-@@ -0,0 +1,221 @@
-+// Copyright 2024 The etcd Authors
-+//
-+// Licensed under the Apache License, Version 2.0 (the "License");
-+// you may not use this file except in compliance with the License.
-+// You may obtain a copy of the License at
-+//
-+//     http://www.apache.org/licenses/LICENSE-2.0
-+//
-+// Unless required by applicable law or agreed to in writing, software
-+// distributed under the License is distributed on an "AS IS" BASIS,
-+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+// See the License for the specific language governing permissions and
-+// limitations under the License.
-+
-+package rafttest
-+
-+import (
-+	"testing"
-+	"time"
-+
-+	"github.com/stretchr/testify/require"
-+
-+	"go.etcd.io/raft/v3"
-+	"go.etcd.io/raft/v3/raftpb"
-+)
-+
-+// TestInteractionEnvInjectByID verifies that InjectByID selects one captured
-+// message by its stable control-plane ID, delivers it unchanged through the
-+// recipient's normal protocol input entrypoint (RawNode.Step), and consumes
-+// only that message.
-+func TestInteractionEnvInjectByID(t *testing.T) {
-+	env := twoNodeEnv(t)
-+
-+	require.NoError(t, env.Campaign(0))
-+	require.NoError(t, env.ProcessReady(0))
-+
-+	pend := env.ListPending()
-+	require.Len(t, pend, 1)
-+	require.Equal(t, raftpb.MsgVote, pend[0].Msg.Type)
-+
-+	delivered, err := env.InjectByID(pend[0].ID)
-+	require.NoError(t, err)
-+	// Sender, receiver, and content are preserved.
-+	require.Equal(t, pend[0].Msg, delivered)
-+	require.Equal(t, uint64(1), delivered.From)
-+	require.Equal(t, uint64(2), delivered.To)
-+
-+	// Only the selected message was consumed: the store is now empty.
-+	require.Empty(t, env.ListPending())
-+	require.Empty(t, env.Messages)
-+
-+	// The message entered the protocol through Step: node 2 processed it.
-+	require.Equal(t, uint64(1), env.Nodes[1].BasicStatus().HardState.Vote)
-+}
-+
-+// TestInteractionEnvInjectByIDUnknownID verifies that an unknown ID leaves the
-+// pending store and the in-flight Messages queue untouched.
-+func TestInteractionEnvInjectByIDUnknownID(t *testing.T) {
-+	env := twoNodeEnv(t)
-+	require.NoError(t, env.Campaign(0))
-+	require.NoError(t, env.ProcessReady(0))
-+	pend := env.ListPending()
-+	require.Len(t, pend, 1)
-+
-+	_, err := env.InjectByID(pend[0].ID + 1)
-+	require.Error(t, err)
-+
-+	require.Equal(t, pend, env.ListPending())
-+	require.Len(t, env.Messages, 1)
-+	require.Equal(t, uint64(0), env.Nodes[1].BasicStatus().HardState.Vote)
-+}
-+
-+// TestInteractionEnvInjectByIDConsumesOnlySelected verifies that injecting one
-+// of several pending messages consumes exactly that message and leaves the
-+// others pending and injectable.
-+func TestInteractionEnvInjectByIDConsumesOnlySelected(t *testing.T) {
-+	snap := raftpb.Snapshot{
-+		Metadata: raftpb.SnapshotMetadata{
-+			ConfState: raftpb.ConfState{Voters: []uint64{1, 2, 3}},
-+			Index:     2,
-+		},
-+	}
-+	cfg := raftConfigStub()
-+	cfg.Applied = snap.Metadata.Index
-+	env := NewInteractionEnv(nil)
-+	require.NoError(t, env.AddNodes(3, cfg, snap))
-+
-+	require.NoError(t, env.Campaign(0))
-+	require.NoError(t, env.ProcessReady(0))
-+
-+	pend := env.ListPending()
-+	require.Len(t, pend, 2) // MsgVote to node 2 and node 3
-+	vote2, vote3 := pend[0], pend[1]
-+	require.Equal(t, uint64(2), vote2.Msg.To)
-+	require.Equal(t, uint64(3), vote3.Msg.To)
-+
-+	delivered, err := env.InjectByID(vote2.ID)
-+	require.NoError(t, err)
-+	require.Equal(t, vote2.Msg, delivered)
-+
-+	// Only the selected message was consumed.
-+	rem := env.ListPending()
-+	require.Len(t, rem, 1)
-+	require.Equal(t, vote3.ID, rem[0].ID)
-+	require.Len(t, env.Messages, 1)
-+	require.Equal(t, uint64(1), env.Nodes[1].BasicStatus().HardState.Vote) // node 2 voted
-+	require.Equal(t, uint64(0), env.Nodes[2].BasicStatus().HardState.Vote) // node 3 has not
-+
-+	// The remaining captured message is still injectable.
-+	delivered2, err := env.InjectByID(vote3.ID)
-+	require.NoError(t, err)
-+	require.Equal(t, vote3.Msg, delivered2)
-+	require.Empty(t, env.ListPending())
-+	require.Empty(t, env.Messages)
-+	require.Equal(t, uint64(1), env.Nodes[2].BasicStatus().HardState.Vote)
-+}
-+
-+// TestInteractionEnvInjectByIDAsyncStorageWrites verifies injection on the
-+// async-storage-writes path: storage-thread response messages are captured in
-+// the same pending store and are injectable by ID through the same entrypoint,
-+// entering the protocol via the recipient's RawNode.Step.
-+func TestInteractionEnvInjectByIDAsyncStorageWrites(t *testing.T) {
-+	snap := raftpb.Snapshot{
-+		Metadata: raftpb.SnapshotMetadata{
-+			ConfState: raftpb.ConfState{Voters: []uint64{1, 2}},
-+			Index:     2,
-+		},
-+	}
-+	cfg := raftConfigStub()
-+	cfg.Applied = snap.Metadata.Index
-+	cfg.AsyncStorageWrites = true
-+	env := NewInteractionEnv(nil)
-+	require.NoError(t, env.AddNodes(2, cfg, snap))
-+
-+	// Node 1 campaigns. ProcessReady parks the MsgVote (ID 1) and moves the
-+	// MsgStorageAppend to the append thread.
-+	require.NoError(t, env.Campaign(0))
-+	require.NoError(t, env.ProcessReady(0))
-+	pend := env.ListPending()
-+	require.Len(t, pend, 1)
-+	require.Equal(t, raftpb.MsgVote, pend[0].Msg.Type)
-+
-+	// Running the append thread captures the storage response (ID 2).
-+	require.NoError(t, env.ProcessAppendThread(0))
-+	pend = env.ListPending()
-+	require.Len(t, pend, 2)
-+	require.Equal(t, raftpb.MsgVoteResp, pend[1].Msg.Type)
-+	require.Equal(t, uint64(1), pend[1].Msg.To)
-+
-+	// Inject the captured MsgVote into node 2 and the self-vote response
-+	// into node 1, then process node 2's Ready and append thread, which
-+	// captures node 2's MsgVoteResp (ID 3).
-+	delivered, err := env.InjectByID(pend[0].ID)
-+	require.NoError(t, err)
-+	require.Equal(t, uint64(2), delivered.To)
-+	delivered, err = env.InjectByID(pend[1].ID)
-+	require.NoError(t, err)
-+	require.Equal(t, uint64(1), delivered.To)
-+	require.NoError(t, env.ProcessReady(1))
-+	require.NoError(t, env.ProcessAppendThread(1))
-+	pend = env.ListPending()
-+	require.Len(t, pend, 1)
-+	require.Equal(t, raftpb.MsgVoteResp, pend[0].Msg.Type)
-+	require.Equal(t, uint64(2), pend[0].Msg.From)
-+	require.Equal(t, uint64(1), pend[0].Msg.To)
-+
-+	// Inject node 2's vote response into node 1: with the self-vote from the
-+	// storage response (already injected) and node 2's vote, node 1 wins
-+	// the election.
-+	delivered, err = env.InjectByID(pend[0].ID)
-+	require.NoError(t, err)
-+	require.Equal(t, uint64(2), delivered.From)
-+	require.Equal(t, uint64(1), delivered.To)
-+	require.Empty(t, env.ListPending())
-+	require.Empty(t, env.Messages)
-+	require.Equal(t, uint64(1), env.Nodes[0].Status().Lead)
-+}
-+
-+// TestNodeInjectByID exercises injection on the Node async goroutine path: the
-+// captured message is selected by ID from the node's pending store and routed
-+// through the existing iface into the recipient's Node.Step.
-+func TestNodeInjectByID(t *testing.T) {
-+	peers := []raft.Peer{{ID: 1}, {ID: 2}}
-+	nt := newRaftNetwork(1, 2)
-+	n1 := startNodeWithCapture(1, peers, nt.nodeNetwork(1))
-+	n2 := startNodeWithCapture(2, peers, nt.nodeNetwork(2))
-+	// Keep n2 from ticking (and thus from campaigning) until the injected
-+	// vote arrives: while paused it buffers the injected message and steps
-+	// it through Node.Step on resume.
-+	n2.pause()
-+	defer n1.stop()
-+	defer n2.stop()
-+
-+	// Node 1 eventually campaigns (its first campaign is refused until the
-+	// initial configuration-change entries are applied) and its MsgVote is
-+	// parked in its pending store with a stable ID.
-+	require.Eventually(t, func() bool {
-+		pend := n1.listPending()
-+		return len(pend) > 0 && pend[0].Msg.Type == raftpb.MsgVote
-+	}, 5*time.Second, 10*time.Millisecond)
-+	vote := n1.listPending()[0]
-+
-+	delivered, err := n1.injectByID(vote.ID)
-+	require.NoError(t, err)
-+	// Sender, receiver, and content are preserved.
-+	require.Equal(t, vote.Msg, delivered)
-+	require.Equal(t, uint64(1), delivered.From)
-+	require.Equal(t, uint64(2), delivered.To)
-+
-+	// Only the selected message was consumed from the node's store.
-+	for _, p := range n1.listPending() {
-+		require.NotEqual(t, vote.ID, p.ID)
-+	}
-+
-+	// Resuming n2 delivers the buffered vote through its normal protocol
-+	// input entrypoint (Node.Step), and node 2 grants it.
-+	n2.resume()
-+	require.Eventually(t, func() bool {
-+		return n2.Status().HardState.Vote == 1
-+	}, 5*time.Second, 10*time.Millisecond)
-+}
-diff --git a/rafttest/interaction_env.go b/rafttest/interaction_env.go
-index 16881c4..4e69dd9 100644
---- a/rafttest/interaction_env.go
-+++ b/rafttest/interaction_env.go
-@@ -51,6 +51,12 @@ type InteractionEnv struct {
- 	Nodes    []Node
- 	Messages []pb.Message // in-flight messages
- 
-+	// pending is the capture store: every message parked in Messages is also
-+	// recorded here with a stable control-plane ID assigned at capture time
-+	// (see PendingMessage and capturePending).
-+	pending       []PendingMessage
-+	nextPendingID uint64
-+
- 	Output *RedirectLogger
- }
- 
-diff --git a/rafttest/interaction_env_handler_deliver_msgs.go b/rafttest/interaction_env_handler_deliver_msgs.go
-index af8534c..3c8383f 100644
---- a/rafttest/interaction_env_handler_deliver_msgs.go
-+++ b/rafttest/interaction_env_handler_deliver_msgs.go
-@@ -77,12 +77,14 @@ type Recipient struct {
- // DeliverMsgs goes through env.Messages and, depending on the Drop flag,
- // delivers or drops messages to the specified Recipients. Only messages of type
- // typ are delivered (-1 for all types). Returns the number of messages handled
--// (i.e. delivered or dropped). A handled message is removed from env.Messages.
-+// (i.e. delivered or dropped). A handled message is removed from env.Messages
-+// and from the env's pending store, so it no longer appears in ListPending.
- func (env *InteractionEnv) DeliverMsgs(typ raftpb.MessageType, rs ...Recipient) int {
- 	var n int
- 	for _, r := range rs {
- 		var msgs []raftpb.Message
- 		msgs, env.Messages = splitMsgs(env.Messages, r.ID, typ, r.Drop)
-+		_, env.pending = splitPending(env.pending, r.ID, typ, r.Drop)
- 		n += len(msgs)
- 		for _, msg := range msgs {
- 			if r.Drop {
-diff --git a/rafttest/interaction_env_handler_process_append_thread.go b/rafttest/interaction_env_handler_process_append_thread.go
-index 4136321..6e38fc1 100644
---- a/rafttest/interaction_env_handler_process_append_thread.go
-+++ b/rafttest/interaction_env_handler_process_append_thread.go
-@@ -74,7 +74,9 @@ func (env *InteractionEnv) ProcessAppendThread(idx int) error {
- 	for _, m := range resps {
- 		env.Output.WriteString(raft.DescribeMessage(m, defaultEntryFormatter) + "\n")
- 	}
--	env.Messages = append(env.Messages, resps...)
-+	// Storage-thread responses are protocol output of the node; park them in
-+	// the pending store with stable control-plane IDs.
-+	env.capturePending(resps)
- 	return nil
- }
- 
-diff --git a/rafttest/interaction_env_handler_process_apply_thread.go b/rafttest/interaction_env_handler_process_apply_thread.go
-index d21317e..99915a3 100644
---- a/rafttest/interaction_env_handler_process_apply_thread.go
-+++ b/rafttest/interaction_env_handler_process_apply_thread.go
-@@ -64,7 +64,9 @@ func (env *InteractionEnv) ProcessApplyThread(idx int) error {
- 	for _, m := range resps {
- 		env.Output.WriteString(raft.DescribeMessage(m, defaultEntryFormatter) + "\n")
- 	}
--	env.Messages = append(env.Messages, resps...)
-+	// Storage-thread responses are protocol output of the node; park them in
-+	// the pending store with stable control-plane IDs.
-+	env.capturePending(resps)
- 	return nil
- }
- 
-diff --git a/rafttest/interaction_env_handler_process_ready.go b/rafttest/interaction_env_handler_process_ready.go
-index e72d3d9..d21ac6a 100644
---- a/rafttest/interaction_env_handler_process_ready.go
-+++ b/rafttest/interaction_env_handler_process_ready.go
-@@ -57,6 +57,7 @@ func (env *InteractionEnv) ProcessReady(idx int) error {
- 		}
- 	}
- 
-+	var msgs []raftpb.Message
- 	for _, m := range rd.Messages {
- 		if raft.IsLocalMsgTarget(m.To) {
- 			if !n.Config.AsyncStorageWrites {
-@@ -71,9 +72,13 @@ func (env *InteractionEnv) ProcessReady(idx int) error {
- 				panic(fmt.Sprintf("unexpected message type %s", m.Type))
- 			}
- 		} else {
--			env.Messages = append(env.Messages, m)
-+			msgs = append(msgs, m)
- 		}
- 	}
-+	// Park the protocol output in the pending store (with stable control-plane
-+	// IDs) and in the in-flight Messages queue. The messages do not continue
-+	// automatically; they are delivered only via DeliverMsgs/Stabilize.
-+	env.capturePending(msgs)
- 
- 	if !n.Config.AsyncStorageWrites {
- 		n.Advance(rd)
-diff --git a/rafttest/interaction_env_handler_send_snapshot.go b/rafttest/interaction_env_handler_send_snapshot.go
-index c91d4cc..9a0a7f6 100644
---- a/rafttest/interaction_env_handler_send_snapshot.go
-+++ b/rafttest/interaction_env_handler_send_snapshot.go
-@@ -44,7 +44,9 @@ func (env *InteractionEnv) SendSnapshot(fromIdx, toIdx int) error {
- 		To:       to,
- 		Snapshot: &snap,
- 	}
--	env.Messages = append(env.Messages, msg)
-+	// Park the message in the pending store so it is visible to ListPending
-+	// and consumed consistently by the delivery machinery.
-+	env.capturePending([]raftpb.Message{msg})
- 	_, _ = env.Output.WriteString(raft.DescribeMessage(msg, nil))
- 	return nil
- }
-diff --git a/rafttest/node.go b/rafttest/node.go
-index b32408b..f68ad21 100644
---- a/rafttest/node.go
-+++ b/rafttest/node.go
-@@ -32,6 +32,16 @@ type node struct {
- 	stopc  chan struct{}
- 	pausec chan bool
- 
-+	// capture, when true, parks the messages produced by the Ready loop in the
-+	// node's pending store (captured) instead of sending them over iface. It
-+	// must be set before the node is started (see startNodeWithCapture).
-+	capture bool
-+
-+	// captured holds the messages parked in capture mode, with stable
-+	// control-plane IDs assigned at capture time. Guarded by mu.
-+	captured   []PendingMessage
-+	capturedID uint64
-+
- 	// stable
- 	storage *raft.MemoryStorage
- 
-@@ -40,6 +50,18 @@ type node struct {
- }
- 
- func startNode(id uint64, peers []raft.Peer, iface iface) *node {
-+	return newNode(id, peers, iface, false)
-+}
-+
-+// startNodeWithCapture starts a node whose Ready-loop output is parked in the
-+// node's pending store (with stable control-plane IDs) instead of being sent
-+// over the network. The parked messages do not continue automatically; the
-+// test must deliver them explicitly.
-+func startNodeWithCapture(id uint64, peers []raft.Peer, iface iface) *node {
-+	return newNode(id, peers, iface, true)
-+}
-+
-+func newNode(id uint64, peers []raft.Peer, iface iface, capture bool) *node {
- 	st := raft.NewMemoryStorage()
- 	c := &raft.Config{
- 		ID:                        id,
-@@ -57,6 +79,7 @@ func startNode(id uint64, peers []raft.Peer, iface iface) *node {
- 		storage: st,
- 		iface:   iface,
- 		pausec:  make(chan bool),
-+		capture: capture,
- 	}
- 	n.start()
- 	return n
-@@ -81,13 +104,24 @@ func (n *node) start() {
- 				n.storage.Append(rd.Entries)
- 				time.Sleep(time.Millisecond)
- 
--				// simulate async send, more like real world...
--				for _, m := range rd.Messages {
--					mlocal := m
--					go func() {
--						time.Sleep(time.Duration(rand.Int63n(10)) * time.Millisecond)
--						n.iface.send(mlocal)
--					}()
-+				if n.capture {
-+					// Park the protocol output in the node's pending store instead
-+					// of sending it; it must not continue along the original path.
-+					n.mu.Lock()
-+					for _, m := range rd.Messages {
-+						n.capturedID++
-+						n.captured = append(n.captured, PendingMessage{ID: n.capturedID, Msg: m})
-+					}
-+					n.mu.Unlock()
-+				} else {
-+					// simulate async send, more like real world...
-+					for _, m := range rd.Messages {
-+						mlocal := m
-+						go func() {
-+							time.Sleep(time.Duration(rand.Int63n(10)) * time.Millisecond)
-+							n.iface.send(mlocal)
-+						}()
-+					}
+diff --git a/rafttest/interaction_env_handler_add_nodes.go b/rafttest/interaction_env_handler_add_nodes.go
+index e68a295..56ba168 100644
+--- a/rafttest/interaction_env_handler_add_nodes.go
++++ b/rafttest/interaction_env_handler_add_nodes.go
+@@ -69,6 +69,8 @@ func (env *InteractionEnv) handleAddNodes(t *testing.T, d datadriven.TestData) e
  				}
- 				n.Advance()
- 			case m := <-n.iface.recv():
-@@ -116,6 +150,23 @@ func (n *node) start() {
- 	}()
- }
- 
-+// listPending returns a copy of the messages captured by this node (capture
-+// mode only), in capture order, with stable control-plane IDs.
-+func (n *node) listPending() []PendingMessage {
-+	n.mu.Lock()
-+	defer n.mu.Unlock()
-+	out := make([]PendingMessage, len(n.captured))
-+	copy(out, n.captured)
-+	return out
-+}
-+
-+// clearPending removes all captured messages from the node's pending store.
-+func (n *node) clearPending() {
-+	n.mu.Lock()
-+	defer n.mu.Unlock()
-+	n.captured = nil
-+}
-+
- // stop stops the node. stop a stopped node might panic.
- // All in memory state of node is discarded.
- // All stable MUST be unchanged.
-diff --git a/rafttest/pending_msgs.go b/rafttest/pending_msgs.go
+ 			case "step-down-on-removal":
+ 				arg.Scan(t, i, &cfg.StepDownOnRemoval)
++			case "randomized-election-timeout":
++				arg.Scan(t, i, &cfg.RandomizedElectionTimeout)
+ 			}
+ 		}
+ 	}
+diff --git a/rafttest/interaction_env_randomness_test.go b/rafttest/interaction_env_randomness_test.go
 new file mode 100644
-index 0000000..e828c3f
+index 0000000..ec4e0d0
 --- /dev/null
-+++ b/rafttest/pending_msgs.go
-@@ -0,0 +1,78 @@
++++ b/rafttest/interaction_env_randomness_test.go
+@@ -0,0 +1,50 @@
 +// Copyright 2024 The etcd Authors
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -638,227 +135,45 @@ index 0000000..e828c3f
 +package rafttest
 +
 +import (
-+	"go.etcd.io/raft/v3/raftpb"
-+)
-+
-+// PendingMessage is a protocol message parked in an env's pending store at the
-+// time it was produced by a node. The ID is a stable control-plane identity
-+// assigned at capture time; it is unique within the pending store of the
-+// capturing env and is not derived from any protocol field (term, index, type,
-+// or payload).
-+type PendingMessage struct {
-+	// ID is the stable control-plane identity assigned at capture time.
-+	ID uint64
-+	// Msg is the captured protocol message with sender and receiver intact.
-+	Msg raftpb.Message
-+}
-+
-+// capturePending parks msgs in the env's pending store, assigning stable
-+// control-plane IDs at capture time, and mirrors them into the in-flight
-+// Messages queue so that the existing delivery machinery (DeliverMsgs,
-+// Stabilize) consumes them. Messages captured this way never continue along
-+// their original path: they are only delivered when explicitly handed to a
-+// node's Step entrypoint via DeliverMsgs.
-+func (env *InteractionEnv) capturePending(msgs []raftpb.Message) {
-+	for _, m := range msgs {
-+		env.nextPendingID++
-+		env.pending = append(env.pending, PendingMessage{ID: env.nextPendingID, Msg: m})
-+	}
-+	env.Messages = append(env.Messages, msgs...)
-+}
-+
-+// ListPending returns a copy of the messages currently parked in the env's
-+// pending store, in capture order. Each entry carries a stable control-plane ID
-+// assigned at capture time (PendingMessage.ID) plus the full message: sender in
-+// Msg.From, receiver in Msg.To, and message type in Msg.Type. The returned
-+// slice is a copy; modifying it does not affect the env.
-+func (env *InteractionEnv) ListPending() []PendingMessage {
-+	out := make([]PendingMessage, len(env.pending))
-+	copy(out, env.pending)
-+	return out
-+}
-+
-+// ClearPending removes all messages from the env's pending store and from the
-+// in-flight Messages queue. Cleared messages are never delivered.
-+func (env *InteractionEnv) ClearPending() {
-+	env.pending = nil
-+	env.Messages = nil
-+}
-+
-+// splitPending extracts the pending records for the given recipient of the
-+// given type (-1 for all types) from pend, mirroring splitMsgs. It returns the
-+// extracted records along with the remainder.
-+func splitPending(pend []PendingMessage, to uint64, typ raftpb.MessageType, drop bool) (toPend []PendingMessage, rmdr []PendingMessage) {
-+	// NB: this method does not reorder messages.
-+	for _, p := range pend {
-+		if p.Msg.To == to && !(drop && isLocalMsg(p.Msg)) && (typ < 0 || p.Msg.Type == typ) {
-+			toPend = append(toPend, p)
-+		} else {
-+			rmdr = append(rmdr, p)
-+		}
-+	}
-+	return toPend, rmdr
-+}
-diff --git a/rafttest/pending_msgs_test.go b/rafttest/pending_msgs_test.go
-new file mode 100644
-index 0000000..5c93d5c
---- /dev/null
-+++ b/rafttest/pending_msgs_test.go
-@@ -0,0 +1,148 @@
-+// Copyright 2024 The etcd Authors
-+//
-+// Licensed under the Apache License, Version 2.0 (the "License");
-+// you may not use this file except in compliance with the License.
-+// You may obtain a copy of the License at
-+//
-+//     http://www.apache.org/licenses/LICENSE-2.0
-+//
-+// Unless required by applicable law or agreed to in writing, software
-+// distributed under the License is distributed on an "AS IS" BASIS,
-+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+// See the License for the specific language governing permissions and
-+// limitations under the License.
-+
-+package rafttest
-+
-+import (
-+	"context"
 +	"testing"
-+	"time"
 +
++	"github.com/cockroachdb/datadriven"
 +	"github.com/stretchr/testify/require"
 +
 +	"go.etcd.io/raft/v3"
-+	"go.etcd.io/raft/v3/raftpb"
 +)
 +
-+// twoNodeEnv returns a fresh InteractionEnv with two voters (IDs 1 and 2)
-+// bootstrapped at index 2.
-+func twoNodeEnv(t *testing.T) *InteractionEnv {
-+	t.Helper()
-+	snap := raftpb.Snapshot{
-+		Metadata: raftpb.SnapshotMetadata{
-+			ConfState: raftpb.ConfState{Voters: []uint64{1, 2}},
-+			Index:     2,
++// TestAddNodesRandomizedElectionTimeout verifies that the add-nodes command
++// accepts a randomized-election-timeout argument and that the fixed value
++// makes election timing deterministic: with the raftConfigStub's ElectionTick
++// of 3, a fixed timeout of 5 fires the election on exactly the 5th tick.
++func TestAddNodesRandomizedElectionTimeout(t *testing.T) {
++	env := NewInteractionEnv(nil)
++	d := datadriven.TestData{
++		Cmd: "add-nodes",
++		CmdArgs: []datadriven.CmdArg{
++			{Key: "1"},
++			{Key: "voters", Vals: []string{"1"}},
++			{Key: "index", Vals: []string{"2"}},
++			{Key: "randomized-election-timeout", Vals: []string{"5"}},
 +		},
 +	}
-+	cfg := raftConfigStub()
-+	cfg.Applied = snap.Metadata.Index
-+	env := NewInteractionEnv(nil)
-+	require.NoError(t, env.AddNodes(2, cfg, snap))
-+	return env
-+}
-+
-+// TestInteractionEnvCapturePending exercises the pending capture store on the
-+// RawNode synchronous path: ProcessReady parks protocol output with stable
-+// control-plane IDs, the captured message does not continue automatically, and
-+// DeliverMsgs consumes exactly the delivered message.
-+func TestInteractionEnvCapturePending(t *testing.T) {
-+	env := twoNodeEnv(t)
-+	require.Empty(t, env.ListPending())
-+
-+	// Node 1 campaigns; the resulting MsgVote is protocol output of node 1.
-+	require.NoError(t, env.Campaign(0))
-+	require.NoError(t, env.ProcessReady(0))
-+
-+	pend := env.ListPending()
-+	require.Len(t, pend, 1)
-+	p := pend[0]
-+	require.Equal(t, uint64(1), p.ID) // first capture in this env
-+	require.Equal(t, raftpb.MsgVote, p.Msg.Type)
-+	require.Equal(t, uint64(1), p.Msg.From)
-+	require.Equal(t, uint64(2), p.Msg.To)
-+
-+	// The captured message must not continue along its original path: it is
-+	// still pending and node 2 has not seen it.
-+	require.Len(t, env.ListPending(), 1)
-+	require.Equal(t, uint64(0), env.Nodes[1].BasicStatus().HardState.Vote) // not voted
-+
-+	// Delivering the captured message consumes it from the pending store.
-+	env.DeliverMsgs(-1 /* typ */, Recipient{ID: 2})
-+	require.Empty(t, env.ListPending())
-+	require.Empty(t, env.Messages)
-+}
-+
-+// TestInteractionEnvClearPending verifies that ClearPending discards captured
-+// messages so that they are never delivered.
-+func TestInteractionEnvClearPending(t *testing.T) {
-+	env := twoNodeEnv(t)
-+
-+	require.NoError(t, env.Campaign(0))
-+	require.NoError(t, env.ProcessReady(0))
-+	require.NotEmpty(t, env.ListPending())
-+
-+	env.ClearPending()
-+	require.Empty(t, env.ListPending())
-+	require.Empty(t, env.Messages)
-+
-+	// Stabilization must not deliver the cleared messages.
-+	require.NoError(t, env.Stabilize())
-+	require.Empty(t, env.ListPending())
-+	require.Empty(t, env.Messages)
-+}
-+
-+// TestInteractionEnvCaptureOrder verifies that IDs are assigned at capture time
-+// and increase across captures, and that messages captured from different
-+// nodes share one store.
-+func TestInteractionEnvCaptureOrder(t *testing.T) {
-+	env := twoNodeEnv(t)
-+
-+	// Node 1 campaigns and its MsgVote is captured first (ID 1).
-+	require.NoError(t, env.Campaign(0))
-+	require.NoError(t, env.ProcessReady(0))
-+
-+	// Deliver the vote to node 2 and process node 2's Ready: the MsgVoteResp
-+	// produced by node 2 is captured next (ID 2).
-+	env.DeliverMsgs(-1 /* typ */, Recipient{ID: 2})
-+	require.NoError(t, env.ProcessReady(1))
-+
-+	pend := env.ListPending()
-+	require.Len(t, pend, 1)
-+	require.Equal(t, raftpb.MsgVoteResp, pend[0].Msg.Type)
-+	require.Equal(t, uint64(2), pend[0].ID)
-+	require.Equal(t, uint64(2), pend[0].Msg.From)
-+	require.Equal(t, uint64(1), pend[0].Msg.To)
-+
-+	// ListPending returns a defensive copy: mutating it must not affect the
-+	// env's store.
-+	pend[0].ID = 999
-+	require.Equal(t, uint64(2), env.ListPending()[0].ID)
-+}
-+
-+// TestNodeCapturePending exercises the Node async goroutine path: the rafttest
-+// node harness parks Ready-loop output in its pending store (with stable
-+// control-plane IDs) instead of sending it over the network.
-+func TestNodeCapturePending(t *testing.T) {
-+	peers := []raft.Peer{{ID: 1}, {ID: 2}}
-+	nt := newRaftNetwork(1, 2)
-+	n := startNodeWithCapture(1, peers, nt.nodeNetwork(1))
-+
-+	require.NoError(t, n.Campaign(context.TODO()))
-+
-+	require.Eventually(t, func() bool {
-+		return len(n.listPending()) > 0
-+	}, 5*time.Second, 10*time.Millisecond)
-+
-+	pend := n.listPending()
-+	require.Equal(t, raftpb.MsgVote, pend[0].Msg.Type)
-+	require.Equal(t, uint64(1), pend[0].Msg.From)
-+	require.Equal(t, uint64(2), pend[0].Msg.To)
-+	for i := 1; i < len(pend); i++ {
-+		require.Greater(t, pend[i].ID, pend[i-1].ID)
++	if err := env.handleAddNodes(t, d); err != nil {
++		t.Fatal(err)
 +	}
++	require.Equal(t, 5, env.Nodes[0].Config.RandomizedElectionTimeout)
 +
-+	n.stop()
-+	n.clearPending()
-+	require.Empty(t, n.listPending())
++	env.Tick(0, 4)
++	require.Equal(t, raft.StateFollower, env.Nodes[0].RawNode.Status().RaftState)
++	env.Tick(0, 1)
++	require.NotEqual(t, raft.StateFollower, env.Nodes[0].RawNode.Status().RaftState)
 +}
-diff --git a/randomized_election_timeout_test.go b/randomized_election_timeout_test.go
+diff --git a/randomness_test.go b/randomness_test.go
 new file mode 100644
-index 0000000..ca819a5
+index 0000000..b7c4f49
 --- /dev/null
-+++ b/randomized_election_timeout_test.go
-@@ -0,0 +1,112 @@
++++ b/randomness_test.go
+@@ -0,0 +1,99 @@
 +// Copyright 2024 The etcd Authors
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -875,99 +190,86 @@ index 0000000..ca819a5
 +
 +package raft
 +
-+import "testing"
++import (
++	"testing"
++)
 +
-+// TestRandomizedElectionTimeoutDefault checks that, without the
-+// Config.RandomizedElectionTimeout override, the randomized election timeout
-+// is drawn from [electionTimeout, 2*electionTimeout) and re-drawn on role
-+// transitions.
-+func TestRandomizedElectionTimeoutDefault(t *testing.T) {
-+	c := newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)))
-+	r := newRaft(c)
++// TestConfigRandomizedElectionTimeoutValidation verifies the legal domain of
++// Config.RandomizedElectionTimeout: zero means "randomize as before", and any
++// non-zero value must lie within [ElectionTick, 2*ElectionTick-1].
++func TestConfigRandomizedElectionTimeoutValidation(t *testing.T) {
++	storage := NewMemoryStorage()
++	base := newTestConfig(1, 10, 1, storage)
 +
-+	if got := r.randomizedElectionTimeout; got < r.electionTimeout || got >= 2*r.electionTimeout {
-+		t.Fatalf("randomized election timeout %d out of range [%d, %d)", got, r.electionTimeout, 2*r.electionTimeout)
-+	}
-+
-+	r.becomeCandidate()
-+	if got := r.randomizedElectionTimeout; got < r.electionTimeout || got >= 2*r.electionTimeout {
-+		t.Fatalf("after becomeCandidate: randomized election timeout %d out of range [%d, %d)", got, r.electionTimeout, 2*r.electionTimeout)
-+	}
-+}
-+
-+// TestConfigRandomizedElectionTimeoutOverride checks that
-+// Config.RandomizedElectionTimeout pins the randomized election timeout and
-+// that the pinned value survives every role transition (i.e. every reset that
-+// would otherwise re-randomize it).
-+func TestConfigRandomizedElectionTimeoutOverride(t *testing.T) {
-+	c := newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)))
-+	c.RandomizedElectionTimeout = 13
-+	r := newRaft(c)
-+
-+	if got := r.randomizedElectionTimeout; got != 13 {
-+		t.Fatalf("expected randomized election timeout 13, got %d", got)
-+	}
-+
-+	r.becomeFollower(r.Term, None)
-+	if got := r.randomizedElectionTimeout; got != 13 {
-+		t.Fatalf("after becomeFollower: expected randomized election timeout 13, got %d", got)
-+	}
-+	r.becomeCandidate()
-+	if got := r.randomizedElectionTimeout; got != 13 {
-+		t.Fatalf("after becomeCandidate: expected randomized election timeout 13, got %d", got)
-+	}
-+	r.becomePreCandidate()
-+	if got := r.randomizedElectionTimeout; got != 13 {
-+		t.Fatalf("after becomePreCandidate: expected randomized election timeout 13, got %d", got)
-+	}
-+	r.becomeLeader()
-+	if got := r.randomizedElectionTimeout; got != 13 {
-+		t.Fatalf("after becomeLeader: expected randomized election timeout 13, got %d", got)
-+	}
-+}
-+
-+// TestConfigRandomizedElectionTimeoutDeterminism checks that two RawNodes
-+// created from identical configs with Config.RandomizedElectionTimeout set
-+// campaign at exactly the configured tick and converge to identical status.
-+func TestConfigRandomizedElectionTimeoutDeterminism(t *testing.T) {
-+	const election = 10
-+
-+	newNode := func() *RawNode {
-+		c := newTestConfig(1, election, 1, newTestMemoryStorage(withPeers(1)))
-+		c.RandomizedElectionTimeout = election
-+		rn, err := NewRawNode(c)
-+		if err != nil {
-+			t.Fatal(err)
++	for _, v := range []int{0, 10, 15, 19} {
++		cfg := *base
++		cfg.RandomizedElectionTimeout = v
++		if err := cfg.validate(); err != nil {
++			t.Fatalf("RandomizedElectionTimeout=%d: unexpected error: %v", v, err)
 +		}
-+		return rn
 +	}
++	for _, v := range []int{-1, 9, 20} {
++		cfg := *base
++		cfg.RandomizedElectionTimeout = v
++		if err := cfg.validate(); err == nil {
++			t.Fatalf("RandomizedElectionTimeout=%d: expected validation error", v)
++		}
++	}
++}
 +
-+	a, b := newNode(), newNode()
-+	for i := 0; i < election-1; i++ {
-+		a.Tick()
-+		b.Tick()
++// TestRandomizedElectionTimeoutFixedSurvivesStateChanges ensures that a fixed
++// Config.RandomizedElectionTimeout is honored by reset() on every state
++// change, unlike the transient test-only setter.
++func TestRandomizedElectionTimeoutFixedSurvivesStateChanges(t *testing.T) {
++	cfg := newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)))
++	cfg.RandomizedElectionTimeout = 13
++	sm := newRaft(cfg)
++	if sm.randomizedElectionTimeout != 13 {
++		t.Fatalf("initial randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
 +	}
-+	if got := a.BasicStatus().RaftState; got != StateFollower {
-+		t.Fatalf("expected node a to still be a follower after %d ticks, got %v", election-1, got)
++	sm.becomeCandidate()
++	if sm.randomizedElectionTimeout != 13 {
++		t.Fatalf("after becomeCandidate randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
 +	}
-+	a.Tick()
-+	b.Tick()
-+	if got := a.BasicStatus().RaftState; got != StateCandidate {
-+		t.Fatalf("expected node a to campaign exactly at tick %d, got %v", election, got)
++	sm.becomeLeader()
++	if sm.randomizedElectionTimeout != 13 {
++		t.Fatalf("after becomeLeader randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
 +	}
-+	if got := a.BasicStatus(); got != b.BasicStatus() {
-+		t.Fatalf("identically configured nodes diverged after campaigning:\na: %+v\nb: %+v", got, b.BasicStatus())
++	sm.becomeFollower(sm.Term+1, None)
++	if sm.randomizedElectionTimeout != 13 {
++		t.Fatalf("after becomeFollower randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
 +	}
-+	// Complete the elections by handling Ready/Advance (which steps each
-+	// node's self vote back into it) and verify the nodes converge again.
-+	for _, rn := range []*RawNode{a, b} {
-+		rd := rn.Ready()
-+		rn.Advance(rd)
++}
++
++// TestRandomizedElectionTimeoutDeterministicElection verifies end-to-end
++// determinism through RawNode: with the timeout fixed at the minimum
++// (ElectionTick), the election fires on exactly the ElectionTick-th Tick.
++func TestRandomizedElectionTimeoutDeterministicElection(t *testing.T) {
++	cfg := newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)))
++	cfg.RandomizedElectionTimeout = 10
++	rn, err := NewRawNode(cfg)
++	if err != nil {
++		t.Fatal(err)
 +	}
-+	if got := a.BasicStatus().RaftState; got != StateLeader {
-+		t.Fatalf("expected node a to become leader after handling Ready, got %v", got)
++	for i := 0; i < 9; i++ {
++		rn.Tick()
++		if st := rn.Status().RaftState; st != StateFollower {
++			t.Fatalf("tick %d: state = %v, want StateFollower", i+1, st)
++		}
 +	}
-+	if got := a.BasicStatus(); got != b.BasicStatus() {
-+		t.Fatalf("identically configured nodes diverged after election:\na: %+v\nb: %+v", got, b.BasicStatus())
++	rn.Tick()
++	if st := rn.Status().RaftState; st == StateFollower {
++		t.Fatalf("tick 10: election did not fire, state = %v", st)
++	}
++}
++
++// TestRandomizedElectionTimeoutDefaultRange checks that the default (zero)
++// configuration still draws from the documented
++// [ElectionTick, 2*ElectionTick-1] range.
++func TestRandomizedElectionTimeoutDefaultRange(t *testing.T) {
++	cfg := newTestConfig(1, 10, 1, NewMemoryStorage())
++	sm := newRaft(cfg)
++	if v := sm.randomizedElectionTimeout; v < 10 || v > 19 {
++		t.Fatalf("randomizedElectionTimeout = %d, want in [10, 19]", v)
 +	}
 +}

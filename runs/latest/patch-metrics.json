@@ -1,39 +1,21 @@
 {
   "existing_production_files_modified": [
     "raft.go",
-    "rafttest/doc.go",
-    "rafttest/interaction_env.go",
-    "rafttest/interaction_env_handler_deliver_msgs.go",
-    "rafttest/interaction_env_handler_process_append_thread.go",
-    "rafttest/interaction_env_handler_process_apply_thread.go",
-    "rafttest/interaction_env_handler_process_ready.go",
-    "rafttest/interaction_env_handler_send_snapshot.go",
-    "rafttest/node.go"
+    "rafttest/interaction_env_handler_add_nodes.go"
   ],
-  "new_production_files": [
-    "rafttest/inject.go",
-    "rafttest/pending_msgs.go"
-  ],
+  "new_production_files": [],
   "existing_test_files_modified": [],
   "new_test_files": [
-    "rafttest/inject_test.go",
-    "rafttest/pending_msgs_test.go",
-    "randomized_election_timeout_test.go"
+    "rafttest/interaction_env_randomness_test.go",
+    "randomness_test.go"
   ],
   "other_files_changed": [],
-  "production_lines_added": 290,
-  "production_lines_deleted": 12,
-  "test_lines_added": 481,
+  "production_lines_added": 45,
+  "production_lines_deleted": 19,
+  "test_lines_added": 149,
   "test_lines_deleted": 0,
   "protocol_core_files_modified": [
     "raft.go",
-    "rafttest/doc.go",
-    "rafttest/interaction_env.go",
-    "rafttest/interaction_env_handler_deliver_msgs.go",
-    "rafttest/interaction_env_handler_process_append_thread.go",
-    "rafttest/interaction_env_handler_process_apply_thread.go",
-    "rafttest/interaction_env_handler_process_ready.go",
-    "rafttest/interaction_env_handler_send_snapshot.go",
-    "rafttest/node.go"
+    "rafttest/interaction_env_handler_add_nodes.go"
   ]
 }

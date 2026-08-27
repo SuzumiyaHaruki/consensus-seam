@@ -1,97 +1,6 @@
 {
-  "message_capture": {
-    "implemented": true,
-    "rediscovered_status": null,
-    "capture_boundary": {
-      "file": "rafttest/interaction_env_handler_process_ready.go",
-      "symbol": "(*InteractionEnv).capturePending",
-      "meaning": "Capture point where protocol output is intercepted: Ready.Messages in ProcessReady, storage-thread responses in ProcessAppendThread/ProcessApplyThread, and SendSnapshot MsgSnap are parked with stable control-plane IDs instead of continuing along their original path"
-    },
-    "pending_store": {
-      "file": "rafttest/interaction_env.go",
-      "symbol": "InteractionEnv.pending",
-      "meaning": "Per-InteractionEnv pending store: pending []PendingMessage records with capture-time IDs (nextPendingID); the rafttest async node harness keeps a separate per-node store (node.captured/capturedID) guarded by mu"
-    },
-    "entrypoint": {
-      "file": "rafttest/pending_msgs.go",
-      "symbol": "(*InteractionEnv).ListPending",
-      "meaning": "Callable list-pending entrypoint over the capture store; ClearPending (same file) is the companion clear entrypoint; both operate on the InteractionEnv pending store"
-    },
-    "copy_strategy": "Captured raftpb.Message values are appended to the store at capture time with an incrementing control-plane ID; ListPending returns a defensive copy of the store slice; delivery/drop removes handled records from env.pending (splitPending) in lockstep with env.Messages (splitMsgs); ClearPending resets both",
-    "production_mode": "Unchanged: no production raft package code modified; capture support lives entirely in the rafttest test-support package",
-    "test_mode": "InteractionEnv capture is always active in rafttest: ProcessReady/ProcessAppendThread/ProcessApplyThread/SendSnapshot park protocol output, and nothing auto-continues; the rafttest async node harness requires opt-in startNodeWithCapture, while default startNode preserves the pre-existing auto-send behavior",
-    "message_id_scope": "pending_store_instance",
-    "controller_operations": "serialized",
-    "covered_paths": [
-      "RawNode synchronous path: InteractionEnv.ProcessReady parks rd.Messages via capturePending into env.pending (stable capture-time IDs) and env.Messages; captured messages do not continue automatically and are delivered only when explicitly handed to a node Step entrypoint via DeliverMsgs/Stabilize",
-      "AsyncStorageWrites path: storage-thread responses produced by ProcessAppendThread and ProcessApplyThread are parked via capturePending; SendSnapshot-generated MsgSnap is parked via capturePending",
-      "Node async goroutine path (rafttest harness): opt-in startNodeWithCapture parks Ready-loop rd.Messages in a per-node pending store instead of sending over iface; listPending/clearPending accessors expose the store"
-    ],
-    "uncovered_paths": [],
-    "implementation_approach": [
-      "add_pending_store: per-InteractionEnv pending store (InteractionEnv.pending/nextPendingID) and per-node store in the rafttest async harness (node.captured/capturedID) assigning stable control-plane IDs at capture time",
-      "add_test_hook: capturePending called at ProcessReady, ProcessAppendThread, ProcessApplyThread, and SendSnapshot; DeliverMsgs keeps the store in sync by removing delivered/dropped records",
-      "add_test_only_wrapper: opt-in startNodeWithCapture/listPending/clearPending on the rafttest async node harness covering the Node-async goroutine path; default startNode behavior is unchanged",
-      "add_target_language_tests: rafttest/pending_msgs_test.go covering capture, no-auto-continuation, delivery consumption, ClearPending, capture order, defensive copy, and the async harness path"
-    ],
-    "notes": [
-      "Message IDs are test-control identity assigned at capture time (env.nextPendingID for InteractionEnv, node.capturedID for the async harness); they are never derived from protocol term/index/type/payload and are not added to any protocol message schema",
-      "Captured messages never continue automatically: on the RawNode path they are parked in env.Messages and env.pending and delivered only via DeliverMsgs/Stabilize; on the async harness path capture mode replaces iface.send with the pending store",
-      "DeliverMsgs and drop handling consume handled messages from both env.Messages and env.pending, so delivered/dropped messages no longer appear in ListPending",
-      "AsyncStorageWrites responses are protocol output produced when the storage threads are processed; they are captured in ProcessAppendThread and ProcessApplyThread; SendSnapshot parks its MsgSnap in the same store",
-      "ID scope is per pending-store instance: unique within each InteractionEnv, and within each capture-mode async harness node; cross-node uniqueness is not required by the contract",
-      "The default rafttest node harness (startNode) keeps its existing auto-send behavior; existing node_test.go and node_bench_test.go are unchanged",
-      "Real network send and WAL/disk are outside the system boundary; capture covers protocol output inside the module only",
-      "No scheduling policy is implemented; pending records are listed in capture order and delivery follows existing splitMsgs semantics",
-      "Verification: go test -run '^$' ./... and go test ./rafttest/... pass (checked with readonly go_test/go_test_compile); no production raft package code was modified"
-    ]
-  },
-  "message_injection": {
-    "implemented": true,
-    "rediscovered_status": null,
-    "capture_boundary": {
-      "file": "rafttest/interaction_env_handler_process_ready.go",
-      "symbol": "(*InteractionEnv).ProcessReady",
-      "meaning": "Capture boundary that parks protocol output in the pending store with stable control-plane IDs; the same store (also fed by ProcessAppendThread/ProcessApplyThread/SendSnapshot and, on the Node-async path, by the node Ready loop in capture mode) is the injection source."
-    },
-    "pending_store": {
-      "file": "rafttest/pending_msgs.go",
-      "symbol": "PendingMessage",
-      "meaning": "Captured-message store: PendingMessage{ID, Msg}; IDs are assigned at capture time by capturePending, are unique within the store, and are not derived from protocol fields; records are mirrored into InteractionEnv.Messages so the existing delivery machinery stays consistent."
-    },
-    "entrypoint": {
-      "file": "rafttest/inject.go",
-      "symbol": "(*InteractionEnv).InjectByID",
-      "meaning": "Callable inject-by-stable-ID entrypoint: selects one captured message from the env pending store and delivers it unchanged through the recipient's normal protocol input entrypoint (env.Nodes[Msg.To-1].Step on the RawNode and AsyncStorageWrites paths)."
-    },
-    "copy_strategy": "The captured raftpb.Message is passed by value and unchanged to RawNode.Step / iface.send; ListPending returns a defensive copy of the PendingMessage records; the delivered message is returned to the caller unchanged so sender, receiver, and content can be verified.",
-    "production_mode": "Unchanged: no raft core (production) code was modified; injection is confined to the rafttest test-support package. Protocol conditions, message semantics, persistence semantics, and crash/restart behavior are untouched.",
-    "test_mode": "Enabled by the rafttest test environment: the InteractionEnv pending store (fed by ProcessReady, ProcessAppendThread/ProcessApplyThread, SendSnapshot) and the node harness capture mode (startNodeWithCapture). ListPending exposes stable IDs for selection; InjectByID consumes and delivers.",
-    "message_id_scope": "pending_store_instance",
-    "controller_operations": "serialized",
-    "covered_paths": [
-      "RawNode synchronous path: messages parked by ProcessReady are injected by stable ID via env.Nodes[Msg.To-1].Step; delivery is synchronous, only the selected message is consumed after success, and sender/receiver/content are preserved.",
-      "AsyncStorageWrites path: storage-thread responses parked by ProcessAppendThread/ProcessApplyThread are injected by stable ID through the same env entrypoint into the node's RawNode.Step (same target binding as DeliverMsgs).",
-      "Node async goroutine path: messages parked by the node Ready-loop capture mode (startNodeWithCapture) are injected by stable ID via (*node).injectByID, routed through the existing iface into the recipient's receive queue, which the recipient's run loop feeds into Node.Step."
-    ],
-    "uncovered_paths": [],
-    "implementation_approach": [
-      "Reused the existing rafttest pending store (PendingMessage/capturePending) as the injection source: stable control-plane IDs are assigned at capture time and are not protocol-message fields.",
-      "Added exported test-only entrypoint InteractionEnv.InjectByID(id) that selects by stable ID and delivers through the recipient's real RawNode binding (env.Nodes[Msg.To-1].Step), consuming only the selected message after success.",
-      "Added test-only entrypoint (*node).injectByID(id) on the rafttest node harness (unexported, consistent with listPending/clearPending) that routes the selected captured message through the existing iface into the recipient's Node.Step.",
-      "Added Go tests (rafttest/inject_test.go) covering the RawNode path, unknown-ID handling, consume-only-selected semantics, the AsyncStorageWrites path, and the Node async path."
-    ],
-    "notes": [
-      "Error semantics preserved: on the RawNode path, synchronous errors returned by RawNode.Step (ErrStepLocalMsg for local messages from non-local senders, ErrStepPeerNotFound for response messages from unknown peers, and errors propagated from raft.Step) are returned unchanged, and the message is left pending so the caller can retry it, drop it (DeliverMsgs with Drop), or discard it (ClearPending).",
-      "If the requested ID is not pending, or the recipient node (Msg.To) is not part of the env, InjectByID returns an error and consumes nothing.",
-      "env.pending and env.Messages stay aligned (capturePending appends the same messages to both; DeliverMsgs/ClearPending remove from both), so InjectByID removes the consumed message from both at the same index; the remaining queue stays deliverable by DeliverMsgs/Stabilize.",
-      "Node async path: delivery is routed via the node's iface (the existing simulated transport). Like any iface.send it is asynchronous and may drop the message when the recipient is disconnected, matches a dropmap entry, or has a full receive queue (existing harness semantics); the selected record is consumed when routed.",
-      "ID scope: per-InteractionEnv pending store (pending_store_instance) for InteractionEnv.InjectByID; the node harness maintains a separate per-node store (startNodeWithCapture), so its IDs are unique per node.",
-      "The async-path test pauses the recipient node until the vote is injected so the test is deterministic; the recipient then steps the buffered message through Node.Step on resume, using existing pause/resume harness semantics.",
-      "No scheduling policy, wait-for-quiescence operation, or new protocol error model was introduced; the datadriven handler set was not extended (InjectByID is a callable Go entrypoint).",
-      "No existing files were modified: injection was added in new files rafttest/inject.go and rafttest/inject_test.go, reusing the already-present pending store."
-    ]
-  },
+  "message_capture": null,
+  "message_injection": null,
   "time_control": null,
   "randomness_control": {
     "implemented": true,
@@ -101,34 +10,50 @@
     "entrypoint": {
       "file": "raft.go",
       "symbol": "Config.RandomizedElectionTimeout",
-      "meaning": "New shipped Config option: when non-zero, pins the randomized election timeout; applied at node creation (newRaft) and re-applied on every reset (role transition) inside resetRandomizedElectionTimeout. Zero (default) preserves the existing randomized draw."
+      "meaning": "Optional configuration field: when non-zero it fixes the randomized election timeout to this value on every state change instead of drawing a new random value from [ElectionTick, 2*ElectionTick-1]; zero (default) preserves the existing randomized behavior."
     },
+    "public_entrypoints": [
+      {
+        "file": "raft.go",
+        "symbol": "Config.RandomizedElectionTimeout",
+        "meaning": "Externally importable configuration field; non-zero fixes the randomized election timeout to a value in [ElectionTick, 2*ElectionTick-1] across all state changes; 0 preserves the crypto/rand-backed draw."
+      },
+      {
+        "file": "rafttest/interaction_env_handler_add_nodes.go",
+        "symbol": "handleAddNodes randomized-election-timeout arg",
+        "meaning": "Exported rafttest datadriven command add-nodes accepts randomized-election-timeout=<n> and sets Config.RandomizedElectionTimeout on each newly created node."
+      }
+    ],
     "copy_strategy": null,
-    "production_mode": "Unchanged default: with Config.RandomizedElectionTimeout == 0, resetRandomizedElectionTimeout (raft.go) executes the identical electionTimeout + globalRand.Intn(electionTimeout) draw as before; the override path is only entered when the option is explicitly set.",
-    "test_mode": "Set Config.RandomizedElectionTimeout on every node (e.g., to ElectionTick); the value is pinned at creation and re-applied on each role transition, so identical configs yield repeatable election timing. rafttest users set it per node via InteractionOpts.OnConfig; existing in-repo data-driven tests are unaffected.",
+    "production_mode": "Default behavior is byte-for-byte unchanged when the field is 0: resetRandomizedElectionTimeout still draws electionTimeout + globalRand.Intn(electionTimeout). The only production changes are the new domain check in Config.validate (non-zero values must be within [ElectionTick, 2*ElectionTick-1], else newRaft panics like other Config errors) and resetRandomizedElectionTimeout honoring the override. No protocol conditions, message semantics, pastElectionTimeout, or tickElection logic changed.",
+    "test_mode": "Set Config.RandomizedElectionTimeout before calling NewRawNode/StartNode/RestartNode; the value is fixed at node construction and re-applied on every state change. For rafttest, pass randomized-election-timeout=<n> to add-nodes. The existing test-build-only raft.SetRandomizedElectionTimeout (raft_test.go:4098) and the set-randomized-election-timeout command remain available to in-module tests but stay transient.",
     "message_id_scope": null,
     "controller_operations": null,
     "covered_paths": [
-      "RawNode/Node construction path: NewRawNode/StartNode/RestartNode -> newRaft -> Config.RandomizedElectionTimeout pins randomizedElectionTimeout at creation (initial becomeFollower reset honors the override).",
-      "Election path: becomeFollower/becomeCandidate/becomeLeader -> reset (raft.go) -> resetRandomizedElectionTimeout now re-applies the pinned value on every role transition instead of re-randomizing; with the option unset the original globalRand.Intn draw is unchanged.",
-      "rafttest node construction path: InteractionOpts.OnConfig (invoked per node by AddNodes before NewRawNode) can set Config.RandomizedElectionTimeout, giving data-driven harnesses deterministic election timing without relying on the repo-internal test export."
+      "Config option path: newRaft copies Config.RandomizedElectionTimeout into raft.randomizedElectionTimeoutOverride (raft.go newRaft struct literal), and resetRandomizedElectionTimeout (raft.go:2069) honors the override on every reset(), so the fixed value survives becomeFollower/becomeCandidate/becomeLeader state changes.",
+      "RawNode path: NewRawNode(cfg) with a fixed RandomizedElectionTimeout produces repeatable election timing (election fires on exactly the configured tick count); Config.validate rejects out-of-domain values at construction (raft.go:316-320).",
+      "Node path: StartNode/RestartNode build the raft from the same *Config, so the fixed timeout applies identically on the channel-based Node path.",
+      "rafttest harness path: the add-nodes command accepts randomized-election-timeout=<n> and applies it to every added node's Config (rafttest/interaction_env_handler_add_nodes.go:72-73); the existing transient set-randomized-election-timeout command and its test-build-only hook are unchanged for in-module tests."
     ],
-    "uncovered_paths": [
-      "rafttest data-driven set-randomized-election-timeout command for consumers outside this module: the command still routes through the repo-internal test-only export raft.SetRandomizedElectionTimeout (raft_test.go), which is not part of the shipped library. Reason: the handler intentionally keeps one-shot semantics ('will be reset again when the node changes state'); repointing it to a pinned override would change existing data-driven behavior and add new shipped surface. Workaround: set the option via InteractionOpts.OnConfig at AddNodes time."
-    ],
+    "uncovered_paths": [],
     "implementation_approach": [
-      "add_test_configuration: new shipped Config.RandomizedElectionTimeout option consulted by resetRandomizedElectionTimeout; 0 keeps the existing randomized behavior exactly.",
-      "add_test_hook: unexported fixedElectionTimeout flag on raft with an early return in resetRandomizedElectionTimeout so the pinned value survives every reset/role transition (fixing the gap where the prior test-only setter was clobbered by r.reset).",
-      "add_target_language_tests: new randomized_election_timeout_test.go covering the default range, the override across follower/candidate/pre-candidate/leader transitions, and two-node determinism at exactly the configured tick."
+      "add_test_configuration: new optional Config.RandomizedElectionTimeout field (0 = randomize as today), validated by Config.validate to stay within [ElectionTick, 2*ElectionTick-1]",
+      "add_test_hook: resetRandomizedElectionTimeout honors the configured override instead of calling globalRand.Intn when the override is non-zero",
+      "add_target_language_tests: randomness_test.go (raft package: domain validation, persistence across state changes, deterministic election timing, default range) and rafttest/interaction_env_randomness_test.go (add-nodes arg wiring and deterministic election through the env)"
+    ],
+    "usage_examples": [
+      "cfg := &raft.Config{ID: 1, ElectionTick: 10, HeartbeatTick: 1, Storage: raft.NewMemoryStorage(), RandomizedElectionTimeout: 10}\nrn, err := raft.NewRawNode(cfg)\nfor i := 0; i < 9; i++ { rn.Tick() } // still StateFollower\nrn.Tick()                            // election fires on exactly the 10th tick, repeatably",
+      "cfg.RandomizedElectionTimeout = 10\nn := raft.StartNode(cfg, peers) // same fixed value applies on the Node path; survives state changes",
+      "// rafttest datadriven:\n// add-nodes 1 voters=(1) index=2 randomized-election-timeout=5\n// tick 1 5   // election fires on exactly the 5th tick (ElectionTick=3 in the stub)"
     ],
     "notes": [
-      "No protocol conditions, term/quorum/commit logic, message semantics, persistence semantics, or the election-timeout algorithm were changed; the default code path is identical.",
-      "The option is deliberately lenient: any non-zero value is honored; values outside [ElectionTick, 2*ElectionTick) deviate from the randomized default's range but remain valid for tests.",
-      "The pinned value is applied at construction and re-applied on every reset, fixing the reported gap that the test-only setter was overwritten on the next role transition.",
-      "Same-initial-state repeatability: nodes created from identical Configs with the option set produce identical election timing (verified by TestConfigRandomizedElectionTimeoutDeterminism); no seed is needed because the random draw is bypassed, not seeded.",
-      "The existing in-repo test-only raft.SetRandomizedElectionTimeout (raft_test.go) and the rafttest data-driven command are untouched and keep working for in-repo tests.",
-      "The Node async path (StartNode) and the RawNode synchronous path share newRaft, so both construction paths are covered by the same Config option.",
-      "Verification: go test ./... passes for go.etcd.io/raft/v3, rafttest, and all subpackages."
+      "Zero value preserves the existing crypto/rand-backed drawing from [ElectionTick, 2*ElectionTick-1]; the random-choice algorithm itself is not replaced, only made fixable.",
+      "Non-zero values are validated to preserve the target's legal domain: values below ElectionTick or above 2*ElectionTick-1 (including negatives) are rejected by Config.validate with an explicit error.",
+      "Unlike the previously only existing mechanism (test-build-only raft.SetRandomizedElectionTimeout, which is re-randomized by reset() on every state change), the Config value survives every state change because resetRandomizedElectionTimeout honors the override.",
+      "External consumers (any package importing go.etcd.io/raft/v3) can now fix election timing through the public Config field on RawNode and Node paths; previously only the raft package's own test build could do so.",
+      "The rafttest set-randomized-election-timeout command still requires InteractionOpts.SetRandomizedElectionTimeout (test-build-only); external rafttest users should use the add-nodes randomized-election-timeout arg instead, which persists across state changes.",
+      "All module tests pass: go test ./... (raft, rafttest, confchange, quorum, raftpb, tracker).",
+      "No INVASIVE_REDISCOVERED: the change is a configuration knob honored by the existing resetRandomizedElectionTimeout, with no protocol-condition or message-semantics modification."
     ]
   },
   "lifecycle_control": null,

@@ -8,17 +8,17 @@
         {
           "file": "raft.go",
           "symbol": "Config.RandomizedElectionTimeout",
-          "line": 152,
-          "reason": "New Config field added inside the target core module."
+          "line": 147,
+          "reason": "New optional field added to the target module's Config struct."
         },
         {
-          "file": "rafttest/pending_msgs.go",
-          "symbol": "PendingMessage",
-          "line": 26,
-          "reason": "New support type added inside the target rafttest package."
+          "file": "rafttest/interaction_env_handler_add_nodes.go",
+          "symbol": "handleAddNodes",
+          "line": 72,
+          "reason": "rafttest add-nodes wiring inside the target module; no foreign target modified."
         }
       ],
-      "reason": "The patch only touches files inside the pinned go.etcd.io/raft/v3 module: the core raft package (raft.go) and the rafttest support package. No files outside the target, no new runtime dependencies, and no replacement of the target repository are present in the supplied git diff."
+      "reason": "All production modifications are confined to the declared etcd-raft target module: the new optional Config field and its validation/handling live in raft.go, and the rafttest add-nodes argument is wired in rafttest/interaction_env_handler_add_nodes.go. No files outside the target module were changed, and the module remains go.etcd.io/raft/v3."
     },
     {
       "name": "existing_tests_unchanged",
@@ -28,41 +28,22 @@
           "file": "raft_test.go",
           "symbol": "SetRandomizedElectionTimeout",
           "line": 4098,
-          "reason": "Existing test-only randomness helper is unchanged in the patched scope."
+          "reason": "Existing test helper remains unmodified; the patch does not edit any pre-existing test file."
         },
         {
-          "file": "rafttest/node_test.go",
-          "symbol": "TestBasicProgress",
-          "line": 27,
-          "reason": "Existing async node harness test is unchanged in the patched scope."
+          "file": "randomness_test.go",
+          "symbol": null,
+          "line": 1,
+          "reason": "Newly added test file rather than a modification of an existing one."
         }
       ],
-      "reason": "The supplied git diff modifies no existing *_test.go files; it only adds new test files. Representative existing test code is byte-identical between the original and patched scopes."
+      "reason": "The diff adds only two new test files (randomness_test.go in package raft and rafttest/interaction_env_randomness_test.go) and modifies no existing test file. The existing test-build-only helper SetRandomizedElectionTimeout in raft_test.go and the existing set-randomized-election-timeout command are untouched."
     },
     {
       "name": "original_send_suppressed",
-      "result": "PASS",
-      "evidence": [
-        {
-          "file": "rafttest/node.go",
-          "symbol": "(*node).start",
-          "line": 107,
-          "reason": "The capture branch appends rd.Messages to n.captured and skips the original iface.send path."
-        },
-        {
-          "file": "rafttest/interaction_env_handler_process_ready.go",
-          "symbol": "(*InteractionEnv).ProcessReady",
-          "line": 81,
-          "reason": "Non-local Ready messages are collected and parked via capturePending; no automatic Step occurs."
-        },
-        {
-          "file": "rafttest/interaction_env_handler_process_append_thread.go",
-          "symbol": "(*InteractionEnv).ProcessAppendThread",
-          "line": 79,
-          "reason": "Storage-thread responses are parked via capturePending instead of being auto-delivered."
-        }
-      ],
-      "reason": "On the Node async goroutine path, capture mode replaces the original iface.send goroutine with parking in the node pending store. On the RawNode and AsyncStorageWrites paths, messages continue to be parked in the in-flight store and are never automatically stepped."
+      "result": "NOT_APPLICABLE",
+      "evidence": [],
+      "reason": "This run implements randomness_control only. The interface_report contains no message_capture or message_injection covered_paths, and the patch introduces no message-send, cache, or continuation-path change. Therefore there is no original send continuation to suppress or selected message target to verify."
     },
     {
       "name": "protocol_logic_unchanged",
@@ -70,69 +51,59 @@
       "evidence": [
         {
           "file": "raft.go",
-          "symbol": "(*raft).resetRandomizedElectionTimeout",
+          "symbol": "resetRandomizedElectionTimeout",
           "line": 2069,
-          "reason": "With fixedElectionTimeout false (the default), the original random draw executes unchanged."
+          "reason": "The default branch (line 2074) is unchanged; the new override branch only short-circuits the existing draw when non-zero."
         },
         {
-          "file": "rafttest/inject.go",
-          "symbol": "(*InteractionEnv).InjectByID",
-          "line": 56,
-          "reason": "Injection passes p.Msg unchanged into env.Nodes[Msg.To-1].Step, preserving sender, receiver, and content."
+          "file": "raft.go",
+          "symbol": "pastElectionTimeout",
+          "line": 2065,
+          "reason": "Election firing predicate remains electionElapsed >= randomizedElectionTimeout; not modified."
         },
         {
-          "file": "rafttest/pending_msgs.go",
-          "symbol": "(*InteractionEnv).capturePending",
-          "line": 39,
-          "reason": "Capture stores the original raftpb.Message values without rewriting content or targets."
+          "file": "raft.go",
+          "symbol": "Config.validate",
+          "line": 316,
+          "reason": "New non-zero domain check rejects values outside [ElectionTick, 2*ElectionTick-1], matching the original draw's range."
         }
       ],
-      "reason": "Captured messages are copied unchanged and delivered through the existing Step entrypoints. The default randomness path executes the original electionTimeout + globalRand.Intn(electionTimeout) draw when the new option is unset, so no term, quorum, message, or election algorithm behavior changed."
+      "reason": "The default code path is byte-for-byte behavior-preserving: when RandomizedElectionTimeout is 0, resetRandomizedElectionTimeout still performs electionTimeout + globalRand.Intn(electionTimeout). pastElectionTimeout, tickElection, and becomeFollower/becomeCandidate/becomeLeader transitions are unchanged; the override only supplies a fixed legal value to the existing reset path instead of drawing one. No timeout shortcut, forced election, or lifecycle recovery semantics were introduced."
     },
     {
       "name": "testing_contract_conformance",
       "result": "PASS",
       "evidence": [
         {
-          "file": "rafttest/pending_msgs.go",
-          "symbol": "(*InteractionEnv).ListPending",
-          "line": 52,
-          "reason": "Callable list entrypoint returning stable IDs plus sender, receiver, type, and capture order in a defensive copy."
-        },
-        {
-          "file": "rafttest/pending_msgs.go",
-          "symbol": "(*InteractionEnv).ClearPending",
-          "line": 60,
-          "reason": "Callable clear entrypoint resets both the pending store and in-flight messages."
-        },
-        {
-          "file": "rafttest/inject.go",
-          "symbol": "(*InteractionEnv).InjectByID",
-          "line": 38,
-          "reason": "Callable inject-by-ID entrypoint delivers through the recorded RawNode binding and consumes only the selected message."
+          "file": "raft.go",
+          "symbol": "Config.validate",
+          "line": 316,
+          "reason": "Input domain explicitly validated: non-zero values must be within [ElectionTick, 2*ElectionTick-1]."
         },
         {
           "file": "raft.go",
-          "symbol": "Config.RandomizedElectionTimeout",
-          "line": 140,
-          "reason": "Shipped Config option pins the randomized election timeout without replacing the election-timeout algorithm; the zero default preserves the original draw."
+          "symbol": "newRaft",
+          "line": 476,
+          "reason": "Config.RandomizedElectionTimeout is copied into randomizedElectionTimeoutOverride at construction."
         },
         {
-          "file": "rafttest/node.go",
-          "symbol": "startNodeWithCapture",
-          "line": 60,
-          "reason": "Opt-in async-harness capture setup declared in the interface report."
+          "file": "raft.go",
+          "symbol": "resetRandomizedElectionTimeout",
+          "line": 2070,
+          "reason": "Override is honored on every reset (becomeFollower/becomeCandidate/becomeLeader), so fixed values survive state changes."
+        },
+        {
+          "file": "rafttest/interaction_env_handler_add_nodes.go",
+          "symbol": "handleAddNodes",
+          "line": 72,
+          "reason": "rafttest add-nodes randomized-election-timeout argument applies the config to each newly added node."
         }
       ],
-      "reason": "Exported ListPending, ClearPending, and InjectByID satisfy the message capture and injection contracts; the shipped Config.RandomizedElectionTimeout satisfies determinism without replacing the algorithm; the async harness path is covered internally; the one deliberately uncovered randomness path is explicitly declared in the interface report."
+      "reason": "The randomness_control contract is satisfied: a Config option reuses the existing random-choice primitive without replacing its algorithm, the new fixed values are validated to the target's existing legal domain ([ElectionTick, 2*ElectionTick-1]), and the default 0 preserves current behavior. The public entrypoints (exported Config.RandomizedElectionTimeout for external consumers and the rafttest add-nodes randomized-election-timeout argument for the harness) are real and callable by the declared scopes. Usage examples reference only real symbols (raft.Config, raft.NewRawNode, raft.StartNode, raft.NewMemoryStorage, rn.Tick, rn.Status) and demonstrate interface mechanics without embedding a test-author policy or correctness oracle."
     }
   ],
   "issues": [],
   "risks": [
-    "InteractionEnv.Messages remains an exported mutable slice; external code that appends to or removes from it directly can desynchronize env.pending and break InjectByID's same-index removal assumption.",
-    "The Node async harness capture/injection API is internal-only: startNodeWithCapture returns an unexported *node and listPending/clearPending/injectByID are unexported, so external test packages cannot use the async-path capture/injection surface; async-path coverage is exercised only inside package rafttest.",
-    "node.injectByID removes the selected record before routing through iface.send and may silently drop the message on disconnect, dropmap match, or a full receive queue, so async-path success does not guarantee the message reached Node.Step.",
-    "ListPending returns a shallow copy of PendingMessage, so the embedded *raftpb.Snapshot pointer is shared with the store; the control layer does not mutate it, but callers could.",
-    "Config.RandomizedElectionTimeout accepts out-of-range or negative values as documented; such values can produce unusual election timing if misused by a test."
+    "For external consumers, an out-of-domain non-zero RandomizedElectionTimeout surfaces as a panic from newRaft via NewRawNode/StartNode/RestartNode rather than a returned error; this matches the existing Config validation style for all other Config errors and is documented in the interface notes."
   ]
 }
