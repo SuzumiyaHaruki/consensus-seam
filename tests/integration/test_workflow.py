@@ -192,6 +192,59 @@ class AnalyzerChatClient:
         }
 
 
+class ScopedTransformRuntime:
+    def __init__(self) -> None:
+        self.transform_payload: dict[str, Any] | None = None
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+    ) -> str:
+        if agent == "analyzer":
+            report = capability_report()
+            report["capabilities"]["randomness_control"] = {
+                "status": "PATCHABLE",
+                "evidence": [
+                    {
+                        "symbol": "NewNode",
+                        "reason": "random source is constructed internally",
+                    }
+                ],
+                "gap": "random source is not injectable",
+            }
+            return json.dumps(report)
+        if agent == "transformer":
+            self.transform_payload = json.loads(user_prompt)
+            assert tools is not None
+            result = json.loads(
+                tools.execute(
+                    "write_file",
+                    json.dumps(
+                        {
+                            "path": "injection_seam.go",
+                            "content": "package mini\n\nfunc injectForTest() {}\n",
+                        }
+                    ),
+                )
+            )
+            assert result["ok"] is True
+            return json.dumps(
+                {
+                    "message_injection": {
+                        "implemented": True,
+                        "entrypoint": {"symbol": "injectForTest"},
+                    }
+                }
+            )
+        return json.dumps({"overall": "PASS", "issues": []})
+
+
 def test_analyze_writes_validated_artifacts(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -284,6 +337,50 @@ def test_patch_stops_when_analysis_finds_no_patchable_capability(tmp_path: Path)
     result = workflow.patch(load_project(manifest))
     assert result.outcome is WorkflowOutcome.NO_PATCH_NEEDED
     assert not (result.run_directory / "patched-worktree").exists()
+
+
+def test_transform_scope_does_not_hide_unselected_patchable_findings(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = tmp_path / "project.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "name: mini-raft",
+                "language: go",
+                "protocol: raft",
+                f"repository: {repo}",
+                "system_boundary:",
+                "  kind: protocol_library",
+                "  description: Mini Raft protocol core only",
+                "transform_capabilities:",
+                "  - message_injection",
+                "build: {command: 'git diff --check'}",
+                "test: {command: 'git diff --check'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runtime = ScopedTransformRuntime()
+    workflow = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs")
+    result = workflow.patch(load_project(manifest))
+    assert result.outcome is WorkflowOutcome.PASS
+    assert runtime.transform_payload is not None
+    assert runtime.transform_payload["patchable_capabilities"] == [
+        "message_injection"
+    ]
+    report = json.loads((result.run_directory / "capability-report.json").read_text())
+    assert report["capabilities"]["randomness_control"]["status"] == "PATCHABLE"
+    unresolved = json.loads((result.run_directory / "unresolved.json").read_text())
+    assert unresolved["randomness_control"] == {
+        "reason": "outside this run's transform_capabilities scope",
+        "status": "PATCHABLE",
+    }
+    run_config = json.loads((result.run_directory / "run-config.json").read_text())
+    assert run_config["transform_capabilities"] == ["message_injection"]
 
 
 def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:

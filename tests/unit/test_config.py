@@ -67,3 +67,19 @@ def test_system_boundary_is_required(tmp_path: Path) -> None:
     )
     with pytest.raises(ConfigurationError, match="system_boundary"):
         load_project(manifest)
+
+
+def test_transform_capabilities_must_be_unique(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manifest = tmp_path / "project.yaml"
+    write_manifest(manifest, repo)
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "\ntransform_capabilities:\n"
+        + "  - message_capture\n"
+        + "  - message_capture\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError, match="must be unique"):
+        load_project(manifest)

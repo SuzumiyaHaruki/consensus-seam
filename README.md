@@ -89,6 +89,12 @@ deterministic `capability_checks` for every implemented capability. Missing MC1,
 MC2, MC3, or equivalent checks produces `SEMANTIC_AMBIGUITY`, rather than a false
 success based only on the original test suite.
 
+An optional `transform_capabilities` allowlist scopes one experiment without
+weakening analysis. Agent 1 still classifies all seven capabilities, while Agent 2
+may modify only findings that are both `PATCHABLE` and selected. PATCHABLE
+findings outside the scope remain visible in `capability-report.json` and are
+recorded in `unresolved.json` as intentionally skipped.
+
 Each invocation writes structured artifacts below `runs/<run-id>/`. The original
 target repository is never modified by the transformer path; modifications are
 made in a detached Git worktree. Live runtimes also write `agent-run-stats.json`

@@ -9,6 +9,10 @@ system_boundary:
     Analyze the Mini Raft protocol implementation. External applications and
     real network behavior are outside this target boundary.
 
+transform_capabilities:
+  - message_capture
+  - message_injection
+
 build:
   command: go test -run '^$' ./...
 

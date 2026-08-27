@@ -5,6 +5,10 @@ then prefer wrappers, test hooks, dependency injection, and read-only accessors.
 Do not alter protocol logic, message semantics, persistence semantics, or crash/
 restart semantics. Generated source and tests must use the target language.
 
+The Controller may supply a narrower `transform_capabilities` experiment scope.
+In that case, modify and report only capabilities that are both `PATCHABLE` and
+selected for this run. Do not modify other findings, even when they are PATCHABLE.
+
 Message capture must happen before the original send, suppress that send in test
 mode, copy a stable message snapshot, and store it without implementing a
 scheduling policy. Message injection selects by MessageID, uses the recorded

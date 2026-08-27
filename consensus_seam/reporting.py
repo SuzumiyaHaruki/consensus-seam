@@ -49,7 +49,12 @@ class ArtifactStore:
         path.write_text(value, encoding="utf-8")
         return path
 
-    def write_unresolved(self, report: CapabilityReport) -> Path:
+    def write_unresolved(
+        self,
+        report: CapabilityReport,
+        *,
+        transform_capabilities: list[str] | None = None,
+    ) -> Path:
         unresolved = {}
         for name, finding in report.capabilities.items():
             if finding.status in {
@@ -60,5 +65,14 @@ class ArtifactStore:
                 unresolved[name] = {
                     "status": finding.status.value,
                     "reason": finding.reason or finding.gap or "See capability-report.json",
+                }
+            elif (
+                finding.status is CapabilityStatus.PATCHABLE
+                and transform_capabilities is not None
+                and name not in transform_capabilities
+            ):
+                unresolved[name] = {
+                    "status": finding.status.value,
+                    "reason": "outside this run's transform_capabilities scope",
                 }
         return self.write_json("unresolved.json", unresolved)

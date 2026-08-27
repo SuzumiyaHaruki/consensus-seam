@@ -45,6 +45,8 @@ already defines state ownership across restart.
   `go/parser`/`go/ast` helper rather than only a regular expression.
 - Target manifests define `system_boundary`, per-Agent models, and named
   capability checks. Full runs reject unverified implementation claims.
+- An optional `transform_capabilities` allowlist separates message, randomness,
+  and other experiments while preserving complete Agent 1 analysis.
 - Existing tracked Go tests are protected through Git's committed baseline; new
   capability tests remain allowed. No additional content hashes are introduced.
 - `INVASIVE_REDISCOVERED` always invalidates the entire current worktree.
@@ -69,6 +71,10 @@ tool-choice quality, token usage, and retry behavior against the real service.
 `SUPPORTED` findings in analyze-only/no-patch runs are not dynamically verified
 yet. A future opt-in supported-capability verification mode may execute manifest
 checks, particularly for the etcd-raft classification experiment.
+
+Human ground truth for Mini Raft lives under `evaluation/mini-raft/`, outside the
+target repository visible to source tools. It is used only for post-run comparison
+and is never injected into an Agent prompt.
 
 Capability-test routing is now wired through the manifest and workflow. The Mini
 Raft target must provide separate MC1/MC2/MC3 commands; without them, a full run

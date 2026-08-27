@@ -93,6 +93,16 @@ class CapabilityCheckConfig(StrictModel):
     failure_code: FailureCode
 
 
+TransformCapability = Literal[
+    "message_capture",
+    "message_injection",
+    "time_control",
+    "randomness_control",
+    "lifecycle_control",
+    "observation",
+]
+
+
 class WorkflowLimits(StrictModel):
     agent1_reanalysis_rounds: int = Field(default=2, ge=1, le=10)
     agent2_patch_rounds: int = Field(default=3, ge=1, le=10)
@@ -107,12 +117,18 @@ class ProjectManifest(StrictModel):
     build: CommandConfig
     test: CommandConfig
     working_directory: Path = Path(".")
+    transform_capabilities: list[TransformCapability] | None = None
     capability_checks: list[CapabilityCheckConfig] = Field(default_factory=list)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     limits: WorkflowLimits = Field(default_factory=WorkflowLimits)
 
     @model_validator(mode="after")
     def validate_capability_checks(self) -> "ProjectManifest":
+        if self.transform_capabilities is not None:
+            if not self.transform_capabilities:
+                raise ValueError("transform_capabilities cannot be empty")
+            if len(self.transform_capabilities) != len(set(self.transform_capabilities)):
+                raise ValueError("transform_capabilities must be unique")
         names = [check.name for check in self.capability_checks]
         if len(names) != len(set(names)):
             raise ValueError("capability check names must be unique")
@@ -232,12 +248,13 @@ class CapabilityReport(StrictModel):
             raise ValueError("external_input is discovery-only and cannot be PATCHABLE in v0.1")
         return self
 
-    def patchable(self) -> set[str]:
-        return {
+    def patchable(self, allowlist: list[str] | set[str] | None = None) -> set[str]:
+        result = {
             name
             for name, finding in self.capabilities.items()
             if finding.status is CapabilityStatus.PATCHABLE
         }
+        return result if allowlist is None else result & set(allowlist)
 
     def apply_rediscovered(self, names: set[str]) -> None:
         for name in names:

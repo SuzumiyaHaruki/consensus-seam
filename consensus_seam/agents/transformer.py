@@ -35,15 +35,23 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
         capability_report: CapabilityReport,
         worktree: Path,
         *,
+        selected_capabilities: set[str] | None = None,
         feedback: dict[str, Any] | None = None,
     ) -> InterfaceReport:
-        patchable = capability_report.patchable()
+        patchable = capability_report.patchable(selected_capabilities)
         if not patchable:
-            raise ValueError("Transformer cannot run without PATCHABLE capabilities")
+            raise ValueError(
+                "Transformer cannot run without selected PATCHABLE capabilities"
+            )
         payload = {
             "project": project.manifest.model_dump(mode="json"),
             "worktree": str(worktree),
             "patchable_capabilities": sorted(patchable),
+            "transform_capabilities": (
+                None
+                if project.manifest.transform_capabilities is None
+                else list(project.manifest.transform_capabilities)
+            ),
             "capability_report": capability_report.model_dump(mode="json"),
             "capability_spec": project.capabilities.model_dump(mode="json"),
             "modification_policy": project.modification_policy.model_dump(mode="json"),
@@ -56,7 +64,7 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
         reported = set(result.capabilities())
         if reported != patchable:
             raise ValueError(
-                "interface report must cover exactly the PATCHABLE capabilities; "
+                "interface report must cover exactly the selected PATCHABLE capabilities; "
                 f"expected {sorted(patchable)}, got {sorted(reported)}"
             )
         return result

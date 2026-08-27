@@ -1,0 +1,76 @@
+version: 1
+target: mini-raft
+purpose: evaluator_only
+agent_visible: false
+
+transform_capabilities:
+  - message_capture
+  - message_injection
+
+capabilities:
+  message_capture:
+    expected_status: PATCHABLE
+    evidence:
+      - file: transport.go
+        symbol: MemoryTransport.Send
+        reason: Send immediately invokes the recorded target Node.Step.
+      - file: node.go
+        symbol: Node.emit
+        reason: All outbound protocol messages cross the injected Transport interface.
+    rationale: >
+      The outbound environment boundary is already dependency-injected, but no
+      capture, suppression, or pending state exists.
+
+  message_injection:
+    expected_status: PATCHABLE
+    evidence:
+      - file: node.go
+        symbol: Node.Step
+        reason: Step is the normal target-checked protocol input boundary.
+    rationale: >
+      Normal delivery exists, but the implementation has no stable MessageID,
+      Pending Store, or exact Inject(ID) operation.
+
+  time_control:
+    expected_status: SUPPORTED
+    evidence:
+      - file: node.go
+        symbol: Node.Tick
+        reason: Each call advances exactly one unit of protocol logical time.
+
+  randomness_control:
+    expected_status: PATCHABLE
+    evidence:
+      - file: node.go
+        symbol: NewNode
+        reason: NewNode constructs a time-seeded rand.Rand internally.
+    rationale: >
+      The random algorithm is localized, but Config cannot inject or fix its
+      source for replay.
+
+  lifecycle_control:
+    expected_status: INVASIVE
+    evidence:
+      - file: node.go
+        symbol: Node
+        reason: Persistent-looking and volatile-looking state share one object.
+      - file: node.go
+        symbol: Node.Pause
+        reason: Pause and Resume explicitly model scheduling, not crash recovery.
+    rationale: >
+      Adding crash/restart would require inventing which fields survive, which is
+      outside v0.1's allowed modification boundary.
+
+  observation:
+    expected_status: SUPPORTED
+    evidence:
+      - file: node.go
+        symbol: Node.Status
+        reason: Status exposes role, term, vote, leader, commit, log, and timeout state.
+
+  external_input:
+    expected_status: SUPPORTED
+    evidence:
+      - file: node.go
+        symbol: Node.Propose
+        reason: Propose is the existing application-value entrypoint.

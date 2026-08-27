@@ -11,6 +11,7 @@ from .languages.go import GoBackend
 from .llm.base import AgentRuntime
 from .llm.profiles import ModelProfile, resolve_model_profile
 from .models import (
+    CapabilityReport,
     FailureRoute,
     ReviewOverall,
     WorkflowOutcome,
@@ -47,7 +48,7 @@ class ConsensusWorkflow:
             analyzer, _, _ = self._agents(project)
             report = analyzer.analyze(project)
             artifacts.write_model("capability-report.json", report)
-            artifacts.write_unresolved(report)
+            self._write_unresolved(artifacts, report, project)
             return WorkflowResult(
                 outcome=WorkflowOutcome.ANALYZED,
                 run_directory=artifacts.run_directory,
@@ -90,12 +91,17 @@ class ConsensusWorkflow:
 
         report = analyzer.analyze(project)
         artifacts.write_model("capability-report.json", report)
-        if not report.patchable():
-            artifacts.write_unresolved(report)
+        if not self._selected_patchable(project, report):
+            self._write_unresolved(artifacts, report, project)
+            reason = (
+                "No PATCHABLE capability selected by transform_capabilities"
+                if report.patchable()
+                else "No capability was classified PATCHABLE"
+            )
             return WorkflowResult(
                 outcome=WorkflowOutcome.NO_PATCH_NEEDED,
                 run_directory=artifacts.run_directory,
-                reason="No capability was classified PATCHABLE",
+                reason=reason,
             )
 
         agent1_feedback: dict[str, Any] | None = None
@@ -104,8 +110,8 @@ class ConsensusWorkflow:
             if analysis_round > 1:
                 report = analyzer.analyze(project, feedback=agent1_feedback)
                 artifacts.write_model("capability-report.json", report)
-                if not report.patchable():
-                    artifacts.write_unresolved(report)
+                if not self._selected_patchable(project, report):
+                    self._write_unresolved(artifacts, report, project)
                     return WorkflowResult(
                         outcome=WorkflowOutcome.NO_PATCH_NEEDED,
                         run_directory=artifacts.run_directory,
@@ -128,6 +134,7 @@ class ConsensusWorkflow:
                     project,
                     report,
                     worktree.path,
+                    selected_capabilities=self._selected_patchable(project, report),
                     feedback=agent2_feedback,
                 )
                 artifacts.write_model("interface-report.json", interface_report)
@@ -148,9 +155,9 @@ class ConsensusWorkflow:
                             "capabilities": sorted(rediscovered),
                         },
                     )
-                    if not report.patchable():
+                    if not self._selected_patchable(project, report):
                         artifacts.write_text("changes.patch", "")
-                        artifacts.write_unresolved(report)
+                        self._write_unresolved(artifacts, report, project)
                         return WorkflowResult(
                             outcome=WorkflowOutcome.PARTIAL,
                             run_directory=artifacts.run_directory,
@@ -240,7 +247,7 @@ class ConsensusWorkflow:
                     agent2_feedback = review.model_dump(mode="json")
                     continue
                 if review.overall is ReviewOverall.NEEDS_HUMAN:
-                    artifacts.write_unresolved(report)
+                    self._write_unresolved(artifacts, report, project)
                     return WorkflowResult(
                         outcome=WorkflowOutcome.PARTIAL,
                         run_directory=artifacts.run_directory,
@@ -248,7 +255,7 @@ class ConsensusWorkflow:
                     )
 
                 if not verify:
-                    artifacts.write_unresolved(report)
+                    self._write_unresolved(artifacts, report, project)
                     return WorkflowResult(
                         outcome=WorkflowOutcome.PASS,
                         run_directory=artifacts.run_directory,
@@ -280,7 +287,7 @@ class ConsensusWorkflow:
                     verification,
                 )
                 if verification.passed:
-                    artifacts.write_unresolved(report)
+                    self._write_unresolved(artifacts, report, project)
                     return WorkflowResult(
                         outcome=WorkflowOutcome.PASS,
                         run_directory=artifacts.run_directory,
@@ -292,7 +299,7 @@ class ConsensusWorkflow:
                 if verification.route is FailureRoute.AGENT2:
                     agent2_feedback = verification.model_dump(mode="json")
                     continue
-                artifacts.write_unresolved(report)
+                self._write_unresolved(artifacts, report, project)
                 return WorkflowResult(
                     outcome=WorkflowOutcome.PARTIAL,
                     run_directory=artifacts.run_directory,
@@ -301,14 +308,14 @@ class ConsensusWorkflow:
 
             if requested_reanalysis:
                 continue
-            artifacts.write_unresolved(report)
+            self._write_unresolved(artifacts, report, project)
             return WorkflowResult(
                 outcome=WorkflowOutcome.FAILED,
                 run_directory=artifacts.run_directory,
                 reason="Agent 2 patch budget exhausted",
             )
 
-        artifacts.write_unresolved(report)
+        self._write_unresolved(artifacts, report, project)
         return WorkflowResult(
             outcome=WorkflowOutcome.FAILED,
             run_directory=artifacts.run_directory,
@@ -346,6 +353,7 @@ class ConsensusWorkflow:
                 "project": project.manifest.name,
                 "system_boundary": project.manifest.system_boundary.model_dump(mode="json"),
                 "model_profile": self.model_profile,
+                "transform_capabilities": project.manifest.transform_capabilities,
                 "resolved_models": models.model_dump(mode="json"),
                 "capability_checks": [
                     check.model_dump(mode="json")
@@ -362,3 +370,21 @@ class ConsensusWorkflow:
         snapshot = getattr(self.runtime, "stats_snapshot", None)
         records = snapshot()[start:] if callable(snapshot) else []
         artifacts.write_json("agent-run-stats.json", records)
+
+    @staticmethod
+    def _selected_patchable(
+        project: LoadedProject,
+        report: CapabilityReport,
+    ) -> set[str]:
+        return report.patchable(project.manifest.transform_capabilities)
+
+    @staticmethod
+    def _write_unresolved(
+        artifacts: ArtifactStore,
+        report: CapabilityReport,
+        project: LoadedProject,
+    ) -> None:
+        artifacts.write_unresolved(
+            report,
+            transform_capabilities=project.manifest.transform_capabilities,
+        )

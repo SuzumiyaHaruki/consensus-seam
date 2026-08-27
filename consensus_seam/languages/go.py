@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -88,7 +89,10 @@ class GoBackend(LanguageBackend):
             if valid:
                 return [
                     f"{line} [textual candidate for {symbol}; receiver not proven]"
-                    for line in self._search(repo, rf"\b{re.escape(method)}\b")
+                    for line in self._search(
+                        repo,
+                        rf"\b{re.escape(method)}\s*\(",
+                    )
                 ]
         return self._search(repo, rf"\b{re.escape(symbol)}\b")
 
@@ -159,7 +163,32 @@ class GoBackend(LanguageBackend):
                 check=False,
             )
         except FileNotFoundError:
-            return []
+            return GoBackend._python_search(repo, pattern)
         if completed.returncode not in (0, 1):
             raise RuntimeError(completed.stderr.strip() or "rg search failed")
-        return completed.stdout.splitlines()
+        matches = completed.stdout.splitlines()
+        return matches if matches else GoBackend._python_search(repo, pattern)
+
+    @staticmethod
+    def _python_search(repo: Path, pattern: str) -> list[str]:
+        expression = re.compile(pattern)
+        matches: list[str] = []
+        for current, directories, filenames in os.walk(repo, followlinks=False):
+            directories[:] = sorted(
+                name for name in directories if name not in {".git", "vendor"}
+            )
+            for filename in sorted(filenames):
+                if not filename.endswith(".go"):
+                    continue
+                path = Path(current) / filename
+                try:
+                    relative = path.relative_to(repo).as_posix()
+                    with path.open("r", encoding="utf-8", errors="replace") as handle:
+                        for line_number, line in enumerate(handle, start=1):
+                            if expression.search(line):
+                                matches.append(
+                                    f"./{relative}:{line_number}:{line.rstrip()}"
+                                )
+                except OSError:
+                    continue
+        return matches
