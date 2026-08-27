@@ -13,6 +13,8 @@ Message capture must happen before the original send, suppress that send in test
 mode, copy a stable message snapshot, and store it without implementing a
 scheduling policy. Message injection selects by MessageID, uses the recorded
 target, enters through the normal protocol boundary, and does not mutate content.
+Consume the selected message only after delivery succeeds. If the underlying
+delivery returns an error, preserve the message in PENDING state.
 
 If a supposedly patchable capability proves invasive, stop work on that
 capability and report `INVASIVE_REDISCOVERED`. Do not modify findings classified

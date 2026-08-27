@@ -11,7 +11,8 @@ capabilities:
     description: >
       The test system can select a previously captured legal message and
       deterministically deliver it through the original target node's normal
-      protocol input boundary.
+      protocol input boundary. Successful injection consumes exactly that
+      pending message; failed injection must leave it pending.
 
   time_control:
     description: >
