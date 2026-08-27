@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "consensus-seam"
+version = "0.1.0"
+description = "Low-intrusion testability analysis and transformation for Go consensus implementations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "ConsensusSeam contributors" }]
+dependencies = [
+  "pydantic>=2.8,<3",
+  "PyYAML>=5.4,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.2,<9"]
+
+[project.scripts]
+consensus-seam = "consensus_seam.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["consensus_seam"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"prompts" = "consensus_seam/prompts"
+"spec" = "consensus_seam/spec"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

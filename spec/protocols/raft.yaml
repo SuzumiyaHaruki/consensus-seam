@@ -1,0 +1,38 @@
+protocol: raft
+
+roles:
+  - follower
+  - candidate
+  - leader
+
+message_families:
+  - request_vote
+  - request_vote_response
+  - append_entries
+  - append_entries_response
+  - heartbeat
+  - snapshot
+
+timing:
+  - election_timeout
+  - heartbeat_interval
+
+randomness:
+  - randomized_election_timeout
+
+persistent_concepts:
+  - current_term
+  - voted_for
+  - log
+  - snapshot
+
+observation_examples:
+  - role
+  - term
+  - commit_index
+  - applied_index
+  - log_range
+
+external_inputs:
+  - proposal
+  - membership_change

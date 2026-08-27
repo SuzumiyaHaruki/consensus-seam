@@ -1,0 +1,48 @@
+version: 1
+
+capabilities:
+  message_capture:
+    description: >
+      In test mode, every outbound protocol message is captured before entering
+      the original uncontrollable send path. A captured message must not continue
+      automatically along that path.
+
+  message_injection:
+    description: >
+      The test system can select a previously captured legal message and
+      deterministically deliver it through the original target node's normal
+      protocol input boundary.
+
+  time_control:
+    description: >
+      The test system can deterministically advance time observed by the protocol.
+      It must not expose ForceTimeout or ForceElection operations that manufacture
+      protocol outcomes directly.
+    accepted_v0_forms:
+      - explicit_tick
+      - injectable_clock
+
+  randomness_control:
+    description: >
+      Protocol-relevant randomness can be fixed or injected so the same initial
+      state and seed produce repeatable random choices.
+
+  lifecycle_control:
+    description: >
+      Existing node stop, creation, recovery, and state-ownership semantics may
+      be exposed to tests. An Agent must not invent the persistent/volatile split.
+
+  observation:
+    description: >
+      Expose the minimum global and node state needed for capability verification
+      and later testing. Fields remain specific to the protocol and implementation.
+
+  external_input:
+    description: >
+      Discover existing proposal, request, transaction, or equivalent workload
+      entrypoints. v0.1 does not create new business-input APIs.
+
+prerequisites:
+  target_language:
+    supported:
+      - go

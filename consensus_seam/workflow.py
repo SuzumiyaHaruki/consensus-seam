@@ -1,0 +1,238 @@
+"""Explicit controller state machine for analyze, patch, and full runs."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from .agents import CapabilityAnalyzer, IndependentReviewer, LowIntrusionTransformer
+from .config import LoadedProject
+from .languages.go import GoBackend
+from .llm.base import LLMClient
+from .models import (
+    FailureRoute,
+    ReviewOverall,
+    WorkflowOutcome,
+    WorkflowResult,
+)
+from .reporting import ArtifactStore
+from .verify import BaselineVerifier, DeterministicVerifier
+from .workspace import GitWorktree
+
+
+class ConsensusWorkflow:
+    """Orchestrate Agents with fixed transitions and bounded retries."""
+
+    def __init__(
+        self,
+        client: LLMClient,
+        *,
+        runs_root: Path,
+        backend: GoBackend | None = None,
+    ) -> None:
+        self.backend = backend or GoBackend()
+        self.analyzer = CapabilityAnalyzer(client)
+        self.transformer = LowIntrusionTransformer(client)
+        self.reviewer = IndependentReviewer(client)
+        self.baseline_verifier = BaselineVerifier(self.backend)
+        self.verifier = DeterministicVerifier(self.backend)
+        self.runs_root = runs_root
+
+    def analyze(self, project: LoadedProject) -> WorkflowResult:
+        artifacts = ArtifactStore.create(self.runs_root)
+        report = self.analyzer.analyze(project)
+        artifacts.write_model("capability-report.json", report)
+        artifacts.write_unresolved(report)
+        return WorkflowResult(
+            outcome=WorkflowOutcome.ANALYZED,
+            run_directory=artifacts.run_directory,
+        )
+
+    def patch(self, project: LoadedProject) -> WorkflowResult:
+        return self._patch_loop(project, verify=False)
+
+    def run(self, project: LoadedProject) -> WorkflowResult:
+        return self._patch_loop(project, verify=True)
+
+    def _patch_loop(self, project: LoadedProject, *, verify: bool) -> WorkflowResult:
+        artifacts = ArtifactStore.create(self.runs_root)
+        if verify:
+            baseline = self.baseline_verifier.run(project)
+            artifacts.write_model("baseline-report.json", baseline)
+            if not baseline.passed:
+                return WorkflowResult(
+                    outcome=WorkflowOutcome.FAILED,
+                    run_directory=artifacts.run_directory,
+                    reason="BASELINE_FAILED",
+                )
+
+        report = self.analyzer.analyze(project)
+        artifacts.write_model("capability-report.json", report)
+        if not report.patchable():
+            artifacts.write_unresolved(report)
+            return WorkflowResult(
+                outcome=WorkflowOutcome.NO_PATCH_NEEDED,
+                run_directory=artifacts.run_directory,
+                reason="No capability was classified PATCHABLE",
+            )
+
+        agent1_feedback: dict[str, Any] | None = None
+        limits = project.manifest.limits
+        for analysis_round in range(1, limits.agent1_reanalysis_rounds + 1):
+            if analysis_round > 1:
+                report = self.analyzer.analyze(project, feedback=agent1_feedback)
+                artifacts.write_model("capability-report.json", report)
+                if not report.patchable():
+                    artifacts.write_unresolved(report)
+                    return WorkflowResult(
+                        outcome=WorkflowOutcome.NO_PATCH_NEEDED,
+                        run_directory=artifacts.run_directory,
+                        reason="Reanalysis found no safely patchable capability",
+                    )
+
+            requested_reanalysis = False
+            agent2_feedback: dict[str, Any] | None = None
+            for patch_round in range(1, limits.agent2_patch_rounds + 1):
+                worktree_name = (
+                    "patched-worktree"
+                    if analysis_round == 1 and patch_round == 1
+                    else f"patched-worktree-a{analysis_round}-p{patch_round}"
+                )
+                worktree = GitWorktree.create(
+                    project.repository,
+                    artifacts.run_directory / worktree_name,
+                )
+                interface_report = self.transformer.transform(
+                    project,
+                    report,
+                    worktree.path,
+                    feedback=agent2_feedback,
+                )
+                artifacts.write_model("interface-report.json", interface_report)
+                artifacts.write_model(
+                    f"logs/interface-a{analysis_round}-p{patch_round}.json",
+                    interface_report,
+                )
+
+                rediscovered = interface_report.rediscovered()
+                if rediscovered:
+                    report.apply_rediscovered(rediscovered)
+                    artifacts.write_model("capability-report.json", report)
+                if not report.patchable():
+                    artifacts.write_text("changes.patch", worktree.diff())
+                    artifacts.write_unresolved(report)
+                    return WorkflowResult(
+                        outcome=WorkflowOutcome.PARTIAL,
+                        run_directory=artifacts.run_directory,
+                        reason="All proposed changes were rediscovered as invasive",
+                    )
+
+                # Make new files visible to Git before selecting changed Go files.
+                worktree.diff()
+                format_result = self.backend.format_changed_files(worktree.path)
+                artifacts.write_model(
+                    f"logs/format-a{analysis_round}-p{patch_round}.json",
+                    format_result,
+                )
+                if not format_result.passed:
+                    agent2_feedback = {
+                        "failure": "FORMAT_FAILED",
+                        "execution": format_result.model_dump(mode="json"),
+                    }
+                    continue
+
+                relative_workdir = project.working_directory.relative_to(project.repository)
+                patched_workdir = worktree.path / relative_workdir
+                build_result = self.backend.build(
+                    patched_workdir,
+                    project.manifest.build.command,
+                )
+                artifacts.write_model(
+                    f"logs/build-a{analysis_round}-p{patch_round}.json",
+                    build_result,
+                )
+                if not build_result.passed:
+                    agent2_feedback = {
+                        "failure": "BUILD_FAILED",
+                        "execution": build_result.model_dump(mode="json"),
+                    }
+                    continue
+
+                git_diff = worktree.diff()
+                artifacts.write_text("changes.patch", git_diff)
+                review = self.reviewer.review(
+                    project,
+                    report,
+                    interface_report,
+                    worktree.path,
+                    git_diff,
+                )
+                artifacts.write_model("review-report.json", review)
+                artifacts.write_model(
+                    f"logs/review-a{analysis_round}-p{patch_round}.json",
+                    review,
+                )
+
+                if review.overall is ReviewOverall.REVISE_AGENT1:
+                    agent1_feedback = review.model_dump(mode="json")
+                    requested_reanalysis = True
+                    break
+                if review.overall is ReviewOverall.REVISE_AGENT2:
+                    agent2_feedback = review.model_dump(mode="json")
+                    continue
+                if review.overall is ReviewOverall.NEEDS_HUMAN:
+                    artifacts.write_unresolved(report)
+                    return WorkflowResult(
+                        outcome=WorkflowOutcome.PARTIAL,
+                        run_directory=artifacts.run_directory,
+                        reason="Independent review requires human judgment",
+                    )
+
+                if not verify:
+                    artifacts.write_unresolved(report)
+                    return WorkflowResult(
+                        outcome=WorkflowOutcome.PASS,
+                        run_directory=artifacts.run_directory,
+                    )
+
+                verification = self.verifier.verify(project, worktree.path)
+                artifacts.write_model("verification-report.json", verification)
+                artifacts.write_model(
+                    f"logs/verification-a{analysis_round}-p{patch_round}.json",
+                    verification,
+                )
+                if verification.passed:
+                    artifacts.write_unresolved(report)
+                    return WorkflowResult(
+                        outcome=WorkflowOutcome.PASS,
+                        run_directory=artifacts.run_directory,
+                    )
+                if verification.route is FailureRoute.AGENT1:
+                    agent1_feedback = verification.model_dump(mode="json")
+                    requested_reanalysis = True
+                    break
+                if verification.route is FailureRoute.AGENT2:
+                    agent2_feedback = verification.model_dump(mode="json")
+                    continue
+                artifacts.write_unresolved(report)
+                return WorkflowResult(
+                    outcome=WorkflowOutcome.PARTIAL,
+                    run_directory=artifacts.run_directory,
+                    reason=verification.failure_code.value if verification.failure_code else None,
+                )
+
+            if requested_reanalysis:
+                continue
+            artifacts.write_unresolved(report)
+            return WorkflowResult(
+                outcome=WorkflowOutcome.FAILED,
+                run_directory=artifacts.run_directory,
+                reason="Agent 2 patch budget exhausted",
+            )
+
+        artifacts.write_unresolved(report)
+        return WorkflowResult(
+            outcome=WorkflowOutcome.FAILED,
+            run_directory=artifacts.run_directory,
+            reason="Agent 1 reanalysis budget exhausted",
+        )

@@ -1,0 +1,16 @@
+name: mini-raft
+language: go
+protocol: raft
+repository: /absolute/path/to/mini_raft
+
+build:
+  command: go test -run '^$' ./...
+
+test:
+  command: go test ./...
+
+working_directory: .
+
+limits:
+  agent1_reanalysis_rounds: 2
+  agent2_patch_rounds: 3

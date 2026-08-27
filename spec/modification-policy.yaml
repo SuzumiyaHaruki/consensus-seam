@@ -1,0 +1,24 @@
+allowed:
+  - add_test_hook
+  - add_test_only_wrapper
+  - add_read_only_accessor
+  - inject_dependency
+  - replace_external_service_call
+  - add_pending_store
+  - add_test_configuration
+  - add_target_language_tests
+
+forbidden:
+  - change_protocol_condition
+  - change_quorum_logic
+  - change_term_transition
+  - change_round_transition
+  - change_ballot_logic
+  - change_log_matching_logic
+  - change_message_content
+  - change_message_destination
+  - define_restart_semantics
+  - change_persistence_semantics
+  - split_persistence_operation
+  - remove_assertion
+  - weaken_existing_test

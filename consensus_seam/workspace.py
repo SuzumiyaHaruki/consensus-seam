@@ -1,0 +1,49 @@
+"""Git worktree isolation for all Transformer modifications."""
+
+from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class WorkspaceError(RuntimeError):
+    """Raised when an isolated Git worktree cannot be prepared or inspected."""
+
+
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise WorkspaceError(completed.stderr.strip() or completed.stdout.strip())
+    return completed.stdout
+
+
+@dataclass(frozen=True)
+class GitWorktree:
+    original_repository: Path
+    path: Path
+
+    @classmethod
+    def create(cls, original_repository: Path, destination: Path) -> "GitWorktree":
+        repository = original_repository.resolve()
+        top_level = Path(_git(repository, "rev-parse", "--show-toplevel").strip()).resolve()
+        if top_level != repository:
+            raise WorkspaceError(
+                f"manifest repository must be the Git top level: {repository} != {top_level}"
+            )
+        destination = destination.resolve()
+        if destination.exists():
+            raise WorkspaceError(f"worktree destination already exists: {destination}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _git(repository, "worktree", "add", "--detach", str(destination), "HEAD")
+        return cls(repository, destination)
+
+    def diff(self) -> str:
+        # Intent-to-add makes new, non-ignored files visible in a regular patch.
+        _git(self.path, "add", "--intent-to-add", "--", ".")
+        return _git(self.path, "diff", "--binary", "--no-ext-diff", "HEAD", "--")
