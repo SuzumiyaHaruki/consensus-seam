@@ -28,6 +28,24 @@ class DeterministicVerifier:
     ) -> VerificationReport:
         """依次执行 build、原测试、能力检查，并在首个失败处返回。"""
 
+        base = self.verify_base(project, patched_worktree)
+        if not base.passed:
+            return base
+        return self.verify_capabilities(
+            project,
+            patched_worktree,
+            base=base,
+            capability_checks=capability_checks,
+            required_capabilities=required_capabilities,
+        )
+
+    def verify_base(
+        self,
+        project: LoadedProject,
+        patched_worktree: Path,
+    ) -> VerificationReport:
+        """在 evaluator fixture 不存在时执行候选构建和原测试。"""
+
         relative_working_directory = project.working_directory.relative_to(project.repository)
         working_directory = patched_worktree / relative_working_directory
 
@@ -53,6 +71,28 @@ class DeterministicVerifier:
                 route=route_failure(code),
             )
 
+        return VerificationReport(
+            passed=True,
+            build=build,
+            existing_tests=existing_tests,
+        )
+
+    def verify_capabilities(
+        self,
+        project: LoadedProject,
+        patched_worktree: Path,
+        *,
+        base: VerificationReport,
+        capability_checks: Iterable[CapabilityCheck] = (),
+        required_capabilities: Iterable[str] = (),
+    ) -> VerificationReport:
+        """复用已通过的 build/原测试结果，只执行显式能力检查。"""
+
+        if not base.passed or base.existing_tests is None:
+            raise ValueError("capability verification requires a passed base verification")
+        working_directory = patched_worktree / project.working_directory.relative_to(
+            project.repository
+        )
         checks = list(capability_checks)
         required = set(required_capabilities)
         selected_checks = [check for check in checks if check.capability in required]
@@ -72,8 +112,8 @@ class DeterministicVerifier:
             code = FailureCode.SEMANTIC_AMBIGUITY
             return VerificationReport(
                 passed=False,
-                build=build,
-                existing_tests=existing_tests,
+                build=base.build,
+                existing_tests=base.existing_tests,
                 failure_code=code,
                 route=route_failure(code),
                 details=["missing deterministic capability checks: " + ", ".join(missing)],
@@ -87,8 +127,8 @@ class DeterministicVerifier:
             if not execution.passed:
                 return VerificationReport(
                     passed=False,
-                    build=build,
-                    existing_tests=existing_tests,
+                    build=base.build,
+                    existing_tests=base.existing_tests,
                     capability_tests=executions,
                     failure_code=check.failure_code,
                     route=route_failure(check.failure_code),
@@ -97,8 +137,8 @@ class DeterministicVerifier:
 
         return VerificationReport(
             passed=True,
-            build=build,
-            existing_tests=existing_tests,
+            build=base.build,
+            existing_tests=base.existing_tests,
             capability_tests=executions,
             details=(
                 []

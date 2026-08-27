@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from ..config import LoadedProject
+from ..config import LoadedProject, ResolvedVerificationFixture
 
 
 class VerificationFixtureError(RuntimeError):
@@ -21,6 +22,17 @@ def materialized_verification_fixtures(
     project: LoadedProject,
     worktree: Path,
 ) -> Iterator[None]:
+    """兼容项目 manifest 的 fixture 入口。"""
+
+    with materialized_fixtures(project.verification_fixtures, worktree):
+        yield
+
+
+@contextmanager
+def materialized_fixtures(
+    fixtures: Iterable[ResolvedVerificationFixture],
+    worktree: Path,
+) -> Iterator[None]:
     """仅在 with 作用域内物化 evaluator-only 文件。
 
     Agent 3 返回后才进入该 context；finally 会删除文件并自底向上清理空
@@ -30,7 +42,7 @@ def materialized_verification_fixtures(
     root = worktree.resolve()
     created: list[Path] = []
     try:
-        for fixture in project.verification_fixtures:
+        for fixture in fixtures:
             destination = (root / fixture.destination).resolve()
             try:
                 destination.relative_to(root)

@@ -138,6 +138,21 @@ class CapabilityCheckConfig(StrictModel):
     failure_code: FailureCode
 
 
+def _validate_capability_check_configs(
+    checks: list[CapabilityCheckConfig],
+) -> None:
+    """复用 capability check 名称和 failure-code 一致性校验。"""
+
+    names = [check.name for check in checks]
+    if len(names) != len(set(names)):
+        raise ValueError("capability check names must be unique")
+    for check in checks:
+        if check.failure_code not in CAPABILITY_ALLOWED_CHECK_CODES[check.capability]:
+            raise ValueError(
+                f"{check.failure_code.value} is not valid for {check.capability}"
+            )
+
+
 class VerificationFixtureConfig(StrictModel):
     """隐藏文件从评测目录到临时 worktree 的复制规则。"""
 
@@ -152,6 +167,18 @@ class VerificationFixtureConfig(StrictModel):
             raise ValueError("verification fixture destination must stay in the worktree")
         if ".git" in self.destination.parts:
             raise ValueError("verification fixture cannot target .git")
+        return self
+
+
+class PostHocCheckManifest(StrictModel):
+    """生成后测试使用的独立检查清单。"""
+
+    capability_checks: list[CapabilityCheckConfig] = Field(min_length=1)
+    verification_fixtures: list[VerificationFixtureConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_checks(self) -> "PostHocCheckManifest":
+        _validate_capability_check_configs(self.capability_checks)
         return self
 
 
@@ -199,14 +226,7 @@ class ProjectManifest(StrictModel):
                 raise ValueError("transform_capabilities cannot be empty")
             if len(self.transform_capabilities) != len(set(self.transform_capabilities)):
                 raise ValueError("transform_capabilities must be unique")
-        names = [check.name for check in self.capability_checks]
-        if len(names) != len(set(names)):
-            raise ValueError("capability check names must be unique")
-        for check in self.capability_checks:
-            if check.failure_code not in CAPABILITY_ALLOWED_CHECK_CODES[check.capability]:
-                raise ValueError(
-                    f"{check.failure_code.value} is not valid for {check.capability}"
-                )
+        _validate_capability_check_configs(self.capability_checks)
         return self
 
 
@@ -321,8 +341,8 @@ class CapabilityFinding(StrictModel):
     test_support_reason: str | None = Field(
         default=None,
         description=(
-            "Simplified-Chinese explanation of why existing primitives are or "
-            "are not a complete test-facing interface."
+            "Explanation of why existing primitives are or are not a complete "
+            "test-facing interface."
         ),
     )
     suggested_changes: list[str] = Field(
@@ -739,6 +759,7 @@ class WorkflowOutcome(str, Enum):
     ANALYZED = "ANALYZED"
     NO_PATCH_NEEDED = "NO_PATCH_NEEDED"
     PASS = "PASS"
+    REPAIRED = "REPAIRED"
     PARTIAL = "PARTIAL"
     FAILED = "FAILED"
 

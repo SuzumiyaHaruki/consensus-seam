@@ -133,6 +133,29 @@ Controller 负责：
 - 项目 manifest 配置的基础能力检查；
 - 产物、补丁规模和模型成本审计。
 
+## 生成后测试与独立 repair
+
+开放式接口生成无法在实验前预知最终 Go API，因此不强制预写能够直接调用未知符号的隐藏测试。工作流分成两个可审计阶段：
+
+1. `patch` 发现并生成目标原生接口；
+2. 使用者根据实际 `interface-report.json` 和 `USAGE.md` 编写后置测试；
+3. `repair` 在原目标提交上重新应用候选补丁，执行后置测试；
+4. 测试失败时只把结构化命令结果反馈给 Agent 2；
+5. 每轮修订仍经过已有测试保护、格式化、构建、独立 Reviewer 和后置测试。
+
+`repair` 不重新运行 Analyzer，也不把 evaluator-only fixture 暴露给 Agent。它读取原实验的：
+
+- `capability-report.json`；
+- `interface-report.json`；
+- `changes.patch`；
+- `run-config.json`。
+
+原目标提交必须与当前目标仓库 `HEAD` 一致。每轮 repair 都从该 clean revision 创建 fresh worktree，再应用上一轮候选 patch，避免失败工作区残留，同时保留 Agent 2 的连续修复能力。
+
+如果后置测试第一次就通过，说明接口已被实际使用验证；如果经过 Agent 2 修复后通过，工作流返回 `REPAIRED`。这两种结果都只覆盖实际测试场景，不声称完备协议正确性。
+
+后置 checks 是生成后的测试输入，不是生成前 ground truth。它们一旦进入某次 repair 运行，就作为该运行的稳定测试目标，Agent 2 不能通过修改已有测试来规避失败。
+
 ## 验证边界
 
 v0.1 的验证分为三层：
@@ -190,6 +213,6 @@ Mini Raft 用于验证完整工作流和消息控制补丁。etcd/raft 用于检
 接下来的首要任务是：
 
 1. 去除全局规范中的 Mini Raft 接口形态；
-2. 生成覆盖已有和新增接口的中文 `USAGE.md`；
+2. 生成覆盖已有和新增接口的 `USAGE.md`，使用中文标题和字段说明，同时保留英文技术分析正文；
 3. 将额外严格检查留在具体 evaluation；
 4. 用收窄后的 etcd/raft 执行路径重新分析，再决定是否进入修改实验。

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from consensus_seam.config import ConfigurationError, load_project
+from consensus_seam.config import ConfigurationError, load_posthoc_checks, load_project
 
 
 def write_manifest(path: Path, repo: Path, working_directory: str = ".") -> None:
@@ -83,3 +83,31 @@ def test_transform_capabilities_must_be_unique(tmp_path: Path) -> None:
     )
     with pytest.raises(ConfigurationError, match="must be unique"):
         load_project(manifest)
+
+
+def test_load_posthoc_checks_resolves_external_fixtures(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    fixture = tmp_path / "post_hoc_test.go"
+    fixture.write_text("package acceptance_test\n", encoding="utf-8")
+    manifest = tmp_path / "post-hoc-checks.yaml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "capability_checks:",
+                "  - name: generated injection",
+                "    capability: message_injection",
+                "    command: go test ./posthoc",
+                "    failure_code: MESSAGE_INJECTION_FAILED",
+                "verification_fixtures:",
+                f"  - source: {fixture.name}",
+                "    destination: posthoc/post_hoc_test.go",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_posthoc_checks(manifest, repository=repo)
+
+    assert loaded.verification_fixtures[0].source == fixture.resolve()
+    assert loaded.manifest.capability_checks[0].capability == "message_injection"

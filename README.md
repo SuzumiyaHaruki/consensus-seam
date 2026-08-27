@@ -99,17 +99,21 @@ consensus-seam analyze \
 
 `DEEPSEEK_API_KEY_FILE` 可以提供同一路径，`DEEPSEEK_BASE_URL` 可以指定兼容网关。密钥内容不会写入实验产物。
 
-三个主命令分别是：
+四个主命令分别是：
 
 ```bash
 consensus-seam analyze --project /绝对路径/project.yaml
 consensus-seam patch   --project /绝对路径/project.yaml
 consensus-seam run     --project /绝对路径/project.yaml
+consensus-seam repair  --project /绝对路径/project.yaml \
+  --run /绝对路径/runs/<原生成实验> \
+  --checks /绝对路径/post-hoc-checks.yaml
 ```
 
 - `analyze`：只运行 Agent 1，不修改源码，也不执行目标构建测试；
 - `patch`：运行三个 Agent和候选构建，不执行完整原测试或 evaluator-only 隐藏检查；
 - `run`：在 `patch` 基础上执行目标 manifest 配置的基础能力检查。
+- `repair`：不重新运行 Analyzer；读取已有候选补丁和接口报告，执行生成后编写的后置测试，并把确定性失败反馈给 Agent 2 修复。
 
 `--responses responses.json` 是无 API 密钥时使用的确定性开发适配器。JSON 中按顺序存放 Agent 原始响应。
 
@@ -133,6 +137,8 @@ consensus-seam run     --project /绝对路径/project.yaml
 4. Reviewer 确认修改没有明显越过低侵入边界。
 
 某个目标可以配置更多检查，但这些目标专属检查必须留在自己的 `evaluation/<target>/` 目录，不能反向变成所有共识系统的全局要求。
+
+开放式接口生成不要求预先猜测 API。可以先运行 `patch`，使用者再根据实际 `USAGE.md` 编写测试，并通过 `repair --checks` 启动独立修复循环。后置测试代码直到 Reviewer 返回后才进入候选 worktree；Agent 2 只看到失败类型、命令和输出，不直接读取 evaluator-only fixture。
 
 实验失败分为三类：
 
@@ -179,13 +185,13 @@ consensus-seam run \
   --model-profile manifest
 ```
 
-etcd/raft 首轮只读分析：
+etcd/raft 第一阶段接口生成：
 
 ```bash
-consensus-seam analyze \
+GOTOOLCHAIN=auto consensus-seam patch \
   --project evaluation/etcd-raft/project.yaml \
   --api-key-file /绝对路径/deepseek-key.txt \
   --model-profile manifest
 ```
 
-运行所需材料见 [docs/required-materials.md](docs/required-materials.md)。
+运行所需材料见 [docs/required-materials.md](docs/required-materials.md)，本轮 Python 冗余审计见 [docs/redundancy-audit.md](docs/redundancy-audit.md)。

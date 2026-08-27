@@ -17,12 +17,12 @@ experiment:
   kind: blind_capability
   oracle_visible_to_agents: false
   research_claim: >
-    Exploratory, contract-aware, read-only analysis of seven basic test-control
-    capabilities in a production consensus library without source modification
-    or a human answer key.
+    Blind analysis and low-intrusion generation of seven basic test-control
+    interfaces in a production consensus library without a human answer key or
+    a predeclared target-specific API shape.
 
-# analyze-only 仍要求 manifest 提供命令，但 `consensus-seam analyze` 不会执行
-# baseline、测试、Transformer、Reviewer 或 Verifier。
+# `patch` 会构建候选并执行 Reviewer，但不执行 evaluator-only 后置测试；
+# 使用者先查看实际生成接口，再为独立 `repair` 阶段编写真实使用测试。
 build:
   command: go test -run '^$' ./...
 

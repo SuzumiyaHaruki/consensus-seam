@@ -102,6 +102,8 @@ Agent 必须确认停止边界、恢复入口、状态所有权以及持久/易�
 
 - `capability-report.json`：机器可读的七项能力分析；
 - `interface-report.json`：机器可读的新增接口说明；
-- `USAGE.md`：面向使用者的中文总结，合并已有入口、新增入口、路径覆盖和限制。
+- `USAGE.md`：面向使用者的总结，使用中文标题和字段名，合并已有入口、新增入口、路径覆盖和限制；详细技术正文保留 Agent 的英文原文。
 
 analyze-only 运行没有 `interface-report.json`，但仍会生成 `USAGE.md`，总结目标已有能力和待补充能力。
+
+接口生成后，使用者可以基于真实 API 编写测试，并通过 `repair` 把失败反馈给 Agent 2。这样 capability checks 不需要提前猜测接口形状，同时保留自动修复能力。

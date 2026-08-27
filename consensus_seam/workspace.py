@@ -76,6 +76,21 @@ class GitWorktree:
         _git(self.path, "add", "--intent-to-add", "--", ".")
         return _git(self.path, "diff", "--binary", "--no-ext-diff", "HEAD", "--")
 
+    def apply_patch(self, patch: str) -> None:
+        """把已有候选 patch 应用到 fresh worktree。"""
+
+        if not patch.strip():
+            raise WorkspaceError("cannot apply an empty candidate patch")
+        completed = subprocess.run(
+            ["git", "-C", str(self.path), "apply", "--binary", "--whitespace=nowarn", "-"],
+            input=patch,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise WorkspaceError(completed.stderr.strip() or completed.stdout.strip())
+
     def modified_existing_go_tests(self) -> list[str]:
         """返回被修改的已有 Go 测试；新增测试允许存在。"""
 

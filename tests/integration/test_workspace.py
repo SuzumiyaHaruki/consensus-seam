@@ -38,3 +38,7 @@ def test_worktree_isolates_changes_and_exports_new_files(tmp_path: Path) -> None
     assert metrics.production_lines_added == 1
     assert metrics.production_lines_deleted == 0
     assert metrics.protocol_core_files_modified == []
+
+    restored = GitWorktree.create(repo, tmp_path / "restored")
+    restored.apply_patch(patch)
+    assert (restored.path / "pending.go").read_text(encoding="utf-8") == "package mini\n"

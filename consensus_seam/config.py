@@ -9,7 +9,13 @@ from typing import Any, TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from .models import CapabilitySpec, ModificationPolicy, ProjectManifest
+from .models import (
+    CapabilitySpec,
+    ModificationPolicy,
+    PostHocCheckManifest,
+    ProjectManifest,
+    VerificationFixtureConfig,
+)
 from .resources import resource_root
 
 
@@ -59,6 +65,15 @@ class LoadedProject:
         )
 
 
+@dataclass(frozen=True)
+class LoadedPostHocChecks:
+    """解析后的生成后检查清单与 evaluator-only fixture。"""
+
+    manifest_path: Path
+    manifest: PostHocCheckManifest
+    verification_fixtures: tuple[ResolvedVerificationFixture, ...]
+
+
 def _read_yaml(path: Path) -> Any:
     """统一读取 YAML，并把文件/YAML 异常转换成 ConfigurationError。"""
 
@@ -78,6 +93,45 @@ def _load_model(path: Path, model_type: type[ModelT]) -> ModelT:
         return model_type.model_validate(_read_yaml(path))
     except ValidationError as exc:
         raise ConfigurationError(f"invalid configuration in {path}: {exc}") from exc
+
+
+def _resolve_verification_fixtures(
+    fixtures: list[VerificationFixtureConfig],
+    *,
+    configuration_directory: Path,
+    repository: Path,
+) -> tuple[ResolvedVerificationFixture, ...]:
+    """解析 fixture 路径，并保证 oracle 位于目标仓库之外。"""
+
+    resolved: list[ResolvedVerificationFixture] = []
+    destinations: set[Path] = set()
+    for fixture in fixtures:
+        source = fixture.source.expanduser()
+        if not source.is_absolute():
+            source = configuration_directory / source
+        source = source.resolve()
+        if not source.is_file():
+            raise ConfigurationError(f"verification fixture is not a file: {source}")
+        try:
+            source.relative_to(repository)
+        except ValueError:
+            pass
+        else:
+            raise ConfigurationError(
+                "verification fixtures must be outside the Agent-visible target repository"
+            )
+        if fixture.destination in destinations:
+            raise ConfigurationError(
+                f"duplicate verification fixture destination: {fixture.destination}"
+            )
+        destinations.add(fixture.destination)
+        resolved.append(
+            ResolvedVerificationFixture(
+                source=source,
+                destination=fixture.destination,
+            )
+        )
+    return tuple(resolved)
 
 
 def load_project(
@@ -123,36 +177,11 @@ def load_project(
     if not isinstance(protocol_brief, dict):
         raise ConfigurationError(f"protocol brief must be a mapping: {protocol_path}")
 
-    fixtures: list[ResolvedVerificationFixture] = []
-    destinations: set[Path] = set()
-    for fixture in manifest.verification_fixtures:
-        source = fixture.source.expanduser()
-        if not source.is_absolute():
-            source = path.parent / source
-        source = source.resolve()
-        if not source.is_file():
-            raise ConfigurationError(f"verification fixture is not a file: {source}")
-        # 隐藏 fixture 如果位于目标仓库中，即使 Prompt 不披露路径，Agent
-        # 仍可能通过 list/read 工具发现它，因此配置阶段直接拒绝。
-        try:
-            source.relative_to(repository)
-        except ValueError:
-            pass
-        else:
-            raise ConfigurationError(
-                "verification fixtures must be outside the Agent-visible target repository"
-            )
-        if fixture.destination in destinations:
-            raise ConfigurationError(
-                f"duplicate verification fixture destination: {fixture.destination}"
-            )
-        destinations.add(fixture.destination)
-        fixtures.append(
-            ResolvedVerificationFixture(
-                source=source,
-                destination=fixture.destination,
-            )
-        )
+    fixtures = _resolve_verification_fixtures(
+        manifest.verification_fixtures,
+        configuration_directory=path.parent,
+        repository=repository,
+    )
 
     return LoadedProject(
         manifest_path=path,
@@ -162,5 +191,26 @@ def load_project(
         capabilities=capabilities,
         modification_policy=policy,
         protocol_brief=protocol_brief,
-        verification_fixtures=tuple(fixtures),
+        verification_fixtures=fixtures,
+    )
+
+
+def load_posthoc_checks(
+    manifest_path: str | Path,
+    *,
+    repository: Path,
+) -> LoadedPostHocChecks:
+    """加载生成后 checks，并沿用项目 fixture 的安全边界。"""
+
+    path = Path(manifest_path).expanduser().resolve()
+    manifest = _load_model(path, PostHocCheckManifest)
+    fixtures = _resolve_verification_fixtures(
+        manifest.verification_fixtures,
+        configuration_directory=path.parent,
+        repository=repository.resolve(),
+    )
+    return LoadedPostHocChecks(
+        manifest_path=path,
+        manifest=manifest,
+        verification_fixtures=fixtures,
     )

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from consensus_seam.cli import main
-from consensus_seam.config import load_project
+from consensus_seam.config import load_posthoc_checks, load_project
 from consensus_seam.llm.client import FakeLLMClient
 from consensus_seam.llm.runtime import ToolCallingAgentRuntime
 from consensus_seam.models import WorkflowOutcome
@@ -85,6 +85,109 @@ class EditingFakeClient:
                             "meaning": "test-only wrapper around the normal handler",
                         },
                         "notes": ["test fixture change"],
+                    }
+                }
+            )
+        return json.dumps(review_report())
+
+
+class PostHocSourceRuntime:
+    """生成一个可编译但尚未满足后置真实测试的候选接口。"""
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
+    ) -> str:
+        if agent == "analyzer":
+            return json.dumps(capability_report())
+        if agent == "transformer":
+            assert tools is not None
+            result = json.loads(
+                tools.execute(
+                    "write_file",
+                    json.dumps(
+                        {
+                            "path": "generated.go",
+                            "content": "package mini\n\nfunc GeneratedValue() int { return 1 }\n",
+                        }
+                    ),
+                )
+            )
+            assert result["ok"] is True
+            return json.dumps(
+                {
+                    "message_injection": {
+                        "implemented": True,
+                        "message_id_scope": "test_session",
+                        "entrypoint": {
+                            "file": "generated.go",
+                            "symbol": "GeneratedValue",
+                        },
+                        "implementation_approach": ["test accessor"],
+                    }
+                }
+            )
+        return json.dumps(review_report())
+
+
+class PostHocRepairRuntime:
+    """只执行 Agent 2 修复与 Agent 3 复审，不允许重新分析。"""
+
+    def __init__(self) -> None:
+        self.agents: list[str] = []
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
+    ) -> str:
+        self.agents.append(agent)
+        if agent == "analyzer":
+            raise AssertionError("repair must not rerun Analyzer")
+        if agent == "transformer":
+            payload = json.loads(user_prompt)
+            assert payload["feedback"]["failure"] == "POST_HOC_VERIFICATION_FAILED"
+            assert tools is not None
+            result = json.loads(
+                tools.execute(
+                    "apply_patch",
+                    json.dumps(
+                        {
+                            "patch": """diff --git a/generated.go b/generated.go
+--- a/generated.go
++++ b/generated.go
+@@ -3 +3 @@
+-func GeneratedValue() int { return 1 }
++func GeneratedValue() int { return 2 }
+"""
+                        }
+                    ),
+                )
+            )
+            assert result["ok"] is True
+            return json.dumps(
+                {
+                    "message_injection": {
+                        "implemented": True,
+                        "message_id_scope": "test_session",
+                        "entrypoint": {
+                            "file": "generated.go",
+                            "symbol": "GeneratedValue",
+                        },
+                        "implementation_approach": ["post-hoc repair"],
                     }
                 }
             )
@@ -356,6 +459,83 @@ def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
     assert "测试接口使用报告" in usage
     assert "injectForTest" in usage
     assert not (repo / "injection_seam.go").exists()
+
+
+def test_posthoc_repair_reuses_candidate_and_routes_failure_to_agent2(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("GOCACHE", str(tmp_path / "gocache"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = write_project_manifest(tmp_path, repo, command="go test ./...")
+    project = load_project(manifest)
+
+    source_result = ConsensusWorkflow(
+        PostHocSourceRuntime(),
+        runs_root=tmp_path / "source-runs",
+    ).patch(project)
+    assert source_result.outcome is WorkflowOutcome.PASS
+
+    fixture = tmp_path / "generated_interface_test.go"
+    fixture.write_text(
+        """package acceptance_test
+
+import (
+    "testing"
+    mini "example.invalid/mini"
+)
+
+func TestGeneratedInterface(t *testing.T) {
+    if got := mini.GeneratedValue(); got != 2 {
+        t.Fatalf("GeneratedValue() = %d, want 2", got)
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    checks_path = tmp_path / "post-hoc-checks.yaml"
+    checks_path.write_text(
+        "\n".join(
+            [
+                "capability_checks:",
+                "  - name: generated interface scenario",
+                "    capability: message_injection",
+                "    command: go test ./_consensus_seam_posthoc/acceptance -run '^TestGeneratedInterface$' -count=1",
+                "    failure_code: MESSAGE_INJECTION_FAILED",
+                "verification_fixtures:",
+                f"  - source: {fixture.name}",
+                "    destination: _consensus_seam_posthoc/acceptance/generated_interface_test.go",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    checks = load_posthoc_checks(checks_path, repository=repo)
+    runtime = PostHocRepairRuntime()
+
+    result = ConsensusWorkflow(
+        runtime,
+        runs_root=tmp_path / "repair-runs",
+    ).repair(
+        project,
+        source_run=source_result.run_directory,
+        checks=checks,
+    )
+
+    assert result.outcome is WorkflowOutcome.REPAIRED
+    assert runtime.agents == ["transformer", "reviewer"]
+    patch = (result.run_directory / "changes.patch").read_text(encoding="utf-8")
+    assert "return 2" in patch
+    assert not (repo / "generated.go").exists()
+    assert (result.run_directory / "logs/verification-initial.json").is_file()
+    assert (result.run_directory / "logs/verification-repair-p1.json").is_file()
+    assert not (
+        result.run_directory
+        / "repaired-worktree-p1/_consensus_seam_posthoc/acceptance/generated_interface_test.go"
+    ).exists()
+    run_config = json.loads((result.run_directory / "run-config.json").read_text())
+    assert run_config["repair"]["source_run"] == str(source_result.run_directory)
 
 
 def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) -> None:

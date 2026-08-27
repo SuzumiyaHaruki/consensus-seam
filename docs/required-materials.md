@@ -60,6 +60,34 @@ consensus-seam analyze \
 
 这些材料属于具体目标，不会自动进入全局能力规范。
 
+## 生成后 repair 材料
+
+当接口形状由 Agent 自行设计时，可以先不提供 capability checks。`patch` 完成后，根据实际接口准备一个后置检查清单：
+
+```yaml
+capability_checks:
+  - name: generated interface scenario
+    capability: message_injection
+    command: go test ./_consensus_seam_posthoc/acceptance -run '^TestGeneratedInterface$' -count=1
+    failure_code: MESSAGE_INJECTION_FAILED
+
+verification_fixtures:
+  - source: post-hoc/generated_interface_test.go
+    destination: _consensus_seam_posthoc/acceptance/generated_interface_test.go
+```
+
+然后运行：
+
+```bash
+consensus-seam repair \
+  --project /绝对路径/project.yaml \
+  --run /绝对路径/runs/<原生成实验> \
+  --checks /绝对路径/post-hoc-checks.yaml \
+  --api-key-file /绝对路径/deepseek-key.txt
+```
+
+后置 fixture 必须位于目标仓库之外，且检查能力必须是原 `interface-report.json` 已实现的能力。可以一次只验证一个真实使用场景，不要求提前穷举所有能力。
+
 ## etcd/raft 首轮修改实验
 
 人工只需把独立 `go.etcd.io/raft/v3` 协议库放在系统边界内，不需要指定 `Node`、`RawNode` 或同步/异步路径。Analyzer 应自行发现这些路径并分别说明。真实网络、完整 etcd server 和跨进程存储仍由系统边界排除。

@@ -14,7 +14,7 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert "execution_paths" in analyzer_prompt
     assert "top-level `evidence` array" in analyzer_prompt
     assert "existing_test_interface_complete" in analyzer_prompt
-    assert "Simplified Chinese" in analyzer_prompt
-    assert "Simplified Chinese" in transformer_prompt
+    assert "structured report in English" in analyzer_prompt
+    assert "structured interface report in English" in transformer_prompt
     assert "covered_paths" in transformer_prompt
     assert "uncovered_paths" in transformer_prompt

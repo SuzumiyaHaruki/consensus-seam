@@ -1,34 +1,34 @@
 [
   {
     "agent": "analyzer",
-    "api_calls": 23,
-    "api_wall_clock_seconds": 214.07734292299938,
-    "cache_hit_input_tokens": 1002880,
-    "cache_miss_input_tokens": 59332,
+    "api_calls": 28,
+    "api_wall_clock_seconds": 229.34278870899288,
+    "cache_hit_input_tokens": 1377024,
+    "cache_miss_input_tokens": 74737,
     "error_type": null,
-    "input_tokens": 1062212,
+    "input_tokens": 1451761,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_tokens": 28781,
+    "output_tokens": 29603,
     "status": "COMPLETED",
-    "tool_calls": 48,
-    "total_tokens": 1090993,
-    "wall_clock_seconds": 214.65985835800166
+    "tool_calls": 54,
+    "total_tokens": 1481364,
+    "wall_clock_seconds": 229.94466954100062
   },
   {
     "agent": "analyzer",
     "api_calls": 1,
-    "api_wall_clock_seconds": 26.12324633499884,
-    "cache_hit_input_tokens": 5248,
-    "cache_miss_input_tokens": 6150,
+    "api_wall_clock_seconds": 32.73485502599942,
+    "cache_hit_input_tokens": 6272,
+    "cache_miss_input_tokens": 7193,
     "error_type": null,
-    "input_tokens": 11398,
+    "input_tokens": 13465,
     "invocation_id": "analyzer-a1-attempt2",
     "model": "deepseek-v4-flash",
-    "output_tokens": 6113,
+    "output_tokens": 7370,
     "status": "COMPLETED",
     "tool_calls": 0,
-    "total_tokens": 17511,
-    "wall_clock_seconds": 26.132329500000196
+    "total_tokens": 20835,
+    "wall_clock_seconds": 32.742839724996884
   }
 ]

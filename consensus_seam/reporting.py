@@ -217,7 +217,6 @@ class ArtifactStore:
 
         patched-worktree 可能包含完整目标仓库和未审核代码，既体积大又不适合
         上传；latest 只复制报告、最终 patch、统计和日志。先写 staging 再
-        os.replace，避免复制到一半留下表面完整的目录。
         """
 
         runs_root = self.run_directory.parent

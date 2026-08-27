@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .agents import CapabilityAnalyzer, IndependentReviewer, LowIntrusionTransformer
-from .config import LoadedProject
+from .config import LoadedPostHocChecks, LoadedProject, ResolvedVerificationFixture
 from .languages.go import GoBackend
 from .llm.base import AgentRuntime
 from .llm.profiles import ModelProfile, resolve_model_profile
 from .models import (
+    CapabilityCheckConfig,
     CapabilityReport,
+    CommandExecution,
     FailureRoute,
+    InterfaceReport,
+    PatchMetrics,
+    ReviewReport,
     ReviewOverall,
+    VerificationReport,
     WorkflowOutcome,
     WorkflowResult,
 )
@@ -24,7 +32,7 @@ from .verify import (
     BaselineVerifier,
     CapabilityCheck,
     DeterministicVerifier,
-    materialized_verification_fixtures,
+    materialized_fixtures,
 )
 from .workspace import GitWorktree, git_audit_state
 
@@ -34,6 +42,22 @@ FORMAL_EXPERIMENT_KINDS = frozenset({"blind_capability", "repair"})
 
 class ExperimentPreconditionError(RuntimeError):
     """正式实验无法绑定到 clean Git revision 时抛出。"""
+
+
+class RepairInputError(ValueError):
+    """原候选产物或生成后 checks 无法形成安全 repair 输入时抛出。"""
+
+
+@dataclass(frozen=True)
+class RepairSource:
+    """从既有 run 恢复出的候选接口及其目标版本。"""
+
+    run_directory: Path
+    report: CapabilityReport
+    interface_report: InterfaceReport
+    review_report: ReviewReport
+    patch: str
+    target_revision: str
 
 
 class ConsensusWorkflow:
@@ -92,6 +116,8 @@ class ConsensusWorkflow:
         self,
         project: LoadedProject,
         operation: Callable[[ArtifactStore], WorkflowResult],
+        *,
+        run_metadata: dict[str, Any] | None = None,
     ) -> WorkflowResult:
         """为所有入口统一管理 run 目录、统计快照和 latest 发布。
 
@@ -102,7 +128,7 @@ class ConsensusWorkflow:
 
         self._require_reproducible_experiment(project)
         artifacts = ArtifactStore.create(self.runs_root)
-        self._write_run_config(artifacts, project)
+        self._write_run_config(artifacts, project, extra=run_metadata)
         stats_start = self._runtime_stats_count()
         tool_audit_start = self._runtime_tool_audit_count()
         completed = False
@@ -125,6 +151,331 @@ class ConsensusWorkflow:
         """运行 baseline、三个 Agent 和全部确定性能力检查。"""
 
         return self._patch_loop(project, verify=True)
+
+    def repair(
+        self,
+        project: LoadedProject,
+        *,
+        source_run: Path,
+        checks: LoadedPostHocChecks,
+    ) -> WorkflowResult:
+        """用生成后真实测试验证并修复一个已有候选接口。"""
+
+        source = self._load_repair_source(project, source_run, checks)
+        return self._with_artifacts(
+            project,
+            lambda artifacts: self._execute_repair(project, source, checks, artifacts),
+            run_metadata={
+                "repair": {
+                    "source_run": str(source.run_directory),
+                    "checks_manifest": str(checks.manifest_path),
+                    "target_revision": source.target_revision,
+                }
+            },
+        )
+
+    def _load_repair_source(
+        self,
+        project: LoadedProject,
+        source_run: Path,
+        checks: LoadedPostHocChecks,
+    ) -> RepairSource:
+        """校验原 run 产物、目标 revision 和后置检查范围。"""
+
+        run_directory = source_run.expanduser().resolve()
+        if not run_directory.is_dir():
+            raise RepairInputError(f"repair source run is not a directory: {run_directory}")
+
+        def read_text(name: str) -> str:
+            path = run_directory / name
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise RepairInputError(f"cannot read repair source artifact {path}: {exc}") from exc
+
+        try:
+            report = CapabilityReport.model_validate_json(read_text("capability-report.json"))
+            interface_report = InterfaceReport.model_validate_json(
+                read_text("interface-report.json")
+            )
+            review_report = ReviewReport.model_validate_json(read_text("review-report.json"))
+            run_config = json.loads(read_text("run-config.json"))
+        except ValueError as exc:
+            raise RepairInputError(f"invalid repair source artifacts: {exc}") from exc
+        patch = read_text("changes.patch")
+        if not patch.strip():
+            raise RepairInputError("repair source changes.patch is empty")
+        if report.target != project.manifest.name:
+            raise RepairInputError(
+                f"repair source target {report.target!r} does not match project "
+                f"{project.manifest.name!r}"
+            )
+        try:
+            target_state = run_config["source_revisions"]["target"]
+            target_revision = target_state["revision"]
+        except (KeyError, TypeError) as exc:
+            raise RepairInputError("repair source run-config lacks target revision") from exc
+        current_revision = git_audit_state(project.repository)["revision"]
+        if not isinstance(target_revision, str) or target_revision != current_revision:
+            raise RepairInputError(
+                "repair source target revision does not match current target HEAD: "
+                f"{target_revision!r} != {current_revision!r}"
+            )
+
+        implemented = {
+            name
+            for name, capability in interface_report.capabilities().items()
+            if capability.implemented
+        }
+        checked = {item.capability for item in checks.manifest.capability_checks}
+        unsupported = checked - implemented
+        if unsupported:
+            raise RepairInputError(
+                "post-hoc checks target capabilities absent from the source interface: "
+                + ", ".join(sorted(unsupported))
+            )
+        not_patchable = checked - report.patchable()
+        if not_patchable:
+            raise RepairInputError(
+                "post-hoc repair requires original PATCHABLE findings: "
+                + ", ".join(sorted(not_patchable))
+            )
+        return RepairSource(
+            run_directory=run_directory,
+            report=report,
+            interface_report=interface_report,
+            review_report=review_report,
+            patch=patch,
+            target_revision=target_revision,
+        )
+
+    def _execute_repair(
+        self,
+        project: LoadedProject,
+        source: RepairSource,
+        posthoc: LoadedPostHocChecks,
+        artifacts: ArtifactStore,
+    ) -> WorkflowResult:
+        """执行后置验证，并在失败时进入有界 Agent 2 修复循环。"""
+
+        baseline = self.baseline_verifier.run(project)
+        artifacts.write_model("baseline-report.json", baseline)
+        if not baseline.passed:
+            return WorkflowResult(
+                outcome=WorkflowOutcome.FAILED,
+                run_directory=artifacts.run_directory,
+                reason="BASELINE_FAILED",
+            )
+
+        report = source.report
+        current_interface = source.interface_report
+        current_patch = source.patch
+        artifacts.write_model("capability-report.json", report)
+        artifacts.write_model("interface-report.json", current_interface)
+        artifacts.write_model("review-report.json", source.review_report)
+        artifacts.write_text("changes.patch", current_patch)
+        artifacts.write_usage(report, current_interface)
+        artifacts.write_json(
+            "post-hoc-checks.json",
+            posthoc.manifest.model_dump(mode="json"),
+        )
+
+        check_configs = posthoc.manifest.capability_checks
+        checks = self._capability_checks(check_configs)
+        repair_capabilities = {item.capability for item in check_configs}
+
+        initial = GitWorktree.create(
+            project.repository,
+            artifacts.run_directory / "repair-candidate",
+        )
+        initial.apply_patch(current_patch)
+        protected = initial.modified_existing_go_tests()
+        if protected:
+            raise RepairInputError(
+                "repair source patch modifies existing Go tests: " + ", ".join(protected)
+            )
+        initial_metrics = initial.patch_metrics()
+        artifacts.write_model("patch-metrics.json", initial_metrics)
+        initial_verification = self._verify_with_fixtures(
+            project,
+            initial,
+            checks=checks,
+            required_capabilities=repair_capabilities,
+            fixtures=posthoc.verification_fixtures,
+        )
+        artifacts.write_model("verification-report.json", initial_verification)
+        artifacts.write_model("logs/verification-initial.json", initial_verification)
+        if initial_verification.passed:
+            self._write_unresolved(artifacts, report, project)
+            return WorkflowResult(
+                outcome=WorkflowOutcome.PASS,
+                run_directory=artifacts.run_directory,
+                reason="POST_HOC_CHECKS_PASSED_WITHOUT_REPAIR",
+            )
+        if initial_verification.route is not FailureRoute.AGENT2:
+            self._write_unresolved(artifacts, report, project)
+            return WorkflowResult(
+                outcome=WorkflowOutcome.PARTIAL,
+                run_directory=artifacts.run_directory,
+                reason=(
+                    initial_verification.failure_code.value
+                    if initial_verification.failure_code
+                    else "POST_HOC_VERIFICATION_NEEDS_HUMAN"
+                ),
+            )
+
+        _, transformer, reviewer = self._agents(project)
+        feedback: dict[str, Any] = {
+            "failure": "POST_HOC_VERIFICATION_FAILED",
+            "verification": initial_verification.model_dump(mode="json"),
+            "source_run": str(source.run_directory),
+            "prior_interface_report": current_interface.model_dump(
+                mode="json", exclude_none=True
+            ),
+            "instruction": (
+                "Repair the existing candidate in this worktree. Preserve its public "
+                "interface unless the deterministic failure proves that design invalid."
+            ),
+        }
+
+        for repair_round in range(1, project.manifest.limits.agent2_patch_rounds + 1):
+            worktree = GitWorktree.create(
+                project.repository,
+                artifacts.run_directory / f"repaired-worktree-p{repair_round}",
+            )
+            worktree.apply_patch(current_patch)
+            repaired_subset = transformer.transform(
+                project,
+                report,
+                worktree.path,
+                selected_capabilities=repair_capabilities,
+                feedback=feedback,
+                invocation_id=f"transformer-repair-p{repair_round}",
+            )
+            artifacts.write_model(
+                f"logs/interface-repair-p{repair_round}.json",
+                repaired_subset,
+            )
+            if repaired_subset.rediscovered():
+                self._write_unresolved(artifacts, report, project)
+                return WorkflowResult(
+                    outcome=WorkflowOutcome.PARTIAL,
+                    run_directory=artifacts.run_directory,
+                    reason="Repair rediscovered an implemented capability as invasive",
+                )
+            merged_interface = self._merge_interface_reports(
+                current_interface,
+                repaired_subset,
+            )
+
+            protected = worktree.modified_existing_go_tests()
+            if protected:
+                feedback = {
+                    "failure": "EXISTING_TEST_MODIFIED",
+                    "files": protected,
+                    "instruction": "Repair production code or Agent-created tests only.",
+                }
+                continue
+
+            format_result, build_result = self._format_and_build_candidate(
+                project,
+                worktree,
+                artifacts,
+                label=f"repair-p{repair_round}",
+            )
+            if not format_result.passed:
+                current_patch = worktree.diff()
+                current_interface = merged_interface
+                feedback = {
+                    "failure": "FORMAT_FAILED",
+                    "execution": format_result.model_dump(mode="json"),
+                    "prior_interface_report": current_interface.model_dump(
+                        mode="json", exclude_none=True
+                    ),
+                }
+                continue
+
+            current_patch = worktree.diff()
+            current_interface = merged_interface
+            if build_result is None or not build_result.passed:
+                feedback = {
+                    "failure": "BUILD_FAILED",
+                    "execution": (
+                        None
+                        if build_result is None
+                        else build_result.model_dump(mode="json")
+                    ),
+                    "prior_interface_report": current_interface.model_dump(
+                        mode="json", exclude_none=True
+                    ),
+                }
+                continue
+
+            current_patch, _, review = self._review_candidate(
+                project,
+                report,
+                current_interface,
+                worktree,
+                reviewer,
+                artifacts,
+                label=f"repair-p{repair_round}",
+                invocation_id=f"reviewer-repair-p{repair_round}",
+            )
+            if review.overall is ReviewOverall.REVISE_AGENT2:
+                feedback = review.model_dump(mode="json")
+                continue
+            if review.overall is not ReviewOverall.PASS:
+                self._write_unresolved(artifacts, report, project)
+                return WorkflowResult(
+                    outcome=WorkflowOutcome.PARTIAL,
+                    run_directory=artifacts.run_directory,
+                    reason="Repair review requires analysis or human judgment",
+                )
+
+            verification = self._verify_with_fixtures(
+                project,
+                worktree,
+                checks=checks,
+                required_capabilities=repair_capabilities,
+                fixtures=posthoc.verification_fixtures,
+            )
+            artifacts.write_model("verification-report.json", verification)
+            artifacts.write_model(
+                f"logs/verification-repair-p{repair_round}.json",
+                verification,
+            )
+            if verification.passed:
+                self._write_unresolved(artifacts, report, project)
+                return WorkflowResult(
+                    outcome=WorkflowOutcome.REPAIRED,
+                    run_directory=artifacts.run_directory,
+                )
+            if verification.route is FailureRoute.AGENT2:
+                feedback = {
+                    "failure": "POST_HOC_VERIFICATION_FAILED",
+                    "verification": verification.model_dump(mode="json"),
+                    "prior_interface_report": current_interface.model_dump(
+                        mode="json", exclude_none=True
+                    ),
+                }
+                continue
+            self._write_unresolved(artifacts, report, project)
+            return WorkflowResult(
+                outcome=WorkflowOutcome.PARTIAL,
+                run_directory=artifacts.run_directory,
+                reason=(
+                    verification.failure_code.value
+                    if verification.failure_code
+                    else "POST_HOC_VERIFICATION_NEEDS_HUMAN"
+                ),
+            )
+
+        self._write_unresolved(artifacts, report, project)
+        return WorkflowResult(
+            outcome=WorkflowOutcome.FAILED,
+            run_directory=artifacts.run_directory,
+            reason="Agent 2 repair budget exhausted",
+        )
 
     def _patch_loop(self, project: LoadedProject, *, verify: bool) -> WorkflowResult:
         return self._with_artifacts(
@@ -279,13 +630,12 @@ class ConsensusWorkflow:
                     }
                     continue
 
-                # intent-to-add 让新文件出现在普通 git diff 中；随后只格式化
-                # 实际变化的 Go 文件。
-                worktree.diff()
-                format_result = self.backend.format_changed_files(worktree.path)
-                artifacts.write_model(
-                    f"logs/format-a{analysis_round}-p{patch_round}.json",
-                    format_result,
+                label = f"a{analysis_round}-p{patch_round}"
+                format_result, build_result = self._format_and_build_candidate(
+                    project,
+                    worktree,
+                    artifacts,
+                    label=label,
                 )
                 if not format_result.passed:
                     agent2_feedback = {
@@ -294,40 +644,26 @@ class ConsensusWorkflow:
                     }
                     continue
 
-                relative_workdir = project.working_directory.relative_to(project.repository)
-                patched_workdir = worktree.path / relative_workdir
-                build_result = self.backend.build(
-                    patched_workdir,
-                    project.manifest.build.command,
-                )
-                artifacts.write_model(
-                    f"logs/build-a{analysis_round}-p{patch_round}.json",
-                    build_result,
-                )
-                if not build_result.passed:
+                if build_result is None or not build_result.passed:
                     agent2_feedback = {
                         "failure": "BUILD_FAILED",
-                        "execution": build_result.model_dump(mode="json"),
+                        "execution": (
+                            None
+                            if build_result is None
+                            else build_result.model_dump(mode="json")
+                        ),
                     }
                     continue
 
-                git_diff = worktree.diff()
-                artifacts.write_text("changes.patch", git_diff)
-                patch_metrics = worktree.patch_metrics()
-                artifacts.write_model("patch-metrics.json", patch_metrics)
-                review = reviewer.review(
+                git_diff, _, review = self._review_candidate(
                     project,
                     report,
                     interface_report,
-                    worktree.path,
-                    git_diff,
-                    patch_metrics,
+                    worktree,
+                    reviewer,
+                    artifacts,
+                    label=label,
                     invocation_id=f"reviewer-a{analysis_round}-p{patch_round}",
-                )
-                artifacts.write_model("review-report.json", review)
-                artifacts.write_model(
-                    f"logs/review-a{analysis_round}-p{patch_round}.json",
-                    review,
                 )
 
                 if review.overall is ReviewOverall.REVISE_AGENT1:
@@ -355,29 +691,19 @@ class ConsensusWorkflow:
                         run_directory=artifacts.run_directory,
                     )
 
-                checks = [
-                    CapabilityCheck(
-                        name=item.name,
-                        capability=item.capability,
-                        command=item.command,
-                        failure_code=item.failure_code,
-                    )
-                    for item in project.manifest.capability_checks
-                ]
+                checks = self._capability_checks(project.manifest.capability_checks)
                 implemented = {
                     name
                     for name, capability in interface_report.capabilities().items()
                     if capability.implemented
                 }
-                # 隐藏 fixture 直到 Agent 3 完成才短暂出现，并由 context
-                # manager 在任何成功/异常路径上删除。
-                with materialized_verification_fixtures(project, worktree.path):
-                    verification = self.verifier.verify(
-                        project,
-                        worktree.path,
-                        capability_checks=checks,
-                        required_capabilities=implemented,
-                    )
+                verification = self._verify_with_fixtures(
+                    project,
+                    worktree,
+                    checks=checks,
+                    required_capabilities=implemented,
+                    fixtures=project.verification_fixtures,
+                )
                 artifacts.write_model("verification-report.json", verification)
                 artifacts.write_model(
                     f"logs/verification-a{analysis_round}-p{patch_round}.json",
@@ -416,6 +742,115 @@ class ConsensusWorkflow:
             reason="Agent 1 reanalysis budget exhausted",
         )
 
+    def _format_and_build_candidate(
+        self,
+        project: LoadedProject,
+        worktree: GitWorktree,
+        artifacts: ArtifactStore,
+        *,
+        label: str,
+    ) -> tuple[CommandExecution, CommandExecution | None]:
+        """统一格式化候选并执行项目 build，供 patch/repair 共用。"""
+
+        worktree.diff()
+        format_result = self.backend.format_changed_files(worktree.path)
+        artifacts.write_model(f"logs/format-{label}.json", format_result)
+        if not format_result.passed:
+            return format_result, None
+        patched_workdir = worktree.path / project.working_directory.relative_to(
+            project.repository
+        )
+        build_result = self.backend.build(
+            patched_workdir,
+            project.manifest.build.command,
+        )
+        artifacts.write_model(f"logs/build-{label}.json", build_result)
+        return format_result, build_result
+
+    @staticmethod
+    def _review_candidate(
+        project: LoadedProject,
+        report: CapabilityReport,
+        interface_report: InterfaceReport,
+        worktree: GitWorktree,
+        reviewer: IndependentReviewer,
+        artifacts: ArtifactStore,
+        *,
+        label: str,
+        invocation_id: str,
+    ) -> tuple[str, PatchMetrics, ReviewReport]:
+        """统一导出候选 patch/metrics，并执行独立 Reviewer。"""
+
+        git_diff = worktree.diff()
+        patch_metrics = worktree.patch_metrics()
+        artifacts.write_text("changes.patch", git_diff)
+        artifacts.write_model("patch-metrics.json", patch_metrics)
+        artifacts.write_model("interface-report.json", interface_report)
+        artifacts.write_usage(report, interface_report)
+        review = reviewer.review(
+            project,
+            report,
+            interface_report,
+            worktree.path,
+            git_diff,
+            patch_metrics,
+            invocation_id=invocation_id,
+        )
+        artifacts.write_model("review-report.json", review)
+        artifacts.write_model(f"logs/review-{label}.json", review)
+        return git_diff, patch_metrics, review
+
+    @staticmethod
+    def _capability_checks(
+        configs: list[CapabilityCheckConfig],
+    ) -> list[CapabilityCheck]:
+        """把 manifest 模型转换为 Verifier 的不可变运行描述。"""
+
+        return [
+            CapabilityCheck(
+                name=item.name,
+                capability=item.capability,
+                command=item.command,
+                failure_code=item.failure_code,
+            )
+            for item in configs
+        ]
+
+    def _verify_with_fixtures(
+        self,
+        project: LoadedProject,
+        worktree: GitWorktree,
+        *,
+        checks: list[CapabilityCheck],
+        required_capabilities: set[str],
+        fixtures: tuple[ResolvedVerificationFixture, ...],
+    ) -> VerificationReport:
+        """在 Reviewer 之后短暂物化 fixture 并执行统一 Verifier。"""
+
+        base = self.verifier.verify_base(project, worktree.path)
+        if not base.passed:
+            return base
+        with materialized_fixtures(fixtures, worktree.path):
+            return self.verifier.verify_capabilities(
+                project,
+                worktree.path,
+                base=base,
+                capability_checks=checks,
+                required_capabilities=required_capabilities,
+            )
+
+    @staticmethod
+    def _merge_interface_reports(
+        existing: InterfaceReport,
+        repaired: InterfaceReport,
+    ) -> InterfaceReport:
+        """用本轮修复子集替换原报告对应能力，保留未测试能力。"""
+
+        merged = existing.model_copy(deep=True)
+        for name, capability in repaired.capabilities().items():
+            setattr(merged, name, capability)
+        return merged
+
     def _agents(
         self,
         project: LoadedProject,
@@ -441,37 +876,43 @@ class ConsensusWorkflow:
             ),
         )
 
-    def _write_run_config(self, artifacts: ArtifactStore, project: LoadedProject) -> None:
+    def _write_run_config(
+        self,
+        artifacts: ArtifactStore,
+        project: LoadedProject,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         """记录复现实验所需的提交、模型、边界和 Controller-only 配置。"""
 
         models = resolve_model_profile(project.manifest.llm, self.model_profile)
-        artifacts.write_json(
-            "run-config.json",
-            {
-                "project": project.manifest.name,
-                "experiment": (
-                    None
-                    if project.manifest.experiment is None
-                    else project.manifest.experiment.model_dump(mode="json")
-                ),
-                "source_revisions": {
-                    "controller": git_audit_state(self.controller_repository),
-                    "target": git_audit_state(project.repository),
-                },
-                "system_boundary": project.manifest.system_boundary.model_dump(mode="json"),
-                "model_profile": self.model_profile,
-                "transform_capabilities": project.manifest.transform_capabilities,
-                "resolved_models": models.model_dump(mode="json"),
-                "capability_checks": [
-                    check.model_dump(mode="json")
-                    for check in project.manifest.capability_checks
-                ],
-                "verification_fixtures": [
-                    fixture.model_dump(mode="json")
-                    for fixture in project.manifest.verification_fixtures
-                ],
+        payload: dict[str, Any] = {
+            "project": project.manifest.name,
+            "experiment": (
+                None
+                if project.manifest.experiment is None
+                else project.manifest.experiment.model_dump(mode="json")
+            ),
+            "source_revisions": {
+                "controller": git_audit_state(self.controller_repository),
+                "target": git_audit_state(project.repository),
             },
-        )
+            "system_boundary": project.manifest.system_boundary.model_dump(mode="json"),
+            "model_profile": self.model_profile,
+            "transform_capabilities": project.manifest.transform_capabilities,
+            "resolved_models": models.model_dump(mode="json"),
+            "capability_checks": [
+                check.model_dump(mode="json")
+                for check in project.manifest.capability_checks
+            ],
+            "verification_fixtures": [
+                fixture.model_dump(mode="json")
+                for fixture in project.manifest.verification_fixtures
+            ],
+        }
+        if extra:
+            payload.update(extra)
+        artifacts.write_json("run-config.json", payload)
 
     def _require_reproducible_experiment(self, project: LoadedProject) -> None:
         """正式 blind/repair 实验必须从两个 clean Git revision 启动。
