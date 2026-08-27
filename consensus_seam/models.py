@@ -524,6 +524,27 @@ class InterfaceCapability(StrictModel):
     copy_strategy: str | None = None
     production_mode: str | None = None
     test_mode: str | None = None
+    instance_reference: str | None = Field(
+        default=None,
+        description=(
+            "How enumeration identifies one concrete cache instance and how long "
+            "that reference remains stable."
+        ),
+    )
+    target_binding_strategy: str | None = Field(
+        default=None,
+        description=(
+            "How a cached destination is resolved or validated against the real "
+            "target object before normal protocol ingress."
+        ),
+    )
+    cache_effects: str | None = Field(
+        default=None,
+        description=(
+            "Cache effects of enumerate, take, drop, success, synchronous failure, "
+            "and unconfirmed asynchronous delivery."
+        ),
+    )
     message_id_scope: Literal[
         "pending_store_instance", "test_session", "node", "global"
     ] | None = None

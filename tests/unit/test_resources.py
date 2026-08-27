@@ -11,6 +11,9 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert "target may have zero, one, or many such paths" in capabilities
     assert "could build its own slice or map" in capabilities
     assert "same authoritative cache used by" in capabilities
+    assert "Selection and reference are separate" in capabilities
+    assert "bare mutable-list position is not a stable reference" in capabilities
+    assert "caller-supplied target object matches" in capabilities
     assert "NewMessageController(Transport)" not in capabilities
     analyzer_prompt = (root / "prompts" / "agent1.md").read_text(encoding="utf-8")
     transformer_prompt = (root / "prompts" / "agent2.md").read_text(encoding="utf-8")
@@ -30,9 +33,13 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert "message-selection or scheduling policy" in transformer_prompt
     assert "separate take-and-input facade" in transformer_prompt
     assert "one coherent message-control seam" in transformer_prompt
+    assert "an unambiguous cache-instance reference is required" in transformer_prompt
+    assert "Do not document target binding as solely the caller's responsibility" in transformer_prompt
     assert "usage_examples" in transformer_prompt
-    assert "no universal ID form" in capabilities
+    assert "no universal" in capabilities
+    assert "ID form is required" in capabilities
     assert "residual, non-blocking limitations" in reviewer_prompt
     assert "silent best-effort send is not confirmed success" in reviewer_prompt
     assert "A standalone protocol-ingress API does not establish this relationship" in reviewer_prompt
     assert "message_cache_injection_coherence" in reviewer_prompt
+    assert "reject bulk matching as proof of exact duplicate-instance control" in reviewer_prompt

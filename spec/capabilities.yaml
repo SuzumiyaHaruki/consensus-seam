@@ -32,9 +32,19 @@ capabilities:
         order. The framework does not decide which message a test should choose.
       instance_operation: >
         Test code can act on one specified cached instance and can remove or clear
-        cached messages. The reference may be a target-native record, handle,
-        index, pointer, token, or optional control ID; no universal ID form is
-        required.
+        cached messages. Selection and reference are separate: the test chooses
+        by inspecting target-native message content, while the facade returns a
+        reference that continues to identify that concrete cache instance until
+        its declared consumption or removal. The reference may be a target-native
+        record, opaque handle, pointer, token, or optional control ID; no universal
+        ID form is required.
+      reference_stability: >
+        A bare mutable-list position is not a stable reference when earlier
+        removal, concurrent capture, sorting, or another public mutation can make
+        it designate a different instance. An index is acceptable only when the
+        facade makes the observation and operation atomic, versioned, or otherwise
+        guarantees that no intervening mutation can change its meaning. Duplicate
+        messages must remain distinguishable.
       consumer_scope: >
         For every claimed path, declare whether its entrypoints are callable by
         external consumers, same-package tests, or only an internal harness. An
@@ -48,6 +58,9 @@ capabilities:
         Any new handles or metadata remain consistent with every existing mutation
         path for the underlying cache. Prefer one authoritative cache; do not rely
         on parallel stores staying aligned when a public API can mutate only one.
+        A publicly mutable collection plus a bulk filter is not an exact-instance
+        control facade when test authors must splice the collection themselves or
+        when parallel reference metadata cannot observe those mutations.
       path_coverage: >
         The Analyzer discovers the materially distinct in-scope paths without
         assuming how many exist. SUPPORTED requires an explicit controllable cache
@@ -73,8 +86,11 @@ capabilities:
     testing_contract:
       exact_instance: >
         The test can refer to and operate on one concrete cached instance using a
-        target-native record, handle, index, token, pointer, or optional control
-        ID. ConsensusSeam does not provide the policy for choosing that instance.
+        stable target-native record, opaque handle, token, pointer, or optional
+        control ID returned during cache enumeration. A position may be used only
+        under the reference-stability rule. ConsensusSeam does not provide the
+        policy for choosing that instance; the test chooses by inspecting the
+        target-native message snapshot and then operates through its reference.
       cache_relationship: >
         The injection facade operates on the same authoritative cache used by
         message capture. An arbitrary message accepted by a normal protocol
@@ -88,16 +104,18 @@ capabilities:
         authoritative cache explicit and state the cache effect and error behavior.
       target_binding: >
         Use target-object ownership or routing that actually exists in the target.
-        A target ID alone is not a target-object binding. Existing constructors,
-        node collections, or test environments are allowed when documented in
-        the interface report.
+        A target ID alone is not a target-object binding. The facade must resolve
+        the stored destination to the real target object, or validate that a
+        caller-supplied target object matches the cached instance before delivery.
+        Existing constructors, node collections, registries, resolvers, or test
+        environments are allowed when documented in the interface report.
       delivery_boundary: >
         Injection enters the normal protocol input boundary for the declared
         path and does not mutate protocol state directly.
       success_and_consumption: >
         A combined injection wrapper must not report confirmed success while an
-        asynchronous path may silently drop the attempt. A separate take-and-step
-        interface may leave retry, requeue, or deliberate loss policy to the test;
+        asynchronous path may silently drop the attempt. A separate take-and-input
+        facade may leave retry, requeue, or deliberate loss policy to the test;
         its responsibilities must be explicit rather than hidden.
       consumer_scope: >
         The interface report distinguishes externally callable, same-package,

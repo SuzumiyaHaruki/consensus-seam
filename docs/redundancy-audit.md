@@ -34,7 +34,7 @@
 
 ## 验证
 
-- `pytest`：68 项通过；
+- `pytest`：69 项通过；
 - `git diff --check`：通过；
 - `python3 -m compileall -q consensus_seam`：通过；
-- 当前生产 Python 文件共 5062 个物理行，其中 `workflow.py` 为 1082 行。
+- 当前生产 Python 文件共 5153 个物理行，其中 `workflow.py` 为 1085 行。

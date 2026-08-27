@@ -21,8 +21,10 @@ For message control, inspect every `covered_paths` entry: verify that its origin
 - verify the claimed consumer can actually call each entrypoint; distinguish external, same-package, and internal-harness scope;
 - verify returned snapshots do not expose mutable aliases into internal state;
 - verify any handles or metadata stay consistent across every existing cache mutation path instead of relying on fragile parallel-container alignment;
+- verify that enumeration returns both inspectable target-native content and an unambiguous instance reference; reject a bare position that can silently change meaning after earlier deletion, concurrent capture, sorting, or another public mutation, and reject bulk matching as proof of exact duplicate-instance control;
 - verify the report states whether cache removal and protocol input are separate test-owned operations or one wrapper, and that any claimed success matches the real input boundary; a silent best-effort send is not confirmed success.
 - verify that capture and injection use one authoritative cache relationship: the injected or taken instance must be the concrete instance selected from that cache, with explicit consumption and failure semantics. A standalone protocol-ingress API does not establish this relationship.
+- verify that the facade resolves the cached destination to the real target object or validates a caller-supplied object before delivery; assigning all target-matching responsibility to the test does not satisfy target binding.
 
 Record the joint cache-to-injection conclusion under the required check name `message_cache_injection_coherence`.
 
@@ -39,7 +41,7 @@ Triage every concern before choosing `overall`:
 
 Do not return `PASS` while describing in `risks` a condition under which the advertised interface is unreachable, corrupts its own control state, reports unconfirmed delivery as success, or otherwise fails its declared basic contract.
 
-Verify that `usage_examples` use real symbols, match the declared consumer scope and setup, and demonstrate interface mechanics without embedding a message-selection policy, fault schedule, assertion strategy, or correctness oracle that belongs to the test author.
+Verify that `usage_examples` are syntactically valid target-language snippets, use real symbols, match the declared consumer scope and setup, and demonstrate interface mechanics without embedding a message-selection policy, fault schedule, assertion strategy, or correctness oracle that belongs to the test author. Message examples must show how enumeration exposes inspectable content plus the reference later passed to take, drop, or inject.
 
 Verify that `public_entrypoints` contains only entrypoints callable by the declared test consumer and includes every generated or wrapped operation that the usage guide needs to expose. Internal stores and hooks must not be presented as public API.
 

@@ -903,3 +903,5 @@ def test_exception_does_not_replace_latest_audit_export(tmp_path: Path) -> None:
     ]
     assert len(failed_runs) == 1
     assert (failed_runs[0] / "agent-run-stats.json").is_file()
+    failure = json.loads((failed_runs[0] / "failure.json").read_text(encoding="utf-8"))
+    assert failure == {"error_type": "AgentRuntimeError", "outcome": "INCOMPLETE"}

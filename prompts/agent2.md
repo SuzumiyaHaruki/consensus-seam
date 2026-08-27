@@ -40,7 +40,7 @@ The basic message-capture objective is to:
 
 Do not satisfy this objective merely by returning a one-shot message batch, exposing a channel, or documenting that the test author can create an unrelated slice or map. Build or extend a target-native test facade. Reuse an existing cache as the authoritative store when possible; wrap or extend its operations instead of copying it into a parallel cache.
 
-A numeric message ID is optional. Reuse an existing queue record, handle, index, token, pointer, or message object when it lets serialized test code operate on one exact cached instance safely. If a new control ID is useful for unstable order, duplicate values, replay, or an external controller, keep it outside the protocol message schema and document its scope. Do not add a second cache merely to manufacture IDs.
+A numeric message ID is optional, but an unambiguous cache-instance reference is required. Keep selection and reference separate: return enough target-native message content for the test to choose an instance, together with a stable record, opaque handle, token, pointer, or optional control ID for later operations. Do not use a bare slice/list index across separate enumerate and inject calls when earlier removal, concurrent capture, sorting, or another mutation can change what that index denotes. An index is acceptable only for an atomic, versioned, or otherwise mutation-safe operation. Duplicate equal-valued messages must remain separately controllable. Keep any new handle outside the protocol message schema and do not add a second cache merely to manufacture IDs.
 
 The basic message-injection objective is to:
 
@@ -52,18 +52,23 @@ The basic message-injection objective is to:
 
 When both message capabilities are selected, design them as one coherent message-control seam backed by one authoritative cache, even though the interface report retains separate capability fields. Cache removal and protocol input may be explicit paired facade operations or one combined wrapper. A raw ingress call on an arbitrary caller-held message is not sufficient. State what happens to the selected cache entry on success, synchronous failure, and unconfirmed asynchronous send. A combined wrapper must not report confirmed success while the target may silently drop the attempt. A separate take-and-input facade may deliberately leave retry, requeue, or loss policy to the test. Do not invent an acknowledgement protocol merely to claim coverage.
 
+The injection facade must resolve the cached destination to the real target object using target-native ownership, a registry, a resolver, or an existing test environment. If the target architecture requires the caller to supply an object, validate that it matches the cached instance before invoking normal ingress. Do not document target binding as solely the caller's responsibility.
+
 If the selected entrypoint returns synchronous errors, preserve the target's existing error semantics and document them in `notes`. Do not invent a new protocol error model or a wait-for-quiescence operation merely to make targets uniform.
 
 Record in the interface report:
 
 - the actual new or modified entrypoints;
 - every test-consumer-callable generated or wrapped entrypoint in `public_entrypoints`; keep internal capture hooks and stores in their dedicated location fields instead of presenting them as public API;
+- the exact cache-instance reference and its stability scope in `instance_reference`;
+- how a cached destination becomes the real protocol target in `target_binding_strategy`;
+- the cache result of enumerate, take, drop, successful injection, synchronous failure, and unconfirmed asynchronous delivery in `cache_effects`;
 - whether the production path changes;
 - how the test path is enabled and used;
 - all operating paths supported by this run;
 - uncovered paths, their reasons, and required setup.
 
-For every implemented capability, include at least one concise target-language snippet in `usage_examples`. Show only setup and interface mechanics. Leave the choice of message, delivery order, fault schedule, assertions, and correctness oracle to the test author.
+For every implemented capability, include at least one concise, syntactically valid target-language snippet in `usage_examples`. For message control, show activation, cache enumeration, selection by target-native message content, and the subsequent operation through the returned stable reference. Show only setup and interface mechanics. Leave the actual choice criteria, delivery order, fault schedule, assertions, and correctness oracle to the test author.
 
 Before patching an existing file, read the exact target range and use its current content as patch context. `apply_patch` automatically recounts unified-diff hunk lengths but still requires exact surrounding context. If two `apply_patch` calls for the same file fail, read the target range again before another attempt instead of guessing stale context.
 

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from consensus_seam.models import CapabilityReport, InterfaceReport, ReviewReport
@@ -29,6 +30,24 @@ def test_publish_latest_tracks_audit_files_but_excludes_worktree(tmp_path: Path)
     assert "应用最近一次已验证补丁" in (latest / "APPLY.md").read_text(
         encoding="utf-8"
     )
+
+
+def test_incomplete_run_marks_stage_reports_without_publishing(tmp_path: Path) -> None:
+    artifacts = ArtifactStore.create(tmp_path / "runs")
+    artifacts.write_text("USAGE.md", "# candidate\n\nstage output\n")
+    artifacts.write_text("AUDIT.md", "# audit\n\nstage evidence\n")
+
+    failure = artifacts.mark_incomplete("AgentRuntimeError")
+
+    usage = (artifacts.run_directory / "USAGE.md").read_text(encoding="utf-8")
+    audit = (artifacts.run_directory / "AUDIT.md").read_text(encoding="utf-8")
+    assert "本次运行未完成" in usage
+    assert "不得作为最终使用说明" in usage
+    assert "本次运行未完成" in audit
+    assert json.loads(failure.read_text(encoding="utf-8")) == {
+        "error_type": "AgentRuntimeError",
+        "outcome": "INCOMPLETE",
+    }
 
 
 def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -> None:
@@ -69,11 +88,16 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
                     "使用控制对象按 ID 保存并选择消息。",
                 ],
                 "test_mode": "进程内测试路径",
+                "instance_reference": "Pending 返回稳定 handle 与消息快照。",
+                "target_binding_strategy": "控制器根据缓存目标解析真实节点。",
+                "cache_effects": "成功后删除；同步失败时保留。",
                 "covered_paths": ["RawNode synchronous ingress"],
                 "uncovered_paths": ["Node asynchronous ingress：目标入口不返回处理结果"],
                 "notes": ["先创建测试控制器，再按消息 ID 调用注入入口。"],
                 "usage_examples": [
-                    "pending := controller.Pending()\nerr := controller.Inject(pending[0])"
+                    "pending := controller.Pending()\n"
+                    "chosen := pending[0]\n"
+                    "err := controller.Inject(chosen.Handle)"
                 ],
             }
         }
@@ -87,12 +111,18 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
     audit = (artifacts.run_directory / "AUDIT.md").read_text(encoding="utf-8")
 
     assert "快速接口矩阵" in content
+    assert "消息控制调用顺序" in content
+    assert "不要重新猜测切片位置" in content
     assert "Node.Status" in content
     assert "InjectForTest" in content
     assert "ClearPendingForTest" in content
     assert "进程内测试路径" in content
+    assert "缓存实例引用" in content
+    assert "Pending 返回稳定 handle" in content
+    assert "目标绑定方式" in content
+    assert "缓存变化与失败语义" in content
     assert "err := node.Step(ctx, msg)" in content
-    assert "controller.Inject(pending[0])" in content
+    assert "controller.Inject(chosen.Handle)" in content
     assert "Node asynchronous ingress" in content
     assert "Reviewer 最终结论" in content
     assert "非阻塞剩余风险" in content

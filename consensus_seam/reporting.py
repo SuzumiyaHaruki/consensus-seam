@@ -115,6 +115,32 @@ class ArtifactStore:
         path.write_text(value, encoding="utf-8")
         return path
 
+    def mark_incomplete(self, error_type: str) -> Path:
+        """标记异常中断的 run，避免阶段性报告被误认为最终接口说明。"""
+
+        marker = "本次运行未完成，以下内容仅反映中断前已经产生的阶段性结果。"
+        warning = [
+            "> [!WARNING]",
+            f"> {marker}",
+            "> 生成接口、调用示例和 Reviewer 结论可能缺失，不得作为最终使用说明。",
+            "",
+        ]
+        for name in ("USAGE.md", "AUDIT.md"):
+            path = self._path(name)
+            if not path.is_file():
+                continue
+            content = path.read_text(encoding="utf-8")
+            if marker in content:
+                continue
+            lines = content.splitlines()
+            insert_at = 2 if lines and lines[0].startswith("# ") else 0
+            lines[insert_at:insert_at] = warning
+            path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return self.write_json(
+            "failure.json",
+            {"outcome": "INCOMPLETE", "error_type": error_type},
+        )
+
     def write_unresolved(
         self,
         report: CapabilityReport,
@@ -204,6 +230,27 @@ class ArtifactStore:
                 + " |"
             )
 
+        message_capabilities = [
+            generated.get("message_capture"),
+            generated.get("message_injection"),
+        ]
+        if any(
+            capability is not None and capability.implemented
+            for capability in message_capabilities
+        ):
+            lines.extend(
+                [
+                    "",
+                    "## 消息控制调用顺序",
+                    "",
+                    "1. 按报告所列方式启用目标原生的消息控制面。",
+                    "2. 调用缓存枚举入口，获得可检查的消息内容和与之绑定的实例引用。",
+                    "3. 测试代码根据目标原生消息字段选择实例；ConsensusSeam 不决定选择策略。",
+                    "4. 将枚举返回的同一实例引用交给取出、丢弃或注入入口，不要重新猜测切片位置。",
+                    "5. 根据下方记录的缓存变化与失败语义决定是否重试或保留消息。",
+                ]
+            )
+
         lines.extend(["", "## 接口详情与示例", ""])
         for name, title in CAPABILITY_DISPLAY_ORDER:
             finding = report.capabilities[name]
@@ -223,6 +270,23 @@ class ArtifactStore:
             if capability is not None and capability.implemented:
                 if capability.test_mode:
                     lines.extend(["**启用与使用范围**", "", capability.test_mode, ""])
+                if capability.instance_reference:
+                    lines.extend(
+                        ["**缓存实例引用**", "", capability.instance_reference, ""]
+                    )
+                if capability.target_binding_strategy:
+                    lines.extend(
+                        [
+                            "**目标绑定方式**",
+                            "",
+                            capability.target_binding_strategy,
+                            "",
+                        ]
+                    )
+                if capability.cache_effects:
+                    lines.extend(
+                        ["**缓存变化与失败语义**", "", capability.cache_effects, ""]
+                    )
                 if capability.uncovered_paths:
                     lines.append("**仍未覆盖**")
                     lines.append("")
@@ -342,6 +406,9 @@ class ArtifactStore:
                 details = [
                     ("生产路径", generated.production_mode),
                     ("测试路径", generated.test_mode),
+                    ("缓存实例引用", generated.instance_reference),
+                    ("目标绑定方式", generated.target_binding_strategy),
+                    ("缓存变化与失败语义", generated.cache_effects),
                     ("可选消息 ID 范围", generated.message_id_scope),
                     ("复制策略", generated.copy_strategy),
                 ]

@@ -136,6 +136,9 @@ class ConsensusWorkflow:
             result = operation(artifacts)
             completed = True
             return result
+        except Exception as exc:
+            artifacts.mark_incomplete(type(exc).__name__)
+            raise
         finally:
             self._write_runtime_stats(artifacts, stats_start)
             self._write_tool_audit(artifacts, tool_audit_start)
