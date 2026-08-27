@@ -1,4 +1,4 @@
-"""Project-specific deterministic capability check descriptor."""
+"""项目专属的确定性能力检查描述。"""
 
 from __future__ import annotations
 

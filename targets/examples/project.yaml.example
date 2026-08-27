@@ -6,8 +6,9 @@ repository: /absolute/path/to/mini_raft
 system_boundary:
   kind: protocol_library
   description: >
-    Analyze the Mini Raft protocol implementation. External applications and
-    real network behavior are outside this target boundary.
+    Analyze the target protocol library. Discover all materially distinct public
+    execution paths inside this boundary. External applications and real network
+    behavior are outside the boundary.
 
 transform_capabilities:
   - message_capture
@@ -20,15 +21,15 @@ test:
   command: go test ./...
 
 capability_checks:
-  - name: MC1 capture
+  - name: 基本消息捕获
     capability: message_capture
     command: go test ./... -run '^TestMessageCapture$'
     failure_code: MESSAGE_CAPTURE_FAILED
-  - name: MC2 suppression
+  - name: 捕获后停止自动发送
     capability: message_capture
     command: go test ./... -run '^TestMessageSuppression$'
     failure_code: MESSAGE_SUPPRESSION_FAILED
-  - name: MC3 exact injection
+  - name: 基本消息注入
     capability: message_injection
     command: go test ./... -run '^TestExactMessageInjection$'
     failure_code: MESSAGE_INJECTION_FAILED

@@ -13,40 +13,38 @@ capabilities:
     evidence:
       - file: transport.go
         symbol: MemoryTransport.Send
-        reason: Send immediately invokes the recorded target Node.Step.
+        reason: Send 会立即调用已记录目标的 Node.Step。
       - file: node.go
         symbol: Node.emit
-        reason: All outbound protocol messages cross the injected Transport interface.
+        reason: 所有出站协议消息都会经过注入的 Transport 接口。
     rationale: >
-      The outbound environment boundary is already dependency-injected, but no
-      capture, suppression, or pending state exists.
+      出站环境边界已经采用依赖注入，但没有捕获、抑制自动发送或 pending 状态。
 
   message_injection:
     expected_status: PATCHABLE
     evidence:
       - file: node.go
         symbol: Node.Step
-        reason: Step is the normal target-checked protocol input boundary.
+        reason: Step 是会检查目标的正常协议输入边界。
     rationale: >
-      Normal delivery exists, but the implementation has no stable MessageID,
-      Pending Store, or exact Inject(ID) operation.
+      正常投递路径已经存在，但实现没有稳定 MessageID、Pending Store 或精确的
+      Inject(ID) 操作。
 
   time_control:
     expected_status: SUPPORTED
     evidence:
       - file: node.go
         symbol: Node.Tick
-        reason: Each call advances exactly one unit of protocol logical time.
+        reason: 每次调用都会把协议逻辑时间推进一个单位。
 
   randomness_control:
     expected_status: PATCHABLE
     evidence:
       - file: node.go
         symbol: NewNode
-        reason: NewNode constructs a time-seeded rand.Rand internally.
+        reason: NewNode 会在内部创建以时间为种子的 rand.Rand。
     rationale: >
-      The random algorithm is localized, but Config cannot inject or fix its
-      source for replay.
+      随机算法位置集中，但 Config 无法注入或固定随机源以支持重放。
 
   lifecycle_control:
     expected_status: INVASIVE
@@ -58,20 +56,19 @@ capabilities:
     evidence:
       - file: node.go
         symbol: Node
-        reason: Persistent-looking and volatile-looking state share one object.
+        reason: 看似持久和易失的状态保存在同一个对象中。
       - file: node.go
         symbol: Node.Pause
-        reason: Pause and Resume explicitly model scheduling, not crash recovery.
+        reason: Pause 和 Resume 明确表示调度控制，不是崩溃恢复。
     rationale: >
-      Adding crash/restart would require inventing which fields survive, which is
-      outside v0.1's allowed modification boundary.
+      增加崩溃/重启接口必须先发明哪些字段能够保留，这超出 v0.1 允许的修改边界。
 
   observation:
     expected_status: SUPPORTED
     evidence:
       - file: node.go
         symbol: Node.Status
-        reason: Status exposes role, term, vote, leader, commit, log, and timeout state.
+        reason: Status 暴露角色、任期、投票、领导者、提交、日志和超时状态。
 
   external_input:
     expected_status: SUPPORTED
@@ -82,4 +79,4 @@ capabilities:
     evidence:
       - file: node.go
         symbol: Node.Propose
-        reason: Propose is the existing application-value entrypoint.
+        reason: Propose 是已有的应用值输入入口。

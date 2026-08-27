@@ -5,9 +5,9 @@
   "experiment": {
     "kind": "blind_capability",
     "oracle_visible_to_agents": false,
-    "research_claim": "Oracle-blind, contract-aware capability classification and low-intrusion message-control transformation"
+    "research_claim": "Exploratory oracle-free, contract-aware capability analysis of a production-grade consensus library without source modification or scoring against a human answer key.\n"
   },
   "included": "reports, patch, statistics, and logs",
-  "published_at": "2026-08-27T08:29:14.081111+00:00",
-  "source_run": "20260827T075522.713488Z"
+  "published_at": "2026-08-27T08:48:18.253884+00:00",
+  "source_run": "20260827T084133.028711Z"
 }

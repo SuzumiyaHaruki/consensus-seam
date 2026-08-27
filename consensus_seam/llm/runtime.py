@@ -1,4 +1,4 @@
-"""Bounded Chat Completions tool loop used by all three Agent roles."""
+"""三个 Agent 角色共用的有界 Chat Completions 工具循环。"""
 
 from __future__ import annotations
 

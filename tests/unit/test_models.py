@@ -68,7 +68,7 @@ def test_external_input_supported_requires_protocol_ingress_exclusion() -> None:
         CapabilityReport.model_validate(payload)
 
 
-def test_message_interface_requires_id_scope_and_serialized_operations() -> None:
+def test_message_interface_requires_id_scope() -> None:
     with pytest.raises(ValidationError, match="message_id_scope"):
         InterfaceReport.model_validate(
             {"message_capture": {"implemented": True}}
@@ -82,7 +82,7 @@ def test_reviewer_pass_requires_all_named_checks() -> None:
         ReviewReport.model_validate(payload)
 
 
-def test_reviewer_cannot_mark_applicable_injection_check_not_applicable() -> None:
+def test_reviewer_cannot_skip_exact_target_check_for_injection() -> None:
     interface = InterfaceReport.model_validate(
         {
             "message_injection": {
@@ -94,7 +94,7 @@ def test_reviewer_cannot_mark_applicable_injection_check_not_applicable() -> Non
     )
     payload = review_report()
     for check in payload["checks"]:
-        if check["name"] == "failed_injection_preserves_pending":
+        if check["name"] == "exact_target_preserved":
             check["result"] = "NOT_APPLICABLE"
             check["evidence"] = []
     report = ReviewReport.model_validate(payload)

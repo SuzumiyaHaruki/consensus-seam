@@ -1,4 +1,4 @@
-"""Git worktree isolation for all Transformer modifications."""
+"""隔离所有 Transformer 修改的 Git worktree。"""
 
 from __future__ import annotations
 

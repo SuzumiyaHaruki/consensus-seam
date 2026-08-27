@@ -1,4 +1,4 @@
-"""Strict structured-response support shared by the three Agents."""
+"""三个 Agent 共用的严格结构化响应支持。"""
 
 from __future__ import annotations
 

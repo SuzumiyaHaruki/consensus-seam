@@ -1,100 +1,167 @@
-# ConsensusSeam v0.1 design analysis
+# ConsensusSeam v0.1 设计说明
 
-## Core interpretation
+## 研究问题
 
-ConsensusSeam is a testability transformer, not a test-strategy system. The
-controller owns bounded orchestration and validated artifacts. The three Agents
-own separate semantic roles, and the deterministic verifier owns execution. A
-Pending Store may retain and expose concrete messages, but it must not choose a
-delivery order or time.
+ConsensusSeam 研究多 Agent 是否能够阅读共识实现源码，识别七类基础测试控制能力，并通过小规模修改补充缺失接口。
 
-The most important design property is the boundary attached to every capability
-claim. A protocol-core output API does not automatically cover serialization,
-application transport, retry behavior, or a real network send. Likewise, an
-existing constructor does not prove lifecycle control unless the implementation
-already defines state ownership across restart.
+框架的评价重点是：
 
-## Strong parts of the specification
+- 能否找到真实代码边界；
+- 能否区分已有能力、可补充能力和侵入式能力；
+- 是否复用目标项目已有接口和测试设施；
+- 修改是否低侵入；
+- 原有功能和测试是否保持；
+- 最终使用者能否根据报告调用这些接口。
 
-- The `SUPPORTED / PATCHABLE / PARTIAL / INVASIVE / UNKNOWN /
-  NOT_APPLICABLE` vocabulary prevents binary, overconfident classifications.
-- Agent 2 acts only on `PATCHABLE`; rediscovered invasiveness stops that change.
-- Agent 3 is independent and read-only; executable verification remains ordinary
-  code rather than another Agent opinion.
-- Go-only target support and provider-neutral LLM integration keep v0.1 narrow.
-- Message identity is control-plane identity rather than protocol identity. It
-  does not depend on term, height, payload, or a content hash.
-- The non-goals correctly exclude scheduling policy, full virtual time, invented
-  restart semantics, and premature cross-language abstractions.
+它不是测试策略系统，也不对任意目标作完备正确性承诺。
 
-## Framework decisions implemented here
+## 七项能力与六种状态
 
-- Python 3.10+ is used to match the local machine; no 3.12-only feature is needed.
-- Pydantic rejects invalid or extra Agent fields before another Agent receives
-  them. Evidence-bearing findings and review consistency are validated.
-- The Controller is an explicit bounded state machine. Agents do not converse
-  freely and cannot decide routing.
-- Every transformation attempt uses a fresh detached Git worktree. The target
-  source tree is not edited.
-- Configured commands execute without an implicit shell.
-- Agent prompts and specs are included in built wheels as runtime resources.
-- A bounded DeepSeek Chat Completions runtime executes role-scoped local tools and
-  preserves thinking-mode reasoning content between tool turns.
-- A deterministic `FakeLLMClient` keeps orchestration testable without credentials.
-- Go receiver methods such as `RawNode.Ready` are resolved through a small
-  `go/parser`/`go/ast` helper rather than only a regular expression.
-- Target manifests define `system_boundary`, per-Agent models, and named
-  capability checks. Full runs reject unverified implementation claims.
-- An optional `transform_capabilities` allowlist separates message, randomness,
-  and other experiments while preserving complete Agent 1 analysis.
-- Existing tracked Go tests are protected through Git's committed baseline; new
-  capability tests remain allowed. No additional content hashes are introduced.
-- `INVASIVE_REDISCOVERED` always invalidates the entire current worktree.
-- Tool output is uniformly bounded, and live Agent runs record aggregate usage
-  and timing without storing model reasoning content.
+v0.1 固定分析消息捕获、消息注入、时间控制、随机性控制、生命周期控制、状态观察和外部输入七项能力。
 
-## Deliberately incomplete after the framework milestone
+六种能力状态保持不变：
 
-This repository does not yet claim the message-control vertical slice. The next
-implementation phase must add a Mini Raft target and demonstrate all of the
-following with generated Go tests:
+- `SUPPORTED`：目标已经完整提供；
+- `PATCHABLE`：可以低侵入补充；
+- `PARTIAL`：已有部分能力；
+- `INVASIVE`：需要修改核心语义或发明目标未定义的行为；
+- `UNKNOWN`：证据不足；
+- `NOT_APPLICABLE`：相对于当前系统边界不适用。
 
-1. capture increases `ListPending()`;
-2. capture suppresses the original send;
-3. `Inject(M2)` consumes only M2 and preserves M1;
-4. the same seed produces the same protocol-relevant random choices;
-5. ambiguous lifecycle recovery is classified `INVASIVE` and not modified.
+这些状态是实验结果，不应为了简化工作流而压缩。特别是 `INVASIVE` 与 `UNKNOWN`、`PARTIAL` 与 `SUPPORTED` 分别表达不同研究信息。
 
-A live authenticated DeepSeek run is still required to validate model behavior,
-tool-choice quality, token usage, and retry behavior against the real service.
+## 通用语义与目标实现分离
 
-`SUPPORTED` findings in analyze-only/no-patch runs are not dynamically verified
-yet. A future opt-in supported-capability verification mode may execute manifest
-checks, particularly for the etcd-raft classification experiment.
+全局规范只描述能力语义，不规定统一 Go API。
 
-Human ground truth for Mini Raft lives under `evaluation/mini-raft/`, outside the
-target repository visible to source tools. It is used only for post-run comparison
-and is never injected into an Agent prompt.
+例如，消息注入要求“把选中的已捕获消息交给记录目标的正常协议入口”，但不假定目标一定拥有：
 
-The same evaluator directory owns the blind project manifest and hidden
-acceptance fixtures. Agents see only a sanitized manifest and target source;
-fixtures are introduced after review for deterministic verification. Reviewer
-PASS reports carry named checks and evidence, while patch/tool metrics provide
-auditable cost and modification data without storing chain-of-thought.
+- `Transport` 接口；
+- 全局节点注册表；
+- 固定名称的 `NewMessageController`；
+- 同步错误返回；
+- 统一的生产模式和测试模式切换方式。
 
-Capability-test routing is now wired through the manifest and workflow. The Mini
-Raft target must provide separate capture, suppression, exact-injection, and
-failed-delivery commands (MC1/MC2/MC3/MC4 in Mini Raft); without them, a full run
-returns `SEMANTIC_AMBIGUITY` after build and regression tests.
+Agent 应使用目标项目最自然的形态实现接口。Mini Raft 可以包装 `Transport`，etcd/raft 可以扩展 `rafttest.InteractionEnv` 或使用 `RawNode`。目标特有接口形态不得回写为全局前提。
 
-## Main engineering risks for the next phase
+## 多实现路径发现
 
-- Missing outbound bypasses are the highest semantic risk. Snapshot, retry,
-  heartbeat, and forwarded-request paths must be inspected separately.
-- Captured Go messages may contain mutable slices, maps, pointers, or protobuf
-  internals. The patch must demonstrate a safe copy strategy.
-- Async implementations cannot imply quiescence from `Inject` returning. v0.1
-  should preserve that limitation rather than invent `WaitForQuiescence`.
-- A worktree begins at a Git commit. Target selection should therefore identify
-  the intended committed revision; the framework does not silently copy unrelated
-  dirty working-tree state into a transformation attempt.
+共识库可能同时提供同步、异步、嵌入式和完整节点等多种路径。人工通常只知道仓库和系统边界，不应被要求提前列出这些内部路径。
+
+Analyzer 应从源码、公开接口和已有测试设施中发现所有实质不同的路径。这里的“实质不同”是指至少一项不同：
+
+- 协议输入入口；
+- 协议输出或消息发送边界；
+- 时间、随机性或生命周期控制入口；
+- 同步/异步完成语义；
+- 公开节点类型或测试运行时。
+
+它不要求枚举协议状态机的每个 `if` 分支。
+
+Analyzer 应通过 `execution_paths`、`boundary`、`entrypoints` 和 `limitations` 记录发现结果。能力总状态应综合所有已发现路径：全部已有时是 `SUPPORTED`；只要至少一条当前缺失路径能够低侵入补充，就可以是 `PATCHABLE`，同时明确其他不可补充路径；已有部分路径、但剩余缺口都无法在 v0.1 安全补充时是 `PARTIAL`。这样仍然保持 Agent 2 只修改 `PATCHABLE` 的原设计，同时允许它尽可能完成安全子集。
+
+Transformer 应尝试覆盖所有已发现且能够低侵入实现的路径，并在 `covered_paths` 中列出已覆盖路径。不能安全实现的路径写入 `uncovered_paths` 和 `notes`，不能为了让报告看起来完整而修改协议核心，也不能静默只实现最容易的一条路径。
+
+例如 etcd/raft 的 Analyzer 应同时考虑 `Node`、`RawNode` 和同步/异步存储路径；Transformer 可以优先复用它们已有的不同入口。若某条路径需要越过当前系统边界，应记录为未覆盖，而不是要求人工事先排除它。
+
+## 固定工作流
+
+### Agent 1：能力分析
+
+Agent 1 只读目标源码，对七项能力给出状态、证据、边界、入口和限制。它不能从函数名或协议简介推断行为，也不能把目标 ID 自动等同于目标对象绑定。
+
+### Agent 2：低侵入实现
+
+Agent 2 只处理本次实验选中的 `PATCHABLE` 能力。优先顺序是：
+
+1. 复用目标已有测试接口；
+2. 扩展目标已有测试辅助包；
+3. 添加薄包装或只读访问器；
+4. 在不改变核心协议语义的前提下注入依赖；
+5. 如果不能安全实现，报告 `INVASIVE_REDISCOVERED`。
+
+Agent 2 可以生成目标语言测试和使用说明，但不能修改已有 Go 测试来降低通过难度。
+
+### Agent 3：独立审查
+
+Agent 3 不修改代码，检查：
+
+- 修改是否与能力报告一致；
+- 是否越过低侵入边界；
+- 是否保留原协议逻辑和原测试；
+- 新接口是否在声明范围内可调用；
+- 使用说明是否反映真实入口和限制。
+
+Reviewer 不承担完整协议安全证明。
+
+### Controller：确定性执行
+
+Controller 负责：
+
+- 强类型 Agent 输入输出；
+- 有界重试和固定失败路由；
+- 每轮全新 Git worktree；
+- baseline、构建和原测试；
+- 项目 manifest 配置的基础能力检查；
+- 产物、补丁规模和模型成本审计。
+
+## 验证边界
+
+v0.1 的验证分为三层：
+
+1. 原始目标 baseline；
+2. 修改后的构建和原测试；
+3. 项目专属的基础能力使用检查。
+
+全局框架只要求每项新增能力至少具有与该能力对应的基本检查类型。一个目标可以增加更严格的检查，但额外检查只属于该目标，不自动成为其他目标的强制要求。
+
+隐藏 fixture 和人工 ground truth 属于正式评测工具：
+
+- fixture 在 Reviewer 完成后才进入候选 worktree；
+- ground truth 只做事后评分；
+- 二者都不会进入 Agent Prompt。
+
+因此，工程使用不要求先人工写出一份完整答案。
+
+## 实验失败的处理规则
+
+每次失败先分类，再决定是否修改框架。
+
+### 通用框架错误
+
+例如 Agent 能看到隐藏 fixture、worktree 污染原仓库、结构化输出无法审计。这类问题修改 ConsensusSeam。
+
+### 目标项目限制
+
+例如某个目标只有异步投递、某种运行模式没有同步错误、某个测试辅助包只支持连续节点 ID。这类问题记录在该目标报告或 evaluation 中。
+
+### v0.1 范围之外
+
+例如真实网络调度、跨进程持久化恢复、所有并发竞争和完整协议证明。明确记录后停止扩张，不新增全局规则。
+
+单次实验失败是研究数据，不等于框架必须修到该实验通过。
+
+## 已保留的工程安全措施
+
+- Python 3.10+，不依赖 3.12 专属功能；
+- Pydantic 严格 Schema；
+- Agent 角色工具隔离；
+- Git worktree 隔离；
+- 禁止修改已有 Go 测试；
+- 失败候选不会污染下一轮；
+- 模型推理正文不进入审计产物；
+- API 密钥不写入日志；
+- 目标和控制器版本写入 `run-config.json`。
+
+这些措施解决的是实验隔离和可追溯性，不应继续扩展成目标语义的完备 gate。
+
+## 当前阶段
+
+Mini Raft 用于验证完整工作流和消息控制补丁。etcd/raft 用于检查框架能否适应不同于 Mini Raft 的代码结构。
+
+接下来的首要任务是：
+
+1. 去除全局规范中的 Mini Raft 接口形态；
+2. 生成覆盖已有和新增接口的中文 `USAGE.md`；
+3. 将额外严格检查留在具体 evaluation；
+4. 用收窄后的 etcd/raft 执行路径重新分析，再决定是否进入修改实验。

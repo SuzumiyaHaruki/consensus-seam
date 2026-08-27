@@ -3,46 +3,51 @@ version: 1
 capabilities:
   message_capture:
     description: >
-      In test mode, every outbound protocol message is captured before entering
-      the original uncontrollable send path. A captured message must not continue
-      automatically along that path.
+      Across the materially distinct execution paths discovered inside the system
+      boundary, test code can capture protocol output before it automatically
+      continues along its original path. A captured message must not continue
+      automatically. Safely unimplemented paths must be reported explicitly.
     testing_contract:
-      constructor: >
-        NewMessageController(Transport) creates an active test-mode controller.
-        Outbound messages are captured and suppressed immediately after
-        construction; v0.1 does not require an enable or disable toggle.
-      list_pending: ListPending() returns stable metadata with ID, From, To, Type, and CaptureSequence
-      clear_pending: ClearPending() removes all pending messages
+      activation: >
+        The target may use a constructor, test environment, or wrapper that fits
+        its own architecture. The interface shape and required setup must be
+        declared in the interface report; a Transport abstraction is not assumed.
+      list_pending: >
+        A callable entrypoint lists pending messages with at least a stable
+        message ID, sender, receiver, message type, and capture order.
+      clear_pending: A callable entrypoint clears the current pending messages.
+      path_coverage: >
+        The Analyzer discovers materially distinct in-scope paths. The
+        implementation covers every low-intrusion path it can and explicitly
+        records covered and uncovered paths.
 
   message_injection:
     description: >
-      The test system can select a previously captured legal message and
-      deterministically deliver it through the original target node's normal
-      protocol input boundary. Successful injection consumes exactly that
-      pending message; failed injection must leave it pending.
-      Test-controller operations, including Inject and ClearPending, are
-      serialized; outbound capture may occur concurrently.
+      Test code can select one previously captured legal message and deliver it
+      through the recorded target's normal protocol input entrypoint. Successful
+      injection consumes only the selected message and preserves sender,
+      receiver, and content.
     testing_contract:
-      inject: Inject(messageID) delivers through the recorded target's normal protocol input
-      message_id_scope: implementation must declare pending_store_instance or test_session
-      setup: >
-        The listed testing contract must be sufficient for capture and injection.
-        Core behavior must not require an additional public Register, Enable, or
-        target-binding call that is absent from this contract.
-      delivery_binding: >
-        Reuse the wrapped Transport when it already provides deterministic
-        in-process routing to the recorded target. If it does not, use an
-        existing deterministic target binding internally without adding required
-        caller setup; otherwise report INVASIVE_REDISCOVERED.
-      failed_delivery: >
-        If the selected delivery path returns an error, Inject propagates that
-        underlying error and leaves the selected message pending.
+      inject: A callable entrypoint selects and delivers a pending message by stable ID.
+      message_id_scope: The implementation declares whether IDs belong to a pending store, test session, node, or global scope.
+      target_binding: >
+        Use target-object ownership or routing that actually exists in the target.
+        A target ID alone is not a target-object binding. Existing constructors,
+        node collections, or test environments are allowed when documented in
+        the interface report.
+      delivery_boundary: >
+        Injection enters the normal protocol input boundary for the declared
+        path and does not mutate protocol state directly.
+      path_coverage: >
+        Apply injection to every discovered in-scope path that can be supported
+        without changing core semantics. Explicitly report remaining paths and
+        why they are not safely implemented.
 
   time_control:
     description: >
-      The test system can deterministically advance time observed by the protocol.
-      It must not expose ForceTimeout or ForceElection operations that manufacture
-      protocol outcomes directly.
+      Test code can deterministically advance time observed by the protocol. It
+      must not add ForceTimeout, ForceElection, or equivalent shortcuts that
+      manufacture protocol outcomes directly.
     accepted_v0_forms:
       - explicit_tick
       - injectable_clock
@@ -57,23 +62,24 @@ capabilities:
       Existing node stop, creation, recovery, and state-ownership semantics may
       be exposed to tests. An Agent must not invent the persistent/volatile split.
     obligations:
-      stop_boundary: Identify an existing stop/pause boundary and its exact meaning.
+      stop_boundary: Identify an existing stop or pause boundary and its exact meaning.
       restart_or_recovery_boundary: Identify an existing restart or recovery path; scheduler resume is not recovery.
-      state_ownership_defined: Determine whether the implementation already owns and separates recoverable state.
+      state_ownership_defined: Determine whether recoverable-state ownership and boundaries are already defined.
       persistent_volatile_semantics_defined: Determine whether crash-surviving and volatile state are explicitly defined.
 
   observation:
     description: >
-      Expose the minimum global and node state needed for capability verification
-      and later testing. Fields remain specific to the protocol and implementation.
+      Expose the minimum global or node state needed for capability verification
+      and later testing. Fields may remain protocol- and implementation-specific;
+      v0.1 does not require a universal state schema.
 
   external_input:
     description: >
-      Discover existing proposal, request, transaction, or equivalent workload
-      entrypoints. v0.1 does not create new business-input APIs.
+      Discover existing proposal, request, transaction, or equivalent application
+      workload entrypoints. v0.1 does not create new business-input APIs.
     obligations:
-      workload_entrypoint: Identify input originating outside the protocol as application work.
-      protocol_ingress_excluded: Exclude peer-to-peer protocol message handlers such as Step.
+      workload_entrypoint: Identify application work originating outside the protocol.
+      protocol_ingress_excluded: Exclude peer-to-peer protocol ingress such as Step.
       timer_and_internal_events_excluded: Exclude Tick, timers, callbacks, and internal events.
 
 prerequisites:

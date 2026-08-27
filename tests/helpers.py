@@ -46,9 +46,7 @@ def review_report() -> dict[str, Any]:
     for name in (
         "original_send_suppressed",
         "protocol_logic_unchanged",
-        "message_snapshot_stable",
         "exact_target_preserved",
-        "failed_injection_preserves_pending",
         "existing_tests_unchanged",
         "testing_contract_conformance",
     ):

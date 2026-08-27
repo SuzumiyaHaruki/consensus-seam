@@ -1,4 +1,4 @@
-"""Baseline build and test execution against the untouched repository."""
+"""在未修改目标仓库上执行 baseline 构建和测试。"""
 
 from __future__ import annotations
 

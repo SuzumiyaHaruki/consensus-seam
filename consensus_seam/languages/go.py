@@ -1,4 +1,4 @@
-"""The single target-language backend supported by v0.1."""
+"""v0.1 唯一支持的目标语言后端。"""
 
 from __future__ import annotations
 

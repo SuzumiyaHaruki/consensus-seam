@@ -1,4 +1,4 @@
-"""ConsensusSeam public package."""
+"""ConsensusSeam 公开包。"""
 
 from .models import CapabilityReport, CapabilityStatus
 

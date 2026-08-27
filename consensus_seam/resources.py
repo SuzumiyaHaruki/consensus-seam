@@ -1,4 +1,4 @@
-"""Locate bundled prompts and specifications in source and wheel installs."""
+"""在源码和 wheel 安装中定位内置 Prompt 与规范。"""
 
 from __future__ import annotations
 

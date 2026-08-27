@@ -1,4 +1,4 @@
-"""Build, regression, and explicit capability-test execution."""
+"""执行构建、回归测试和显式能力检查。"""
 
 from __future__ import annotations
 

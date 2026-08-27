@@ -1,20 +1,32 @@
-# ConsensusSeam v0.1 implementation boundaries
+# ConsensusSeam v0.1 实现边界
 
-DO NOT:
+ConsensusSeam 的职责是发现和补充共识系统的测试控制接口，不是生成测试策略或证明协议正确。
 
-- implement ModelFuzz;
-- implement a fuzzer;
-- implement TLA+ integration;
-- design a universal consensus message schema;
-- create a universal cross-language Adapter runtime;
-- implement Java/C/Rust backends in v0.1;
-- implement real network scheduling;
-- implement full wall-clock virtualization;
-- invent crash/restart semantics;
-- split storage operations into artificial steps;
-- implement agent-to-agent free-form conversations;
-- add vector databases or retrieval infrastructure;
-- expand the architecture unless required by a failing acceptance test.
+v0.1 不实现：
 
-ConsensusSeam exposes test-control seams. It does not decide which message to
-deliver, when to crash, how far to advance time, or how to generate tests.
+- ModelFuzz；
+- 模糊测试器；
+- TLA+ 集成；
+- 通用共识消息格式；
+- 通用跨语言 Adapter 运行时；
+- Java、C 或 Rust 后端；
+- 真实网络调度；
+- 完整墙钟虚拟化；
+- 目标系统没有定义的崩溃和重启语义；
+- 人为拆分的持久化步骤；
+- Agent 之间的自由对话；
+- 向量数据库或额外检索基础设施；
+- 为了覆盖某条路径而修改核心协议语义；
+- 因单次目标实验失败而新增全局合同、gate 或 failure code。
+
+人工不负责指定目标内部实现路径。Agent 必须发现系统边界内实质不同的路径，并尽可能覆盖所有低侵入可实现路径。无法安全覆盖的路径可以保留，但必须明确记录原因。
+
+ConsensusSeam 只暴露控制接口。它不决定：
+
+- 投递哪条消息；
+- 何时丢包；
+- 何时停止或重启节点；
+- 时间推进多少；
+- 如何生成完整测试用例。
+
+只有明确属于通用框架的问题才进入全局实现。目标特有限制应留在对应 `evaluation/` 配置和实验报告中。

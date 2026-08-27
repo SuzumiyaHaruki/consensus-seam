@@ -1,4 +1,4 @@
-"""Fixed failure routing; orchestration is not delegated to another Agent."""
+"""固定失败路由；编排决定不交给额外 Agent。"""
 
 from __future__ import annotations
 

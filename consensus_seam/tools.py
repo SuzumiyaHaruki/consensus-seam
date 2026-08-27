@@ -1,4 +1,4 @@
-"""Role-scoped local tools for source inspection and worktree editing."""
+"""按角色隔离的源码检查与 worktree 编辑工具。"""
 
 from __future__ import annotations
 

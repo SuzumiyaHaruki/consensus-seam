@@ -1,4 +1,4 @@
-"""Thin target-language boundary used by the verifier and workspace code."""
+"""Verifier 与 workspace 代码共用的薄目标语言边界。"""
 
 from __future__ import annotations
 

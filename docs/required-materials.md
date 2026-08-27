@@ -1,42 +1,78 @@
-# Materials required for live ConsensusSeam runs
+# 运行 ConsensusSeam 所需材料
 
-## Required for the first DeepSeek integration run
+## 普通目标的最小输入
 
-1. A funded or otherwise usable DeepSeek API key. Export it as
-   `DEEPSEEK_API_KEY`, or put only the raw key on one line in a protected text
-   file and pass `--api-key-file`. Do not paste it into `project.yaml` or commit
-   it. A recommended local path is `.secrets/deepseek-api-key.txt` with mode 600.
-   `DEEPSEEK_API_KEY_FILE` may point to the same file.
-2. Network access to `https://api.deepseek.com`. If the environment uses a
-   compatible gateway, provide its URL through `DEEPSEEK_BASE_URL`.
-3. Authorization to send requested source snippets and tool results to DeepSeek.
-   This is especially important for private or confidential target repositories.
-4. A local Go target at a known committed Git revision. Worktrees start from
-   `HEAD`; unrelated dirty working-tree changes are intentionally not copied.
-5. A target manifest containing the repository path, working directory, build and
-   test commands, the intended `system_boundary`, and deterministic capability
-   checks for every capability Agent 2 may implement.
+一次运行只要求：
 
-## Required for a non-Raft target
+1. 本地目标 Git 仓库及确定的提交版本；
+2. 构建命令；
+3. 原测试命令；
+4. `system_boundary`，说明哪些代码层属于本次目标；
+5. 目标使用的协议简介；
+6. 允许 Agent 2 修改的能力范围（可选）。
 
-- A short protocol brief under `spec/protocols/<protocol>.yaml`: roles, message
-  families, timing/randomness sources, persistent concepts, observation examples,
-  and existing external inputs. It describes concepts, not assumed function names.
+不要求为每个目标预先提供人工 ground truth，也不要求人工写出完整接口答案。
 
-## Required before the etcd-raft benchmark
+## DeepSeek 运行材料
 
-- The exact etcd-raft repository/revision, or permission to clone a selected
-  public revision.
-- Confirmation that the boundary is the Raft protocol library rather than the
-  complete etcd deployment.
-- The build/test commands appropriate for that revision.
-- Human-reviewed expected classifications for the initial analyze-only run. These
-  are evaluation ground truth, not hints injected into the Agent prompt.
+1. 可用的 DeepSeek API 密钥；
+2. 访问 `https://api.deepseek.com` 或兼容网关的网络；
+3. 将必要源码片段和工具结果发送给模型的授权；
+4. 与目标仓库匹配的本地工具链。
 
-## Useful but optional experimental inputs
+推荐把纯密钥单独放在仓库外的文本文件中：
 
-- A maximum API spend or token budget per run.
-- The desired comparison profiles: `all-flash`, `all-pro`, and/or `mixed`.
-- A second Go implementation with clearly poorer testability.
-- Human labels for `SUPPORTED`, `PATCHABLE`, and `INVASIVE` capabilities and an
-  agreed scoring rubric for classification and avoidable modifications.
+```bash
+chmod 600 /绝对路径/deepseek-key.txt
+```
+
+然后运行：
+
+```bash
+consensus-seam analyze \
+  --project /绝对路径/project.yaml \
+  --api-key-file /绝对路径/deepseek-key.txt
+```
+
+不要把密钥写进 `project.yaml` 或提交到 Git。
+
+## 非 Raft 目标
+
+需要在 `spec/protocols/<protocol>.yaml` 增加一份简短协议简介，包括：
+
+- 角色；
+- 消息家族；
+- 时间和随机性来源；
+- 持久化概念；
+- 常见观察字段；
+- 已知外部输入类型。
+
+协议简介只描述概念，不能预设目标函数名或目标实现架构。
+
+## 完整 `run` 的项目专属材料
+
+如果需要执行完整 `run`，目标 evaluation 可以提供：
+
+- 每项新增能力的基础使用检查命令；
+- 可选的隐藏 fixture；
+- 可选的人工 ground truth；
+- 本目标额外关注的严格检查。
+
+这些材料属于具体目标，不会自动进入全局能力规范。
+
+## etcd/raft 首轮修改实验
+
+人工只需把独立 `go.etcd.io/raft/v3` 协议库放在系统边界内，不需要指定 `Node`、`RawNode` 或同步/异步路径。Analyzer 应自行发现这些路径并分别说明。真实网络、完整 etcd server 和跨进程存储仍由系统边界排除。
+
+目标分支要求 Go 1.26，因此进入 build、patch 或 run 前必须准备兼容工具链，并先在未修改目标上通过：
+
+```bash
+go test ./...
+```
+
+## 可选实验输入
+
+- 单次运行的 API 或 token 预算；
+- `all-flash`、`all-pro`、`mixed` 等模型对比配置；
+- 第二个不同结构的 Go 共识实现；
+- 只用于事后评分的人工能力标签和评分规则。

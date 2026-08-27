@@ -6,5 +6,11 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert (root / "prompts" / "agent1.md").is_file()
     assert (root / "spec" / "capabilities.yaml").is_file()
     capabilities = (root / "spec" / "capabilities.yaml").read_text(encoding="utf-8")
-    assert "creates an active test-mode controller" in capabilities
-    assert "must not require an additional public Register" in capabilities
+    assert "a Transport abstraction is not assumed" in capabilities
+    assert "materially distinct execution paths" in capabilities
+    assert "NewMessageController(Transport)" not in capabilities
+    analyzer_prompt = (root / "prompts" / "agent1.md").read_text(encoding="utf-8")
+    transformer_prompt = (root / "prompts" / "agent2.md").read_text(encoding="utf-8")
+    assert "execution_paths" in analyzer_prompt
+    assert "covered_paths" in transformer_prompt
+    assert "uncovered_paths" in transformer_prompt

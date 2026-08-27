@@ -1,4 +1,4 @@
-"""Creation and writing of deterministic run artifacts."""
+"""创建并写入确定性的实验产物。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,28 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .models import CapabilityReport, CapabilityStatus
+from .models import CapabilityReport, CapabilityStatus, CodeLocation, InterfaceReport
+
+
+CAPABILITY_DISPLAY_ORDER = (
+    ("message_capture", "消息捕获"),
+    ("message_injection", "消息注入"),
+    ("time_control", "时间控制"),
+    ("randomness_control", "随机性控制"),
+    ("lifecycle_control", "生命周期控制"),
+    ("observation", "状态观察"),
+    ("external_input", "外部输入"),
+)
+
+
+def _format_location(location: CodeLocation | None) -> str | None:
+    """把 Agent 2 的代码位置转换成适合人读的短文本。"""
+
+    if location is None:
+        return None
+    parts = [part for part in (location.file, location.symbol) if part]
+    value = " / ".join(parts)
+    return f"{value}：{location.meaning}" if location.meaning else value
 
 
 class ArtifactStore:
@@ -74,7 +95,7 @@ class ArtifactStore:
             }:
                 unresolved[name] = {
                     "status": finding.status.value,
-                    "reason": finding.reason or finding.gap or "See capability-report.json",
+                    "reason": finding.reason or finding.gap or "详见 capability-report.json",
                 }
             elif (
                 finding.status is CapabilityStatus.PATCHABLE
@@ -83,9 +104,98 @@ class ArtifactStore:
             ):
                 unresolved[name] = {
                     "status": finding.status.value,
-                    "reason": "outside this run's transform_capabilities scope",
+                    "reason": "不在本次 transform_capabilities 实验范围内",
                 }
         return self.write_json("unresolved.json", unresolved)
+
+    def write_usage(
+        self,
+        report: CapabilityReport,
+        interface_report: InterfaceReport | None = None,
+    ) -> Path:
+        """用现有结构化报告生成面向使用者的中文接口说明。"""
+
+        lines = [
+            f"# {report.target} 测试接口使用报告",
+            "",
+            "本报告同时列出目标系统已有接口和本次 Agent 生成的接口。",
+            "能力状态、源码证据和完整限制以 `capability-report.json` 为准。",
+            "",
+        ]
+        implemented = interface_report.capabilities() if interface_report else {}
+        for name, title in CAPABILITY_DISPLAY_ORDER:
+            finding = report.capabilities[name]
+            generated = implemented.get(name)
+            lines.extend([f"## {title}", "", f"- 分析状态：`{finding.status.value}`"])
+            if finding.boundary:
+                lines.append(f"- 覆盖边界：{finding.boundary}")
+            if generated is not None:
+                lines.append(
+                    "- 本次修改："
+                    + ("已生成接口" if generated.implemented else "实现阶段判定为侵入式")
+                )
+            lines.append("")
+
+            if finding.execution_paths:
+                lines.extend(["### Analyzer 发现的实现路径", ""])
+                lines.extend(f"- {path}" for path in finding.execution_paths)
+                lines.append("")
+
+            if finding.entrypoints:
+                lines.extend(["### 目标已有入口", ""])
+                lines.extend(f"- `{entrypoint}`" for entrypoint in finding.entrypoints)
+                lines.append("")
+            elif finding.evidence:
+                # 某些旧报告没有 entrypoints；至少把可定位证据呈现出来，避免
+                # SUPPORTED 能力在使用报告中完全消失。
+                lines.extend(["### 可参考的源码位置", ""])
+                for item in finding.evidence:
+                    location = item.file or item.symbol or "未定位"
+                    if item.line is not None:
+                        location += f":{item.line}"
+                    lines.append(f"- `{location}`：{item.reason}")
+                lines.append("")
+
+            if generated is not None and generated.implemented:
+                locations = [
+                    ("捕获位置", _format_location(generated.capture_boundary)),
+                    ("Pending Store", _format_location(generated.pending_store)),
+                    ("调用入口", _format_location(generated.entrypoint)),
+                ]
+                present = [(label, value) for label, value in locations if value]
+                if present:
+                    lines.extend(["### 本次生成接口", ""])
+                    lines.extend(f"- {label}：`{value}`" for label, value in present)
+                    lines.append("")
+                details = [
+                    ("生产路径", generated.production_mode),
+                    ("测试路径", generated.test_mode),
+                    ("消息 ID 范围", generated.message_id_scope),
+                    ("复制策略", generated.copy_strategy),
+                ]
+                present_details = [(label, value) for label, value in details if value]
+                if present_details or generated.notes:
+                    lines.extend(["### 使用与范围", ""])
+                    lines.extend(f"- {label}：{value}" for label, value in present_details)
+                    lines.extend(f"- {note}" for note in generated.notes)
+                    lines.append("")
+                if generated.covered_paths:
+                    lines.extend(["### 已覆盖路径", ""])
+                    lines.extend(f"- {path}" for path in generated.covered_paths)
+                    lines.append("")
+                if generated.uncovered_paths:
+                    lines.extend(["### 未覆盖路径", ""])
+                    lines.extend(f"- {path}" for path in generated.uncovered_paths)
+                    lines.append("")
+
+            if finding.limitations:
+                lines.extend(["### 限制", ""])
+                lines.extend(f"- {item}" for item in finding.limitations)
+                lines.append("")
+            elif finding.gap and (generated is None or not generated.implemented):
+                lines.extend(["### 当前缺口", "", f"- {finding.gap}", ""])
+
+        return self.write_text("USAGE.md", "\n".join(lines).rstrip() + "\n")
 
     def publish_latest(self) -> Path:
         """原子替换 Git 跟踪的 latest 审计导出。
@@ -112,7 +222,7 @@ class ArtifactStore:
             manifest = {
                 "source_run": self.run_directory.name,
                 "published_at": datetime.now(timezone.utc).isoformat(),
-                "included": "reports, patch, statistics, and logs",
+                "included": "报告、补丁、统计和日志",
                 "excluded": ["patched-worktree*"],
             }
             run_config_path = staging / "run-config.json"
@@ -124,19 +234,22 @@ class ArtifactStore:
                 encoding="utf-8",
             )
             (staging / "APPLY.md").write_text(
-                """# Applying the latest verified patch
+                """# 应用最近一次已验证补丁
 
-Review `changes.patch`, `review-report.json`, and `verification-report.json`
-before modifying the target repository. Confirm the expected target revision in
-`run-config.json`, then run from the target repository:
+修改目标仓库前，先审查 `changes.patch`、`review-report.json` 和
+`verification-report.json`，并在 `run-config.json` 中确认目标提交版本。
+
+然后在目标仓库中运行：
 
 ```bash
-git apply --check /absolute/path/to/runs/latest/changes.patch
-git apply /absolute/path/to/runs/latest/changes.patch
+git apply --check /绝对路径/runs/latest/changes.patch
+git apply /绝对路径/runs/latest/changes.patch
 go test ./...
 ```
 
-ConsensusSeam deliberately does not apply or commit the patch automatically.
+ConsensusSeam 不会自动应用或提交补丁。
+
+如果最近一次运行是 analyze-only，目录中可能没有 `changes.patch`；此时本文件只说明通用应用流程。
 """,
                 encoding="utf-8",
             )

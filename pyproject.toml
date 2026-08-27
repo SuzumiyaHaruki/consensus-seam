@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "consensus-seam"
 version = "0.1.0"
-description = "Low-intrusion testability analysis and transformation for Go consensus implementations"
+description = "面向 Go 共识实现的低侵入测试能力分析与接口补充框架"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "ConsensusSeam contributors" }]
+authors = [{ name = "ConsensusSeam 贡献者" }]
 dependencies = [
   "pydantic>=2.8,<3",
   "PyYAML>=5.4,<7",

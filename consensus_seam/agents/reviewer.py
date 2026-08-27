@@ -1,4 +1,4 @@
-"""Agent 3: independent read-only semantic review."""
+"""Agent 3：独立、只读的语义审查。"""
 
 from __future__ import annotations
 

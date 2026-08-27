@@ -1,41 +1,53 @@
 {
-  "target": "mini-raft",
+  "target": "etcd-raft",
   "capabilities": {
     "external_input": {
       "status": "SUPPORTED",
       "evidence": [
         {
           "file": "node.go",
-          "symbol": "Node.Propose",
-          "line": 148,
-          "reason": "Propose is the only API that accepts application-originated work: it appends an Entry with caller data and replicates it via appendMessagesLocked; returns ErrNotLeader when not leader."
+          "symbol": "(*node).Propose",
+          "line": 474,
+          "reason": "Public proposal entrypoint: wraps user data in MsgProp and sends it through the node's proposal channel."
         },
         {
           "file": "node.go",
-          "symbol": "Node.Step",
-          "line": 134,
-          "reason": "Step is the peer-to-peer protocol input boundary (validates message.To == node.id and dispatches by MessageType); it is protocol ingress, not a workload entrypoint."
+          "symbol": "(*node).ProposeConfChange",
+          "line": 495,
+          "reason": "Public membership-change entrypoint: marshals ConfChangeI into a MsgProp with an EntryConfChange entry."
         },
         {
-          "file": "doc.go",
-          "symbol": "package miniraft",
-          "line": 5,
-          "reason": "Documentation states membership changes and persistence are intentionally omitted, so Propose is the only existing workload entrypoint; no proposal/request/transaction API other than Propose exists."
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).Propose",
+          "line": 90,
+          "reason": "Thread-unsafe proposal entrypoint calling raft.Step(MsgProp) directly."
+        },
+        {
+          "file": "node.go",
+          "symbol": "(*node).Step",
+          "line": 478,
+          "reason": "Peer-message ingress; excluded from workload entrypoints as required by the capability contract."
+        },
+        {
+          "file": "node.go",
+          "symbol": "(*node).Tick",
+          "line": 463,
+          "reason": "Timer/lifecycle event; excluded from workload entrypoints."
         }
       ],
-      "boundary": "protocol_library: real networking, durable storage, and application process behavior are outside the boundary",
-      "gap": "Membership-change workload input is absent from the implementation (documented omission), so external input coverage is limited to proposals.",
-      "reason": "The implementation exposes exactly one external workload entrypoint, Node.Propose, which appends application data to the log when the node is leader. Peer-to-peer protocol ingress (Node.Step) and logical time (Node.Tick) are separate and are not workload entrypoints. No membership-change entrypoint exists; doc.go explicitly states membership changes are omitted.",
+      "boundary": "Protocol-library boundary: only the public Node/RawNode proposal APIs are workload entrypoints; transport and application layers are outside.",
+      "gap": null,
+      "reason": "The library exposes public application-workload entrypoints: Node.Propose and Node.ProposeConfChange (and RawNode equivalents) accept proposals and membership changes originating outside the protocol and convert them to internal MsgProp messages. Peer-to-peer message ingress (Step) and timer events (Tick) are separate APIs and are excluded as required.",
       "limitations": [
-        "No membership_change entrypoint exists; doc.go:5 explicitly says membership changes are omitted, so only 'proposal' from the protocol brief is discoverable.",
-        "Propose is only accepted on a leader node (ErrNotLeader), so external input is gated by protocol role.",
-        "No persistence of proposed data; log is in-memory only."
+        "Only the protocol library is in scope; the application-facing transport and retry layers that feed Propose are outside the boundary.",
+        "Proposals can be dropped or forwarded (stepFollower raft.go:1715-1724); the API contract documents this."
       ],
-      "suggested_direction": "No new business API needed for v0.1; keep Propose as the single workload entrypoint and document membership change as out of scope.",
+      "suggested_direction": null,
       "entrypoints": [
-        "Node.Propose (node.go:148)",
-        "Node.Step (node.go:134) - protocol ingress, excluded from workload",
-        "Node.Tick (node.go:110) - timer, excluded from workload"
+        "Node.Propose (node.go:474)",
+        "Node.ProposeConfChange (node.go:495)",
+        "RawNode.Propose (rawnode.go:90)",
+        "RawNode.ProposeConfChange (rawnode.go:101)"
       ],
       "obligations": {
         "protocol_ingress_excluded": {
@@ -43,165 +55,178 @@
           "evidence": [
             {
               "file": "node.go",
-              "symbol": "Node.Step",
-              "line": 134,
-              "reason": "Step is the normal protocol input boundary for peer messages (checks To, dispatches on MessageType), explicitly distinguished from application work."
+              "symbol": "(*node).Step",
+              "line": 478,
+              "reason": "Step handles incoming raft messages; contract excludes it."
+            },
+            {
+              "file": "raft.go",
+              "symbol": "(*raft).Step",
+              "line": 1085,
+              "reason": "Core message dispatch for all peer messages."
             }
           ],
-          "reason": "Node.Step (node.go:134-146) is identified and treated as the peer-to-peer protocol message handler; it is not counted as a workload entrypoint."
+          "reason": "Step (node.go:478, rawnode.go:118, raft.go:1085) is documented and treated as peer-to-peer message handling; it is not listed as a workload entrypoint. Proposals enter via the dedicated Propose/ProposeConfChange APIs which wrap data into MsgProp."
         },
         "timer_and_internal_events_excluded": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "node.go",
-              "symbol": "Node.Tick",
-              "line": 110,
-              "reason": "Tick advances exactly one unit of logical protocol time and only drives heartbeats/elections internally; it takes no workload data."
+              "file": "raft.go",
+              "symbol": "(*raft).tickElection",
+              "line": 850,
+              "reason": "Election timeout expiry generates internal MsgHup; not external input."
+            },
+            {
+              "file": "raft.go",
+              "symbol": "(*raft).tickHeartbeat",
+              "line": 862,
+              "reason": "Heartbeat tick generates internal MsgBeat/MsgCheckQuorum."
             }
           ],
-          "reason": "Tick (node.go:110-131) and the election/heartbeat elapsed counters are internal logical timers; they are excluded from the external workload entrypoint list."
+          "reason": "Tick (node.go:463, rawnode.go:64) and internally generated messages (MsgHup from tickElection raft.go:855, MsgBeat from tickHeartbeat raft.go:885, MsgCheckQuorum raft.go:869) are internal events and are not identified as external workload inputs."
         },
         "workload_entrypoint": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "node.go",
-              "symbol": "Node.Propose",
-              "line": 148,
-              "reason": "Propose(data []byte) appends an Entry with the caller's data (line 161) and replicates it; requires RoleLeader, i.e., it is the application proposal entrypoint."
+              "symbol": "(*node).Propose",
+              "line": 474,
+              "reason": "Application proposal accepted as external workload."
+            },
+            {
+              "file": "node.go",
+              "symbol": "(*node).ProposeConfChange",
+              "line": 495,
+              "reason": "Application membership change accepted as external workload."
             }
           ],
-          "reason": "Node.Propose is the sole input originating outside the protocol that is treated as application work; it carries caller bytes into the log and replication path."
+          "reason": "Propose and ProposeConfChange are the application-workload entrypoints: they originate outside the protocol (application proposes data or config change) and are processed as MsgProp."
         }
       }
     },
     "lifecycle_control": {
-      "status": "INVASIVE",
+      "status": "SUPPORTED",
       "evidence": [
         {
           "file": "node.go",
-          "symbol": "Node",
-          "line": 46,
-          "reason": "Struct comment: 'Node owns both persistent-looking and volatile-looking state in one object. Pause and Resume only control execution; they do not define crash recovery.'"
+          "symbol": "(*node).Stop",
+          "line": 336,
+          "reason": "Explicit stop boundary: stops the run loop, closes done, and all later calls return ErrStopped (node.go:34-35)."
         },
         {
           "file": "node.go",
-          "symbol": "NewNode",
-          "line": 72,
-          "reason": "NewNode creates a fresh in-memory Node (running:true, role:follower, empty votes map); there is no load-from-storage or restart path."
+          "symbol": "RestartNode",
+          "line": 286,
+          "reason": "Existing recovery path: creates a node whose state is restored from Storage instead of a peer list."
+        },
+        {
+          "file": "raft.go",
+          "symbol": "newRaft",
+          "line": 442,
+          "reason": "Recovery reads InitialState from Storage, restores HardState via loadState (raft.go:2033) and applies Config.Applied (raft.go:482-484)."
         },
         {
           "file": "node.go",
-          "symbol": "Node.Pause",
-          "line": 170,
-          "reason": "Comment: 'Pause and Resume model a scheduler pause, not process crash/restart.'"
+          "symbol": "SoftState",
+          "line": 38,
+          "reason": "SoftState documented as volatile, not persisted to the WAL."
         },
         {
-          "file": "node.go",
-          "symbol": "Node.Pause",
-          "line": 171,
-          "reason": "Pause() only sets running=false; Resume() sets running=true (lines 177-181); state is never persisted or reconstructed."
-        },
-        {
-          "file": "doc.go",
-          "symbol": "package miniraft",
-          "line": 5,
-          "reason": "Documentation: 'intentionally omits ... persistence'."
+          "file": "rawnode.go",
+          "symbol": "MustSync",
+          "line": 191,
+          "reason": "Defines when HardState/entries must be durably written, i.e. the persistent semantics."
         }
       ],
-      "boundary": "protocol_library: durable storage and process lifecycle are outside the boundary",
-      "gap": "Restart/recovery boundary and recoverable-state ownership are entirely absent and explicitly out of scope, so any lifecycle test API would have to invent the persistent/volatile split.",
-      "reason": "The node has no restart or recovery path: NewNode always builds fresh in-memory state, and Pause/Resume only toggle a `running` flag whose meaning is explicitly documented as a scheduler pause, not crash recovery. Persistent-looking state (term, vote, log, commit) is held in one in-memory struct with no ownership separation or durable store. Exposing lifecycle control to tests would require deciding which state survives a crash, which the implementation deliberately does not define.",
+      "boundary": "In-module Storage interface and MemoryStorage are inside the boundary; durable WAL/disk and process supervision are outside.",
+      "gap": null,
+      "reason": "The library already defines the persistent/volatile split (HardState must be persisted, SoftState is volatile, MustSync decision), provides a restart path (RestartNode/newRaft reads Storage.InitialState, Config.Applied, loadState), owns its recoverable state, and exposes an explicit stop boundary (Node.Stop with ErrStopped semantics). No state-survival decision must be invented by an Agent.",
       "limitations": [
-        "Pause/Resume do not survive process restart and are not recovery.",
-        "No durable storage; all state is lost on process exit.",
-        "No state snapshot/load API exists."
+        "Crash durability is delegated to the application's Storage implementation; the shipped MemoryStorage is in-memory only, so cross-process crash survival requires an external WAL (outside the boundary).",
+        "Restarting a stopped node means constructing a new Node from Storage; there is no in-process resume of a stopped Node."
       ],
-      "suggested_direction": "For v0.1, expose only the existing Pause/Resume scheduler-pause semantics; do not add restart or recovery APIs unless the implementation gains persistence.",
+      "suggested_direction": null,
       "entrypoints": [
-        "NewNode (node.go:72)",
-        "Node.Pause (node.go:171)",
-        "Node.Resume (node.go:177)"
+        "Node.Stop (node.go:336)",
+        "StartNode (node.go:276)",
+        "RestartNode (node.go:286)",
+        "NewRawNode (rawnode.go:51)",
+        "RawNode.Bootstrap (bootstrap.go:30)"
       ],
       "obligations": {
         "persistent_volatile_semantics_defined": {
-          "status": "MISSING",
+          "status": "SATISFIED",
           "evidence": [
             {
               "file": "node.go",
-              "symbol": "Node",
-              "line": 46,
-              "reason": "'Node owns both persistent-looking and volatile-looking state in one object. Pause and Resume only control execution; they do not define crash recovery.'"
+              "symbol": "Ready.HardState",
+              "line": 58,
+              "reason": "HardState documented as state to be saved to stable storage before messages are sent."
             },
             {
-              "file": "node.go",
-              "symbol": "Node",
-              "line": 48,
-              "reason": "Struct fields: term, vote, votes, log, commit are plain in-memory fields with no persistence annotation or durable storage."
+              "file": "rawnode.go",
+              "symbol": "MustSync",
+              "line": 191,
+              "reason": "Returns true when term/vote/log entries require a durable write."
             }
           ],
-          "reason": "The implementation explicitly declines to define a crash-surviving/volatile split: all state (term, vote, log, commit, role) lives in one in-memory Node struct and comments state Pause/Resume do not define crash recovery."
+          "reason": "Ready contract (node.go:49-114) explicitly states HardState/Entries/Snapshot must be saved to stable storage before messages are sent, SoftState is volatile (node.go:38-43), and MustSync (rawnode.go:191-200) codifies durability requirements."
         },
         "restart_or_recovery_boundary": {
-          "status": "MISSING",
+          "status": "SATISFIED",
           "evidence": [
             {
-              "file": "node.go",
-              "symbol": "NewNode",
-              "line": 72,
-              "reason": "Fresh node construction with no state load; there is no recovery function in the codebase."
+              "file": "raft.go",
+              "symbol": "newRaft",
+              "line": 442,
+              "reason": "Recovery initialization from Storage.InitialState and loadState."
             },
             {
               "file": "node.go",
-              "symbol": "Node.Pause",
-              "line": 170,
-              "reason": "Explicit comment that Pause/Resume model scheduler pause, not crash/restart."
+              "symbol": "RestartNode",
+              "line": 286,
+              "reason": "Public restart entrypoint restoring membership from Storage."
             }
           ],
-          "reason": "No restart or recovery path exists: NewNode (node.go:72-89) constructs state from scratch, and Pause/Resume (node.go:171-181) merely toggle running; scheduler resume is explicitly not recovery (node.go:170)."
+          "reason": "RestartNode (node.go:286) and NewRawNode (rawnode.go:51) read the previous HardState, ConfState and log from Storage.InitialState (storage.go:49-50, raft.go:442-485); Config.Applied (raft.go:145-149) restores the applied index. This is an explicit restart path; it is not a scheduler resume."
         },
         "state_ownership_defined": {
-          "status": "MISSING",
+          "status": "SATISFIED",
           "evidence": [
             {
-              "file": "node.go",
-              "symbol": "Node",
-              "line": 48,
-              "reason": "All persistent-looking fields (term, vote, log, commit) coexist with volatile fields (role, votes, elapsed counters) in one struct; no separate recoverable-state object."
+              "file": "raft.go",
+              "symbol": "(*raft).hardState",
+              "line": 502,
+              "reason": "Library-owned persistent state (Term, Vote, Commit)."
             },
             {
-              "file": "doc.go",
-              "symbol": "package miniraft",
-              "line": 5,
-              "reason": "Persistence is an intentional omission."
+              "file": "storage.go",
+              "symbol": "MemoryStorage",
+              "line": 98,
+              "reason": "Shipped storage implementation owning hardState, snapshot, and entries."
             }
           ],
-          "reason": "The implementation does not own and separate recoverable state; term/vote/log/commit are all fields of the single Node struct with no persistence layer (doc.go:5 omits persistence)."
+          "reason": "The raft struct owns Term, Vote, raftLog and commit (raft.go:447-465, hardState raft.go:502); recoverable state is written through the Ready/MustSync contract and reloaded from Storage; MemoryStorage (storage.go:98) provides the shipped in-memory ownership of hardState/entries/snapshot."
         },
         "stop_boundary": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "node.go",
-              "symbol": "Node.Pause",
-              "line": 171,
-              "reason": "Pause() sets running=false under the mutex; Resume() (line 177) sets it back to true."
+              "symbol": "(*node).Stop",
+              "line": 336,
+              "reason": "Stop triggers run-loop termination and waits on done."
             },
             {
               "file": "node.go",
-              "symbol": "Node.Tick",
-              "line": 110,
-              "reason": "Tick returns ErrPaused when !node.running (lines 112-115), demonstrating the pause boundary gates all protocol activity."
-            },
-            {
-              "file": "node.go",
-              "symbol": "Node.Step",
-              "line": 134,
-              "reason": "Step returns ErrPaused when !node.running (lines 139-142)."
+              "symbol": "ErrStopped",
+              "line": 34,
+              "reason": "Defines post-stop semantics for all node methods."
             }
           ],
-          "reason": "Pause()/Resume() provide an existing stop/pause boundary with an exact, documented meaning: Pause sets running=false and Step/Tick/Propose all return ErrPaused while paused; the meaning is a scheduler pause, not crash recovery."
+          "reason": "Node.Stop (node.go:336-346) is the documented stop boundary: it terminates the run goroutine, closes done, and subsequent operations return ErrStopped (node.go:34-35); the exact meaning is defined in the interface (node.go:246-247)."
         }
       }
     },
@@ -209,127 +234,234 @@
       "status": "PATCHABLE",
       "evidence": [
         {
-          "file": "node.go",
-          "symbol": "Node.emit",
-          "line": 332,
-          "reason": "emit is the single outbound path: every handler result (Tick heartbeat, campaign votes, append responses, proposal broadcasts) is delivered here via transport.Send."
+          "file": "raft.go",
+          "symbol": "(*raft).send",
+          "line": 512,
+          "reason": "Single message-creation/scheduling point: fills From/Term and appends to r.msgs or r.msgsAfterAppend."
         },
         {
-          "file": "transport.go",
-          "symbol": "Transport",
-          "line": 11,
-          "reason": "Transport is a one-method interface (Send(Message) error), injectable through Config.Transport (node.go:31,79), providing a clean interception point."
-        },
-        {
-          "file": "transport.go",
-          "symbol": "MemoryTransport.Send",
-          "line": 33,
-          "reason": "MemoryTransport.Send immediately calls target.Step (line 44), i.e., delivery is synchronous and uncontrollable; capture must suppress this call."
-        },
-        {
-          "file": "message.go",
-          "symbol": "Message.Clone",
-          "line": 38,
-          "reason": "Clone produces a deep, stable copy of the message (including Entry payloads), enabling a stable pending snapshot."
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).readyWithoutAccept",
+          "line": 141,
+          "reason": "Ready.Messages = r.msgs plus msgsAfterAppend and (async mode) MsgStorageAppend/MsgStorageApply; the point where all outbound messages become visible before any transport send."
         },
         {
           "file": "node.go",
-          "symbol": "Node.Tick",
-          "line": 121,
-          "reason": "Heartbeats are appendMessagesLocked(nil) emitted through the same emit path; no heartbeat bypass exists."
+          "symbol": "(*node).run",
+          "line": 368,
+          "reason": "Ready (including Messages) is produced and handed to the application via readyc; no library-side send exists."
         },
         {
-          "file": "doc.go",
-          "symbol": "package miniraft",
-          "line": 5,
-          "reason": "Snapshots, membership changes, and persistence are omitted, so there are no snapshot/forwarding bypasses."
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).readyWithoutAccept",
+          "line": 165,
+          "reason": "Async-storage local messages (MsgStorageAppend/MsgStorageApply targeting LocalAppendThread/LocalApplyThread, raft.go:40-44) are also appended to Messages and must be distinguished by a capture controller."
         }
       ],
-      "boundary": "protocol_library: real networking transport is outside the boundary; capture happens at the Transport seam",
-      "gap": "No message controller, pending store, or capture sequencing exists; only the Transport seam is available.",
-      "reason": "All outbound protocol messages converge on a single choke point: node.emit (node.go:332-340) calls transport.Send. Transport is an injectable interface (Config.Transport, node.go:31,79) and the only implementation, MemoryTransport.Send, is the uncontrollable path because it synchronously calls the target's Step (transport.go:33-45). A NewMessageController can wrap this seam: capture a stable clone (Message.Clone, message.go:38-46) and suppress the underlying Send. There are no bypasses: heartbeats are just append messages through emit (node.go:117-122), there are no retries, snapshots, or forwarded requests (doc.go:5), and all handler outputs return through emit. No controller exists today, so the work is additive at an existing seam.",
+      "boundary": "Capture point is inside the library (Ready.Messages generation); the actual network send occurs in the application transport outside the boundary.",
+      "gap": "A test-mode capture controller must be added: intercept Ready.Messages (the single outbound choke point) or wrap raft.send, copy pb.Message values into a stable pending snapshot with CaptureSequence, and suppress application-side forwarding of captured messages.",
+      "reason": "No test-mode message controller exists (no MessageController/CaptureSequence anywhere in the module). However, message creation is centralized in raft.send (raft.go:512-599) which appends to r.msgs / r.msgsAfterAppend, and every outbound protocol message is handed to the application in a single choke point, Ready.Messages (rawnode.go:141-189, node.go:368/440). A capture controller can be added there, before any application transport send; suppression is achievable because the library itself never sends — the 'uncontrollable send path' is the application transport outside the boundary.",
       "limitations": [
-        "MessageController does not exist; constructor, ListPending, and ClearPending must be implemented.",
-        "MemoryTransport records delivered messages even after capture interception is added, so tests must not confuse transport.Delivered with controller pending state.",
-        "Capture suppresses only outbound protocol messages; a real network send path is outside the boundary and not implemented."
+        "Heartbeats (tickHeartbeat raft.go:862 -> MsgBeat -> sendHeartbeat raft.go:692), append retries (maybeSendAppend raft.go:616), snapshots (maybeSendSnapshot raft.go:664, MsgSnap with ReportSnapshot contract rawnode.go:108-110), forwarded proposals (stepFollower raft.go:1715-1724) and async-storage local messages (rawnode.go:165-186) all flow through the same Ready.Messages choke point, so a capture implemented there covers them uniformly.",
+        "Suppression of the real network send must be honored by the application transport (outside the boundary) or by withholding captured messages from it.",
+        "MsgsAfterAppend (vote/app responses, raft.go:590) are only appended to Ready.Messages in non-async mode (rawnode.go:176-186); capture must cover both modes."
       ],
-      "suggested_direction": "Implement NewMessageController(Transport) as a wrapper around the Transport interface: Send captures message.Clone() into a pending store with an incrementing CaptureSequence and returns without invoking the wrapped transport; ListPending returns stable metadata (ID, From, To, Type, CaptureSequence); ClearPending empties the store.",
+      "suggested_direction": "Add a controller that wraps RawNode.Ready / Node.Ready (or hooks readyWithoutAccept), deep-copies Ready.Messages into a pending store with capture sequence IDs, and removes captured messages from what the application may forward.",
       "entrypoints": [
-        "node.emit -> transport.Send (node.go:332-340)",
-        "Transport.Send interface (transport.go:11-13)",
-        "MemoryTransport.Send (transport.go:33) - the original uncontrollable send path"
+        "raft.send -> r.msgs / r.msgsAfterAppend (raft.go:512-599)",
+        "RawNode.readyWithoutAccept / Ready.Messages (rawnode.go:141-189)",
+        "node.run Ready handoff (node.go:368, 440)"
       ],
-      "obligations": {}
+      "obligations": {
+        "constructor": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "(*node).Ready",
+              "line": 552,
+              "reason": "Ready is exposed to the application; no controller wraps it."
+            }
+          ],
+          "reason": "No NewMessageController(Transport) exists; there is no Transport abstraction in the library at all (search for 'type Transport' returns nothing) and no active test-mode capture controller."
+        },
+        "list_pending": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "rawnode.go",
+              "symbol": "Ready.Messages",
+              "line": 147,
+              "reason": "Messages are only exposed in Ready without metadata or capture sequence."
+            }
+          ],
+          "reason": "No pending-message store or ListPending API with ID/From/To/Type/CaptureSequence exists; 'CaptureSequence' has zero matches in the module."
+        },
+        "clear_pending": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "rafttest/interaction_env.go",
+              "symbol": "InteractionEnv.Messages",
+              "line": 52,
+              "reason": "Only an ad-hoc test harness holds in-flight messages; no library controller."
+            }
+          ],
+          "reason": "No ClearPending API exists anywhere in the module."
+        }
+      }
     },
     "message_injection": {
       "status": "PATCHABLE",
       "evidence": [
         {
           "file": "node.go",
-          "symbol": "Node.Step",
-          "line": 134,
-          "reason": "Step is the documented normal protocol input boundary: it checks message.To == node.id (line 135), processes under the mutex, and emits responses; delivery through Step is exactly the original path MemoryTransport.Send uses (transport.go:44)."
+          "symbol": "(*node).Step",
+          "line": 478,
+          "reason": "Canonical protocol input: async via recvc/propc channels (node.go:513-550); sender/receiver/content are taken from the message itself."
+        },
+        {
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).Step",
+          "line": 118,
+          "reason": "Synchronous protocol input for RawNode with error returns for local/unknown-peer messages."
         },
         {
           "file": "node.go",
-          "symbol": "Node.stepLocked",
-          "line": 143,
-          "reason": "Step passes message.Clone() into stepLocked, preserving sender/receiver/content while keeping input stable."
-        },
-        {
-          "file": "message.go",
-          "symbol": "Message.Clone",
-          "line": 38,
-          "reason": "Deep-copies Entries so the pending snapshot remains valid and unmodified after injection."
-        },
-        {
-          "file": "node.go",
-          "symbol": "Node.Step",
-          "line": 139,
-          "reason": "Step returns ErrPaused when the target is paused, so a failed injection is observable and the pending message can remain stored."
+          "symbol": "(*node).run",
+          "line": 400,
+          "reason": "Incoming messages are filtered only by response/unknown-peer checks, then stepped; a captured legal message passes unchanged."
         }
       ],
-      "boundary": "protocol_library: delivery is through the in-memory Node.Step boundary; real networking is outside",
-      "gap": "No injection API or serialization between Inject/ClearPending and concurrent capture exists.",
-      "reason": "The normal protocol input boundary is Node.Step (node.go:133-146), which validates message.To against node.id, clones the message, processes it under the node mutex, and emits responses synchronously. A captured message records its target in To, so injection can deliver the exact pending message by calling the recorded node's Step. Sender, receiver, and content remain unchanged because pending messages are stable clones (message.go:38-46) and Step re-clones on entry (node.go:143). Processing is synchronous (Step completes under lock before returning). Failed injection (e.g., ErrPaused) can leave the message pending since Step returns an error without consuming the store. The controller must serialize Inject/ClearPending while capture may be concurrent.",
+      "boundary": "Delivery is in-process via the target node's Step; no network transport exists or is required inside the boundary.",
+      "gap": "Implement a controller that stores captured messages, selects by message ID, and delivers them by invoking the recorded target's Step (async for Node, sync for RawNode); propagate Step errors and keep the message pending on failure.",
+      "reason": "No injection controller exists, but the normal protocol input boundary is unambiguous and deterministic in-process: Node.Step (node.go:478), RawNode.Step (rawnode.go:118) and raft.Step (raft.go:1085). A controller can deliver a captured pb.Message unchanged through the recorded target's Step (target selected by the message's To field), which preserves sender, receiver, and content. Step already returns errors (ErrStepLocalMsg, ErrStepPeerNotFound, rawnode.go:24-29) that a failed Inject can propagate while leaving the message pending. This is not INVASIVE_REDISCOVERED because Step is an existing deterministic target binding that needs no caller setup.",
       "limitations": [
-        "Injection controller does not exist; Inject(messageID) and the pending-store identity (pending_store_instance or test_session) must be declared.",
-        "A captured message can only be injected into the node recorded in its To field; ErrWrongTarget (node.go:135) protects that invariant.",
-        "If the target node is paused at injection time, Step returns ErrPaused; the inject contract must keep the message pending in that case."
+        "Node.Step delivery is asynchronous (channel-based, node.go:513-550); deterministic tests should prefer RawNode.Step or wait for completion.",
+        "Self-addressed and local messages are rejected by Step (node.go:479-483, rawnode.go:119-126); only previously captured legal peer messages can be injected.",
+        "Multi-node global ordering is the test harness's concern; the library provides per-node input only."
       ],
-      "suggested_direction": "Add Inject(messageID) to the controller: look up the pending message by ID, call the recorded target's Step(pending.Message), and on success remove the message from the pending store; on error leave it pending. Serialize Inject and ClearPending with a mutex; allow capture (Send) to proceed concurrently.",
+      "suggested_direction": "Add a pending-message controller (per test session) that captures Ready.Messages, assigns message IDs, and injects by calling target.Step/RawNode.Step with the stored pb.Message unchanged.",
       "entrypoints": [
-        "Node.Step (node.go:134) - the original target node's normal protocol input boundary"
+        "Node.Step (node.go:478)",
+        "RawNode.Step (rawnode.go:118)",
+        "raft.Step (raft.go:1085)"
       ],
-      "obligations": {}
+      "obligations": {
+        "inject": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "(*node).Step",
+              "line": 478,
+              "reason": "Step exists as the delivery primitive, but nothing selects or delivers pending captured messages."
+            }
+          ],
+          "reason": "No Inject(messageID) API exists; no controller holds captured messages to deliver."
+        },
+        "delivery_binding": {
+          "status": "PARTIAL",
+          "evidence": [
+            {
+              "file": "rafttest/interaction_env.go",
+              "symbol": "InteractionEnv.Messages",
+              "line": 52,
+              "reason": "Shipped test harness queues in-flight messages and delivers them in-process to nodes; precedent for deterministic binding."
+            },
+            {
+              "file": "rawnode.go",
+              "symbol": "(*RawNode).Step",
+              "line": 118,
+              "reason": "Deterministic in-process protocol input used by the harness."
+            }
+          ],
+          "reason": "No Transport abstraction exists to wrap (search for 'type Transport' returns nothing), but an existing deterministic in-process target binding is available: calling the recorded target's Step/RawNode.Step directly with the captured message, as the shipped rafttest harness already does (rafttest delivers queued messages to RawNode.Step; InteractionEnv.Messages queue, interaction_env.go:52). A controller needs no additional caller-provided transport."
+        },
+        "failed_delivery": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "rawnode.go",
+              "symbol": "(*RawNode).Step",
+              "line": 123,
+              "reason": "Step returns errors for unknown response senders, providing the error surface for failed delivery."
+            }
+          ],
+          "reason": "No Inject implementation exists, so the 'propagate underlying error and leave message pending' behavior is not implemented; Step can return ErrStepPeerNotFound/ErrStepLocalMsg (rawnode.go:24-29, 120-126) which a future Inject could propagate."
+        },
+        "message_id_scope": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "rafttest/interaction_env.go",
+              "symbol": "InteractionEnv",
+              "line": 49,
+              "reason": "Only the ad-hoc datadriven harness scopes messages per env, not a library controller."
+            }
+          ],
+          "reason": "No pending-store instance or test-session scope is declared; no controller exists to declare it."
+        },
+        "setup": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "(*node).Step",
+              "line": 478,
+              "reason": "Direct call to Step requires no additional setup once the controller exists."
+            }
+          ],
+          "reason": "The required controller API (constructor, Inject, ClearPending) is entirely absent; capture and injection would need the new controller, though no extra public Register/Enable/target-binding call would be needed given Step's direct binding."
+        }
+      }
     },
     "observation": {
       "status": "SUPPORTED",
       "evidence": [
         {
-          "file": "node.go",
-          "symbol": "Node.Status",
-          "line": 183,
-          "reason": "Status() returns a snapshot under the node mutex including Role, Term, Vote, Leader, CommitIndex, LastIndex, RandomizedElectionTimeout (lines 186-196), matching the brief's observation examples."
+          "file": "status.go",
+          "symbol": "Status",
+          "line": 26,
+          "reason": "Composes BasicStatus, membership Config, and leader-only Progress map."
+        },
+        {
+          "file": "status.go",
+          "symbol": "BasicStatus",
+          "line": 33,
+          "reason": "Exposes ID, HardState (Term/Vote/Commit), SoftState (Lead/RaftState), Applied, LeadTransferee."
+        },
+        {
+          "file": "status.go",
+          "symbol": "getBasicStatus",
+          "line": 56,
+          "reason": "Reads raft's current term/vote/commit/lead/role/applied."
         },
         {
           "file": "node.go",
-          "symbol": "Status",
-          "line": 34,
-          "reason": "Status struct defines the stable observation fields (node.go:34-44)."
+          "symbol": "(*node).Status",
+          "line": 574,
+          "reason": "Async status query returning a snapshot from the raft goroutine."
+        },
+        {
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).Status",
+          "line": 498,
+          "reason": "Synchronous status access."
         }
       ],
-      "boundary": "protocol_library: application process behavior (apply loop) is outside the boundary",
-      "gap": "Global state (cluster view) is not exposed; only per-node Status exists.",
-      "reason": "Node.Status() (node.go:183-197) already exposes the minimum node state needed for capability verification: ID, Running, Role, Term, Vote, Leader, CommitIndex, LastIndex, and RandomizedElectionTimeout. This covers role, term, commit_index, and log extent (LastIndex) from the protocol brief. State reads are mutex-protected and consistent.",
+      "boundary": "Per-node state is exposed via Status; no cross-node global state exists in the library (each node is independent).",
+      "gap": null,
+      "reason": "Node.Status (node.go:574) and RawNode.Status (rawnode.go:498) expose BasicStatus with ID, term, vote, commit, lead, RaftState (role), applied index, LeadTransferee, plus per-peer Progress (Match/Next) and membership Config on the leader — covering all observation examples (role, term, commit_index, applied_index, log_range).",
       "limitations": [
-        "No applied_index: the protocol has no apply loop and commits proposals immediately (node.go:164), so applied state is outside the core.",
-        "No global/cluster-level observation API; observation is per-node only.",
-        "No log content or log_range beyond LastIndex is exposed; commit index and last index only."
+        "Progress/log-range detail is only populated on the leader (status.go:71-73).",
+        "No multi-node aggregate view is provided; a harness must compose per-node Status values."
       ],
-      "suggested_direction": "Keep Status as the node observation API for v0.1; add log_range exposure only if later tests require inspecting entries.",
+      "suggested_direction": null,
       "entrypoints": [
-        "Node.Status (node.go:183)"
+        "Node.Status (node.go:574)",
+        "RawNode.Status (rawnode.go:498)",
+        "Status/BasicStatus (status.go:26-42)"
       ],
       "obligations": {}
     },
@@ -337,28 +469,46 @@
       "status": "PATCHABLE",
       "evidence": [
         {
-          "file": "node.go",
-          "symbol": "Node.resetElectionTimeoutLocked",
-          "line": 324,
-          "reason": "randomizedElectionTimeout = electionTick + node.random.Intn(electionTick); this is the only rand call in the package."
+          "file": "raft.go",
+          "symbol": "lockedRand",
+          "line": 88,
+          "reason": "Random source wrapper using crypto/rand.Reader; no seed/injection hook."
         },
         {
-          "file": "node.go",
-          "symbol": "NewNode",
-          "line": 80,
-          "reason": "node.random = rand.New(rand.NewSource(time.Now().UnixNano() + int64(config.ID))) - seeded from wall clock, not injectable."
+          "file": "raft.go",
+          "symbol": "globalRand",
+          "line": 102,
+          "reason": "Package-global rand; only consumer is the election timeout."
+        },
+        {
+          "file": "raft.go",
+          "symbol": "(*raft).resetRandomizedElectionTimeout",
+          "line": 2049,
+          "reason": "Election timeout randomization; sole protocol randomness use."
+        },
+        {
+          "file": "raft_test.go",
+          "symbol": "raft_test",
+          "line": 4093,
+          "reason": "Existing determinism only via direct internal field mutation in same-package tests; not a public API."
+        },
+        {
+          "file": "rafttest/interaction_env.go",
+          "symbol": "InteractionOpts.SetRandomizedElectionTimeout",
+          "line": 31,
+          "reason": "Test-harness-only plumbing that directly sets the field; not part of the library API."
         }
       ],
-      "boundary": "protocol_library",
-      "gap": "No way to fix or inject the random source through Config.",
-      "reason": "Protocol randomness is confined to a single use site: resetElectionTimeoutLocked (node.go:324-326) uses node.random.Intn(electionTick), where node.random is a *rand.Rand seeded from time.Now().UnixNano()+ID in NewNode (node.go:80). The seed is non-deterministic, but the Rand instance is already a field, so an injectable seed or Rand can be added to Config without restructuring the protocol. Randomized election timeouts are the only randomness in the implementation.",
+      "boundary": "Randomness is fully inside the library (single global source, single consumer).",
+      "gap": "No injectable/fixable random source exists in the public API; globalRand must be made settable (e.g., configurable source) to make the same initial state and seed produce repeatable election timeouts.",
+      "reason": "The only protocol-relevant randomness is the randomized election timeout, computed at resetRandomizedElectionTimeout (raft.go:2049-2051) via globalRand (raft.go:102), a lockedRand backed by crypto/rand.Reader (raft.go:88-100). There is no public seeding or injection API; determinism is currently only achievable by same-package tests mutating r.randomizedElectionTimeout directly (raft_test.go:4093) or via the rafttest option plumbing (interaction_env.go:31-33). The change is localized to the rand source, so it is patchable.",
       "limitations": [
-        "Current seeding uses the wall clock (node.go:80), so runs are not repeatable without a patch.",
-        "Config exposes no Seed or Rand field today."
+        "crypto/rand is intentionally non-deterministic; repeatability requires an injected PRNG.",
+        "rafttest's SetRandomizedElectionTimeout bypasses the random source entirely and is test-support only."
       ],
-      "suggested_direction": "Add an optional seed (or *rand.Rand) to Config and use it in NewNode when present, so the same seed reproduces the same randomized election timeouts.",
+      "suggested_direction": "Introduce an injectable rand source (config field or setter) used by resetRandomizedElectionTimeout, defaulting to the current crypto-backed source.",
       "entrypoints": [
-        "Node.resetElectionTimeoutLocked (node.go:324)"
+        "resetRandomizedElectionTimeout -> globalRand.Intn (raft.go:2049-2051)"
       ],
       "obligations": {}
     },
@@ -367,34 +517,47 @@
       "evidence": [
         {
           "file": "node.go",
-          "symbol": "Node.Tick",
-          "line": 109,
-          "reason": "Comment: 'Tick advances exactly one unit of protocol logical time.'"
+          "symbol": "(*node).Tick",
+          "line": 463,
+          "reason": "Explicit tick increments the internal logical clock; election and heartbeat timeouts are in tick units."
         },
         {
-          "file": "node.go",
-          "symbol": "Node.Tick",
-          "line": 110,
-          "reason": "Tick increments heartbeatElapsed (leader) or electionElapsed (non-leader) and triggers campaignLocked()/appendMessagesLocked(nil) only when thresholds are reached; all protocol timing derives from these counters."
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).Tick",
+          "line": 64,
+          "reason": "Synchronous tick advance for RawNode."
         },
         {
-          "file": "node_test.go",
-          "symbol": "TestTickIsExplicitLogicalTime",
-          "line": 58,
-          "reason": "Test verifies state does not change without Tick, proving time advances only through explicit Tick calls."
+          "file": "raft.go",
+          "symbol": "(*raft).tickElection",
+          "line": 850,
+          "reason": "Election timeout measured purely in elapsed ticks; no timers or wall clock."
+        },
+        {
+          "file": "raft.go",
+          "symbol": "(*raft).tickHeartbeat",
+          "line": 862,
+          "reason": "Heartbeat cadence measured purely in elapsed ticks."
+        },
+        {
+          "file": "raft.go",
+          "symbol": "Config.ElectionTick",
+          "line": 128,
+          "reason": "Config documents timeouts as numbers of Node.Tick invocations."
         }
       ],
-      "boundary": "protocol_library: wall-clock scheduling outside the node is outside the boundary",
-      "gap": "None for v0.1: explicit Tick fully covers deterministic time advance.",
-      "reason": "The protocol observes time only through explicit logical ticks: Node.Tick (node.go:109-131) increments electionElapsed/heartbeatElapsed and triggers elections or heartbeats when thresholds are reached. This matches the accepted 'explicit_tick' form. No wall-clock reads occur in protocol logic (time.Now appears only in NewNode for the random seed, which is randomness, not protocol time). There is no ForceTimeout or ForceElection API, and the existing tests already drive time deterministically via Tick.",
+      "boundary": "Time is advanced explicitly by the caller; the library never reads a clock.",
+      "gap": null,
+      "reason": "The protocol is fully tick-driven: Node.Tick (node.go:463), RawNode.Tick (rawnode.go:64) and RawNode.TickQuiesced (rawnode.go:78) advance logical time; ElectionTick/HeartbeatTick are defined in tick units (raft.go:128-138) and consumed by tickElection/tickHeartbeat (raft.go:850-889). There is no wall-clock usage in the library (no time.Now/time.Timer/time.After anywhere in non-test source), and no ForceTimeout/ForceElection API exists, satisfying the explicit_tick accepted form.",
       "limitations": [
-        "No injectable clock; only the explicit_tick form applies.",
-        "The randomized election timeout still requires randomness control (separate capability) for fully deterministic elections.",
-        "Wall-clock time is used only to seed randomness in NewNode (node.go:80), which is out of scope for time control."
+        "A test harness must drive Tick at its own pace; the library provides no timer source.",
+        "The rafttest package's own harness uses real time for its network driver (rafttest/network.go), but that is outside the library's protocol time model."
       ],
-      "suggested_direction": "No change needed; continue exposing Node.Tick as the deterministic time driver.",
+      "suggested_direction": null,
       "entrypoints": [
-        "Node.Tick (node.go:110)"
+        "Node.Tick (node.go:463)",
+        "RawNode.Tick (rawnode.go:64)",
+        "RawNode.TickQuiesced (rawnode.go:78)"
       ],
       "obligations": {}
     }

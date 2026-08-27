@@ -1,4 +1,4 @@
-"""Validated data contracts shared by the controller and all Agents."""
+"""Controller 与所有 Agent 共用的强校验数据合同。"""
 
 from __future__ import annotations
 
@@ -54,29 +54,29 @@ class FailureCode(str, Enum):
     SEMANTIC_AMBIGUITY = "SEMANTIC_AMBIGUITY"
 
 
-# capability → 必须配置的确定性检查类型。Manifest 校验与 Verifier 共用
-# 这一份映射，避免两个模块分别维护后发生漂移。
+# capability → 一次完整 run 至少需要的基础检查类型。这里不再把某个目标的
+# 额外严格检查提升成所有目标的强制要求。
 CAPABILITY_CHECK_CODES: dict[str, frozenset[FailureCode]] = {
-    "message_capture": frozenset(
-        {
-            FailureCode.MESSAGE_CAPTURE_FAILED,
-            FailureCode.MESSAGE_SUPPRESSION_FAILED,
-        }
-    ),
-    "message_injection": frozenset(
-        {
-            FailureCode.MESSAGE_INJECTION_FAILED,
-            FailureCode.MESSAGE_INJECTION_RETENTION_FAILED,
-        }
-    ),
+    "message_capture": frozenset({FailureCode.MESSAGE_CAPTURE_FAILED}),
+    "message_injection": frozenset({FailureCode.MESSAGE_INJECTION_FAILED}),
     "time_control": frozenset({FailureCode.TIME_CONTROL_FAILED}),
     "randomness_control": frozenset({FailureCode.RANDOMNESS_CONTROL_FAILED}),
     "lifecycle_control": frozenset({FailureCode.LIFECYCLE_CONTROL_FAILED}),
     "observation": frozenset({FailureCode.OBSERVATION_FAILED}),
 }
 
+# 目标 evaluation 仍可配置比基础要求更严格的检查。Mini Raft 的自动发送
+# 抑制和失败投递保留就是目标专属附加检查，但不再阻止其他结构不同的目标运行。
+CAPABILITY_ALLOWED_CHECK_CODES: dict[str, frozenset[FailureCode]] = {
+    **CAPABILITY_CHECK_CODES,
+    "message_capture": CAPABILITY_CHECK_CODES["message_capture"]
+    | {FailureCode.MESSAGE_SUPPRESSION_FAILED},
+    "message_injection": CAPABILITY_CHECK_CODES["message_injection"]
+    | {FailureCode.MESSAGE_INJECTION_RETENTION_FAILED},
+}
+
 CAPABILITY_FAILURE_CODES = frozenset(
-    code for codes in CAPABILITY_CHECK_CODES.values() for code in codes
+    code for codes in CAPABILITY_ALLOWED_CHECK_CODES.values() for code in codes
 )
 
 
@@ -203,7 +203,7 @@ class ProjectManifest(StrictModel):
         if len(names) != len(set(names)):
             raise ValueError("capability check names must be unique")
         for check in self.capability_checks:
-            if check.failure_code not in CAPABILITY_CHECK_CODES[check.capability]:
+            if check.failure_code not in CAPABILITY_ALLOWED_CHECK_CODES[check.capability]:
                 raise ValueError(
                     f"{check.failure_code.value} is not valid for {check.capability}"
                 )
@@ -304,6 +304,8 @@ class CapabilityFinding(StrictModel):
     limitations: list[str] = Field(default_factory=list)
     suggested_direction: str | None = None
     entrypoints: list[str] = Field(default_factory=list)
+    # 只记录输入/输出边界或运行模型实质不同的公开路径，不展开协议内部每个分支。
+    execution_paths: list[str] = Field(default_factory=list)
     obligations: dict[str, "ObligationAssessment"] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -449,7 +451,13 @@ class InterfaceCapability(StrictModel):
     message_id_scope: Literal[
         "pending_store_instance", "test_session", "node", "global"
     ] | None = None
+    # 兼容已有实验报告；具体目标可以声明串行控制器，但 v0.1 不再要求
+    # 所有目标都采用同一种并发模型。
     controller_operations: Literal["serialized"] | None = None
+    # Agent 2 必须说明它实际覆盖了哪些 Analyzer 发现的路径，以及哪些路径
+    # 因低侵入边界而保留。二者只是审计信息，不引入逐路径工作流状态机。
+    covered_paths: list[str] = Field(default_factory=list)
+    uncovered_paths: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -473,8 +481,8 @@ class InterfaceReport(StrictModel):
 
     @model_validator(mode="after")
     def require_one_capability(self) -> "InterfaceReport":
-        # message control 的并发与 ID 范围是 v0.1 必须显式声明的语义，不能
-        # 只靠实现代码让 Reviewer 猜测。
+        # 消息 ID 范围属于基本接口语义；并发模型和错误细节可以按目标原有
+        # 结构记录在 notes 中，不再作为所有目标的统一强制字段。
         if not self.capabilities():
             raise ValueError("interface report must describe at least one capability")
         for name in ("message_capture", "message_injection"):
@@ -483,10 +491,6 @@ class InterfaceReport(StrictModel):
                 continue
             if capability.message_id_scope is None:
                 raise ValueError(f"implemented {name} must declare message_id_scope")
-            if capability.controller_operations != "serialized":
-                raise ValueError(
-                    f"implemented {name} must declare serialized controller operations"
-                )
         return self
 
     def capabilities(self) -> dict[str, InterfaceCapability]:
@@ -566,9 +570,7 @@ class ReviewReport(StrictModel):
         {
             "original_send_suppressed",
             "protocol_logic_unchanged",
-            "message_snapshot_stable",
             "exact_target_preserved",
-            "failed_injection_preserves_pending",
             "existing_tests_unchanged",
             "testing_contract_conformance",
         }
@@ -610,12 +612,10 @@ class ReviewReport(StrictModel):
         }
         capture = interface_report.message_capture
         if capture is not None and capture.implemented:
-            required.update({"original_send_suppressed", "message_snapshot_stable"})
+            required.add("original_send_suppressed")
         injection = interface_report.message_injection
         if injection is not None and injection.implemented:
-            required.update(
-                {"exact_target_preserved", "failed_injection_preserves_pending"}
-            )
+            required.add("exact_target_preserved")
         results = {check.name: check.result for check in self.checks}
         invalid = {
             name

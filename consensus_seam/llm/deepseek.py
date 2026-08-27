@@ -1,4 +1,4 @@
-"""Minimal DeepSeek Chat Completions transport with no SDK dependency."""
+"""不依赖 SDK 的最小 DeepSeek Chat Completions 传输层。"""
 
 from __future__ import annotations
 

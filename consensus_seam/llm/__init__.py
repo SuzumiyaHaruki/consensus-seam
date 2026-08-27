@@ -1,4 +1,4 @@
-"""Model-provider-neutral LLM interfaces."""
+"""与模型供应商无关的 LLM 接口。"""
 
 from .base import AgentRuntime
 from .client import FakeLLMClient, UnconfiguredLLMClient

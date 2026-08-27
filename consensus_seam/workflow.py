@@ -1,4 +1,4 @@
-"""Explicit controller state machine for analyze, patch, and full runs."""
+"""analyze、patch 与完整 run 共用的显式 Controller 状态机。"""
 
 from __future__ import annotations
 
@@ -81,6 +81,7 @@ class ConsensusWorkflow:
         analyzer, _, _ = self._agents(project)
         report = analyzer.analyze(project, invocation_id="analyzer-a1")
         artifacts.write_model("capability-report.json", report)
+        artifacts.write_usage(report)
         self._write_unresolved(artifacts, report, project)
         return WorkflowResult(
             outcome=WorkflowOutcome.ANALYZED,
@@ -158,6 +159,7 @@ class ConsensusWorkflow:
 
         report = analyzer.analyze(project, invocation_id="analyzer-a1")
         artifacts.write_model("capability-report.json", report)
+        artifacts.write_usage(report)
         # Analyzer 始终分析全部能力；实验 allowlist 只限制 Transformer。
         if not self._selected_patchable(project, report):
             self._write_unresolved(artifacts, report, project)
@@ -184,6 +186,7 @@ class ConsensusWorkflow:
                     invocation_id=f"analyzer-a{analysis_round}",
                 )
                 artifacts.write_model("capability-report.json", report)
+                artifacts.write_usage(report)
                 if not self._selected_patchable(project, report):
                     self._write_unresolved(artifacts, report, project)
                     return WorkflowResult(
@@ -215,6 +218,7 @@ class ConsensusWorkflow:
                     invocation_id=f"transformer-a{analysis_round}-p{patch_round}",
                 )
                 artifacts.write_model("interface-report.json", interface_report)
+                artifacts.write_usage(report, interface_report)
                 artifacts.write_model(
                     f"logs/interface-a{analysis_round}-p{patch_round}.json",
                     interface_report,
@@ -226,6 +230,7 @@ class ConsensusWorkflow:
                     # 合并回报告，再从 HEAD 处理剩余 PATCHABLE 能力。
                     report.apply_rediscovered(rediscovered)
                     artifacts.write_model("capability-report.json", report)
+                    artifacts.write_usage(report, interface_report)
                     artifacts.write_json(
                         f"logs/discarded-a{analysis_round}-p{patch_round}.json",
                         {

@@ -6,13 +6,14 @@ repository: ../../../mini-raft
 system_boundary:
   kind: protocol_library
   description: >
-    Analyze the Mini Raft protocol core. Real networking, durable storage, and
-    application process behavior are outside the boundary.
+    Analyze the Mini Raft protocol core and its in-process MemoryTransport test
+    path. Real networking, durable storage, and application process behavior are
+    outside the boundary.
 
 experiment:
   kind: blind_capability
   oracle_visible_to_agents: false
-  research_claim: Oracle-blind, contract-aware capability classification and low-intrusion message-control transformation
+  research_claim: Oracle-blind capability classification and low-intrusion message-control interface transformation
 
 transform_capabilities:
   - message_capture
@@ -25,19 +26,19 @@ test:
   command: go test ./...
 
 capability_checks:
-  - name: MC1 capture
+  - name: MC1 基本消息捕获
     capability: message_capture
     command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC1Capture$' -count=1
     failure_code: MESSAGE_CAPTURE_FAILED
-  - name: MC2 suppression
+  - name: MC2 捕获后停止自动发送
     capability: message_capture
     command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC2Suppression$' -count=1
     failure_code: MESSAGE_SUPPRESSION_FAILED
-  - name: MC3 exact injection
+  - name: MC3 精确消息注入
     capability: message_injection
     command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC3ExactInjection$' -count=1
     failure_code: MESSAGE_INJECTION_FAILED
-  - name: MC4 failed delivery retention
+  - name: MC4 Mini Raft 失败投递保留
     capability: message_injection
     command: go test ./_consensus_seam_hidden/acceptance -run '^TestMC4FailedDeliveryRetention$' -count=1
     failure_code: MESSAGE_INJECTION_RETENTION_FAILED

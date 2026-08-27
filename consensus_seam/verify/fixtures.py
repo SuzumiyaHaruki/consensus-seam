@@ -1,4 +1,4 @@
-"""Materialize evaluator-only verification files after Agent 3 finishes."""
+"""Agent 3 完成后再临时放置 evaluator-only 验证文件。"""
 
 from __future__ import annotations
 

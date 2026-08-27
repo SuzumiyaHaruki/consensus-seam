@@ -1,4 +1,4 @@
-"""Non-Agent deterministic verification."""
+"""不依赖 Agent 意见的确定性验证。"""
 
 from .baseline import BaselineVerifier
 from .capability import CapabilityCheck

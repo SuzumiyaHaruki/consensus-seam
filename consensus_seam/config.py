@@ -1,4 +1,4 @@
-"""Configuration loading with path and schema validation."""
+"""带路径与 Schema 校验的配置加载。"""
 
 from __future__ import annotations
 

@@ -19,10 +19,10 @@ def test_hidden_fixture_is_not_agent_visible_and_is_removed_after_use(
     assert "experiment" not in agent_view
     assert project.verification_fixtures[0].source.is_file()
     assert [check.name for check in project.manifest.capability_checks] == [
-        "MC1 capture",
-        "MC2 suppression",
-        "MC3 exact injection",
-        "MC4 failed delivery retention",
+        "MC1 基本消息捕获",
+        "MC2 捕获后停止自动发送",
+        "MC3 精确消息注入",
+        "MC4 Mini Raft 失败投递保留",
     ]
     try:
         project.verification_fixtures[0].source.relative_to(project.repository)

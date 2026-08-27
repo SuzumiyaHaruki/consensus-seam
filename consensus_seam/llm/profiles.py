@@ -1,4 +1,4 @@
-"""Resolve manifest and CLI model profiles without hard-coding Agent classes."""
+"""在不硬编码 Agent 类的情况下解析 manifest 与 CLI 模型配置。"""
 
 from __future__ import annotations
 

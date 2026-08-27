@@ -1,4 +1,4 @@
-"""Command-line entrypoint for the three v0.1 workflows."""
+"""v0.1 三种工作流的命令行入口。"""
 
 from __future__ import annotations
 
@@ -26,11 +26,11 @@ def _read_api_key_file(path: Path) -> str:
     try:
         value = path.expanduser().read_text(encoding="utf-8").strip()
     except OSError as exc:
-        raise ValueError(f"cannot read DeepSeek API key file {path}: {exc}") from exc
+        raise ValueError(f"无法读取 DeepSeek API 密钥文件 {path}：{exc}") from exc
     if not value:
-        raise ValueError(f"DeepSeek API key file is empty: {path}")
+        raise ValueError(f"DeepSeek API 密钥文件为空：{path}")
     if len(value.splitlines()) != 1:
-        raise ValueError("DeepSeek API key file must contain exactly one non-empty line")
+        raise ValueError("DeepSeek API 密钥文件必须恰好包含一行非空内容")
     return value
 
 
@@ -44,16 +44,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="consensus-seam")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command, description in (
-        ("analyze", "run the read-only Capability Analyzer"),
-        ("patch", "run Analyzer, Transformer, and independent Reviewer"),
-        ("run", "run baseline, all Agents, and deterministic verification"),
+        ("analyze", "运行只读能力分析 Agent"),
+        ("patch", "运行 Analyzer、Transformer 和独立 Reviewer"),
+        ("run", "运行 baseline、三个 Agent 和确定性验证"),
     ):
         subparser = subparsers.add_parser(command, help=description)
         subparser.add_argument("--project", required=True, type=Path)
         subparser.add_argument(
             "--responses",
             type=Path,
-            help="JSON array of deterministic raw Agent responses",
+            help="按调用顺序保存确定性 Agent 原始响应的 JSON 数组",
         )
         subparser.add_argument(
             "--runs-root",
@@ -64,12 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--model-profile",
             choices=("manifest", "mixed", "all-flash", "all-pro"),
             default="manifest",
-            help="override per-Agent models for controlled experiments",
+            help="覆盖各 Agent 模型，用于受控对比实验",
         )
         subparser.add_argument(
             "--api-key-file",
             type=Path,
-            help="UTF-8 text file containing only the DeepSeek API key",
+            help="只包含 DeepSeek API 密钥的 UTF-8 文本文件",
         )
     return parser
 
@@ -118,7 +118,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = getattr(workflow, args.command)(project)
         print(result.model_dump_json(indent=2))
         return 0 if result.outcome.value not in {"FAILED", "PARTIAL"} else 1
-    except Exception as exc:  # CLI boundary: return a concise machine-readable error.
+    except Exception as exc:  # CLI 边界只返回简短、机器可读的错误。
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}), file=sys.stderr)
         return 2
 

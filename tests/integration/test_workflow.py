@@ -329,7 +329,7 @@ def test_transform_scope_does_not_hide_unselected_patchable_findings(
     assert report["capabilities"]["randomness_control"]["status"] == "PATCHABLE"
     unresolved = json.loads((result.run_directory / "unresolved.json").read_text())
     assert unresolved["randomness_control"] == {
-        "reason": "outside this run's transform_capabilities scope",
+        "reason": "不在本次 transform_capabilities 实验范围内",
         "status": "PATCHABLE",
     }
     run_config = json.loads((result.run_directory / "run-config.json").read_text())
@@ -345,6 +345,9 @@ def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
     result = workflow.patch(load_project(manifest))
     assert result.outcome is WorkflowOutcome.PASS
     assert "injection_seam.go" in (result.run_directory / "changes.patch").read_text()
+    usage = (result.run_directory / "USAGE.md").read_text(encoding="utf-8")
+    assert "测试接口使用报告" in usage
+    assert "injectForTest" in usage
     assert not (repo / "injection_seam.go").exists()
 
 

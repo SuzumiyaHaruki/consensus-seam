@@ -1,4 +1,4 @@
-"""Agent 1: read-only capability analysis."""
+"""Agent 1：只读能力分析。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Deterministic and placeholder LLM clients for the initial framework."""
+"""初始框架使用的确定性与占位 LLM Client。"""
 
 from __future__ import annotations
 

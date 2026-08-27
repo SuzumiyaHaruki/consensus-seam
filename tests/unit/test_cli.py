@@ -14,5 +14,5 @@ def test_api_key_can_be_read_from_single_line_text_file(tmp_path: Path) -> None:
 def test_api_key_file_rejects_multiple_lines(tmp_path: Path) -> None:
     key_file = tmp_path / "deepseek-key.txt"
     key_file.write_text("first\nsecond\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="exactly one"):
+    with pytest.raises(ValueError, match="恰好包含一行"):
         _read_api_key_file(key_file)

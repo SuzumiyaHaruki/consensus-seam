@@ -1,4 +1,4 @@
-"""The deliberately small LLM boundary used by Agents."""
+"""Agent 使用的最小 LLM 边界。"""
 
 from __future__ import annotations
 

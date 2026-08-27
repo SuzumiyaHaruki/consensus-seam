@@ -1,4 +1,4 @@
-"""Agent 2: low-intrusion changes in an isolated worktree."""
+"""Agent 2：在隔离 worktree 中进行低侵入修改。"""
 
 from __future__ import annotations
 

@@ -75,7 +75,7 @@ def test_verifier_rejects_unverified_capability_claim(tmp_path: Path) -> None:
     assert report.route is FailureRoute.NEEDS_HUMAN
 
 
-def test_message_capture_requires_capture_and_suppression_checks(tmp_path: Path) -> None:
+def test_message_capture_requires_one_basic_check(tmp_path: Path) -> None:
     loaded = project(tmp_path)
     patched = tmp_path / "patched"
     patched.mkdir()
@@ -92,8 +92,8 @@ def test_message_capture_requires_capture_and_suppression_checks(tmp_path: Path)
         ],
         required_capabilities={"message_capture"},
     )
-    assert report.passed is False
-    assert "MESSAGE_SUPPRESSION_FAILED" in report.details[0]
+    assert report.passed is True
+    assert [execution.command for execution in report.capability_tests] == ["mc1"]
 
 
 def test_registered_capability_check_is_executed(tmp_path: Path) -> None:
