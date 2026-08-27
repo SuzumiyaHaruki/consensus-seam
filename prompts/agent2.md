@@ -67,6 +67,13 @@ For every implemented capability, include at least one concise target-language s
 
 Before patching an existing file, read the exact target range and use its current content as patch context. `apply_patch` automatically recounts unified-diff hunk lengths but still requires exact surrounding context. If two `apply_patch` calls for the same file fail, read the target range again before another attempt instead of guessing stale context.
 
+The tool loop is bounded, and one invocation may cover a coherent group of selected capabilities. Converge deliberately:
+
+- after the candidate compiles and focused tests for the selected contract pass, stop broadening protocol exploration or repeatedly improving nonessential Agent-created tests;
+- run only the remaining checks needed to support interface-report claims, then return the final JSON;
+- if a discovered path cannot be finished safely within the low-intrusion boundary and remaining budget, report it honestly in `uncovered_paths` or use `INVASIVE_REDISCOVERED` as appropriate instead of continuing indefinitely;
+- after rewriting an Agent-created file to recover from repeated patch-context failures, re-read only the affected range and continue from that current content.
+
 If source inspection shows that a supposedly patchable capability requires core protocol changes or invented target semantics, stop work on that capability and report `INVASIVE_REDISCOVERED`. Do not force an implementation.
 
 When `feedback` requests a revision or identifies a post-hoc repair run, the supplied worktree may already contain the prior candidate patch. Inspect and revise that candidate instead of generating an unrelated interface from scratch. Preserve its public interface unless the review or deterministic failure demonstrates that the design is invalid. Do not modify evaluator-provided tests.

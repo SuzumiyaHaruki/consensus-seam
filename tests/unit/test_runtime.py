@@ -86,6 +86,52 @@ class ScriptedChatClient:
         }
 
 
+class BudgetConvergenceClient:
+    """工具可用时持续探索，最终无工具回合才返回结构化结果。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def create_chat_completion(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        if kwargs["tools"] is not None:
+            call_id = f"call-{len(self.calls)}"
+            return {
+                "usage": {},
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "echo",
+                                        "arguments": '{"value":"more"}',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        return {
+            "usage": {},
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"answer":"converged"}',
+                    },
+                }
+            ],
+        }
+
+
 def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
     client = ScriptedChatClient()
     runtime = ToolCallingAgentRuntime(client)
@@ -128,3 +174,32 @@ def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
     assert audit[0]["output_bytes"] > 0
     assert audit[0]["success"] is True
     assert "result" not in audit[0]
+
+
+def test_runtime_forces_final_json_before_tool_step_limit() -> None:
+    client = BudgetConvergenceClient()
+    runtime = ToolCallingAgentRuntime(client, max_steps=3)
+
+    result = runtime.run(
+        "Return JSON.",
+        "Inspect and edit the repository.",
+        {"type": "object"},
+        agent="transformer",
+        model=AgentModelConfig(model="deepseek-v4-flash"),
+        tools=EchoTools(),
+        invocation_id="transformer-message-control-attempt1",
+    )
+
+    assert json.loads(result) == {"answer": "converged"}
+    assert len(client.calls) == 3
+    assert client.calls[-1]["tools"] is None
+    final_messages = client.calls[-1]["messages"]
+    assert any(
+        message.get("role") == "user"
+        and "Tool use is now closed" in message.get("content", "")
+        for message in final_messages
+    )
+    stats = runtime.stats_snapshot()
+    assert stats[0]["status"] == "COMPLETED"
+    assert stats[0]["api_calls"] == 3
+    assert stats[0]["tool_calls"] == 2

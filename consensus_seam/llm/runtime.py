@@ -108,12 +108,42 @@ class ToolCallingAgentRuntime:
         definitions = None if tools is None else tools.definitions
 
         try:
-            for _ in range(self.max_steps):
+            reminder_step = self.max_steps - 8 if self.max_steps > 8 else None
+            for step in range(self.max_steps):
+                finalization_step = tools is not None and step == self.max_steps - 1
+                if reminder_step is not None and step == reminder_step:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The bounded tool budget is nearly exhausted. Stop "
+                                "expanding scope. Finish only essential validation, "
+                                "then return the required final JSON from the evidence "
+                                "and worktree state already available."
+                            ),
+                        }
+                    )
+                if finalization_step:
+                    # 最后一次模型调用不再暴露工具，要求它根据已经完成的
+                    # worktree 和工具结果形成结构化结论。旧行为允许最后一次
+                    # 继续调用工具，随后立即抛出上限异常，导致可用候选和已
+                    # 通过的测试一起丢失。
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Tool use is now closed. Do not request another tool. "
+                                "Return the required final JSON now. Describe unfinished "
+                                "low-intrusion paths as uncovered or rediscovered rather "
+                                "than continuing source exploration."
+                            ),
+                        }
+                    )
                 api_started = time.monotonic()
                 response = self.client.create_chat_completion(
                     model=model,
                     messages=messages,
-                    tools=definitions,
+                    tools=None if finalization_step else definitions,
                     response_format={"type": "json_object"} if response_schema else None,
                 )
                 api_wall_clock += time.monotonic() - api_started
@@ -139,6 +169,10 @@ class ToolCallingAgentRuntime:
                 tool_calls = message.get("tool_calls") or []
                 tool_call_count += len(tool_calls)
                 if tool_calls:
+                    if finalization_step:
+                        raise AgentRuntimeError(
+                            "model requested a tool during the forced finalization step"
+                        )
                     if tools is None:
                         raise AgentRuntimeError(
                             "model requested tools but this Agent has none"
