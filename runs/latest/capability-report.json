@@ -8,138 +8,226 @@
           "file": "node.go",
           "symbol": "Node.Propose",
           "line": 148,
-          "reason": "Proposal workload entrypoint: appends Entry{Index,Term,Data} to node.log and emits AppendEntries via appendMessagesLocked; returns ErrNotLeader when not leader."
+          "reason": "Appends Entry{Index,Term,Data} to node.log, sets node.commit, then emits append-entries to all peers; this is the external application workload entrypoint."
         },
         {
           "file": "node.go",
           "symbol": "Node.Step",
           "line": 134,
-          "reason": "Normal protocol input boundary for request_vote/append_entries messages; validates To, clones, processes under mutex."
+          "reason": "Peer-to-peer protocol input boundary (message ingress); excluded from external input by the obligation protocol_ingress_excluded."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Tick",
+          "line": 110,
+          "reason": "Logical-time event advancing election/heartbeat elapsed counters; excluded from external input by the obligation timer_and_internal_events_excluded."
         },
         {
           "file": "doc.go",
-          "symbol": null,
-          "line": 5,
-          "reason": "Membership changes are explicitly omitted, so no membership_change entrypoint exists to discover."
+          "symbol": "package miniraft",
+          "line": 3,
+          "reason": "Explicitly omits membership changes and snapshots, so Propose is the sole external workload entrypoint; no other business-input API exists."
         }
       ],
-      "boundary": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.",
+      "boundary": "protocol_library: real networking, durable storage, and application process behavior are outside the boundary",
       "gap": null,
-      "reason": "The protocol core exposes a synchronous proposal entrypoint Node.Propose (leader-gated) and a message input boundary Node.Step. No new business-input API is needed; discovery alone satisfies v0.1.",
+      "reason": "Node.Propose(data []byte) is the only workload entrypoint originating outside the protocol: it appends an application entry to the log, advances commit, and emits append-entries to peers. Node.Step is the peer-to-peer protocol ingress and Node.Tick is the logical timer, so both are excluded as required.",
       "limitations": [
-        "membership_change external input is absent by design (doc.go:5).",
-        "Propose commits the entry immediately in the leader (node.go:164) — simplified commit semantics with no separate apply stage."
+        "membership_change listed in the protocol brief is not implemented (doc.go: omits membership changes); only Propose is available as external workload input."
       ],
       "suggested_direction": null,
       "entrypoints": [
-        "Node.Propose",
-        "Node.Step"
-      ]
+        "Node.Propose"
+      ],
+      "obligations": {
+        "protocol_ingress_excluded": {
+          "status": "SATISFIED",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "Node.Step",
+              "line": 134,
+              "reason": "Step is the normal protocol input boundary and is distinct from Propose; it is not treated as external input."
+            }
+          ],
+          "reason": "Node.Step (node.go:134) is documented and used as the protocol input boundary; the external workload path Node.Propose is a separate method that never routes through Step."
+        },
+        "timer_and_internal_events_excluded": {
+          "status": "SATISFIED",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "Node.Tick",
+              "line": 110,
+              "reason": "Tick advances one unit of logical protocol time; it is an internal timer event, not external input."
+            }
+          ],
+          "reason": "Node.Tick (node.go:110) is an explicit logical-time event and node.go:80 wall-clock use only seeds the RNG; neither is treated as an external workload entrypoint."
+        },
+        "workload_entrypoint": {
+          "status": "SATISFIED",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "Node.Propose",
+              "line": 148,
+              "reason": "Public method accepting application payload; appends to log and triggers replication, i.e. the workload entrypoint."
+            }
+          ],
+          "reason": "Node.Propose (node.go:148-168) accepts application bytes and writes them into the replicated log, satisfying the requirement to identify input originating outside the protocol as application work."
+        }
+      }
     },
     "lifecycle_control": {
-      "status": "SUPPORTED",
+      "status": "INVASIVE",
       "evidence": [
-        {
-          "file": "node.go",
-          "symbol": "NewNode",
-          "line": 72,
-          "reason": "Node creation entrypoint with config validation; sets running=true, role=follower, random seed."
-        },
         {
           "file": "node.go",
           "symbol": "Node.Pause",
           "line": 171,
-          "reason": "Sets running=false; Tick/Step/Propose return ErrPaused while paused (see node_test.go TestPauseIsNotCrashRecovery)."
+          "reason": "Sets running=false; Tick and Step return ErrPaused. Comment at line 170: 'Pause and Resume model a scheduler pause, not process crash/restart.'"
         },
         {
           "file": "node.go",
           "symbol": "Node.Resume",
           "line": 177,
-          "reason": "Sets running=true; all state retained, no crash/restart semantics."
+          "reason": "Clears running=false; resumes execution without restoring any state, so it is not a recovery boundary."
         },
         {
           "file": "node.go",
-          "symbol": "Node",
+          "symbol": "Node struct",
           "line": 46,
-          "reason": "Comment: Node owns both persistent-looking and volatile-looking state in one object; Pause/Resume do not define crash recovery — no invented state split needed."
+          "reason": "Comment: 'Node owns both persistent-looking and volatile-looking state in one object. Pause and Resume only control execution; they do not define crash recovery.'"
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node struct",
+          "line": 48,
+          "reason": "term, vote, log, commit, role, leader, votes all live in one in-memory struct with no durable storage or persistent/volatile split."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.NewNode",
+          "line": 72,
+          "reason": "Construction always starts from zero state; no load/recover path exists."
         }
       ],
-      "boundary": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.",
-      "gap": null,
-      "reason": "Creation (NewNode), stop/start (Pause/Resume) and state ownership are already exposed and testable; the code explicitly documents that Pause/Resume are scheduler pause, not crash recovery, and that all state lives in one object — so no persistent/volatile split decision is required.",
+      "boundary": "protocol_library: durable storage and process crash/restart behavior are outside the boundary; the target itself defines no persistence",
+      "gap": "No restart/recovery boundary exists (Pause/Resume are explicitly not crash recovery), and persistent vs volatile state is not defined or separated.",
+      "reason": "Pause/Resume exist but are explicitly documented as a scheduler pause, not crash recovery (node.go:170), and the Node struct owns all persistent-looking and volatile-looking state in one in-memory object (node.go:46-47) with no recoverable/volatile separation. There is no restart or recovery path and no persistent/volatile semantics. Missing recovery plus missing state-ownership/persistent semantics requires INVASIVE.",
       "limitations": [
-        "No crash recovery API exists; durable storage is outside the system boundary (doc.go:5).",
-        "Persistent/volatile state split is intentionally not modeled (node.go:46-47); tests must not assume one."
+        "Durable storage is outside the system boundary, but the target provides no persistence hook, so crash-surviving state (term, voted_for, log, snapshot per protocol brief) is never materialized."
       ],
-      "suggested_direction": null,
+      "suggested_direction": "Cannot be exposed as recovery without inventing the persistent/volatile split; an Agent would have to decide which state survives a crash, so exposing lifecycle to tests requires invasive changes to state ownership or must be left out of v0.1.",
       "entrypoints": [
-        "NewNode",
         "Node.Pause",
-        "Node.Resume"
-      ]
+        "Node.Resume",
+        "Node.NewNode"
+      ],
+      "obligations": {
+        "persistent_volatile_semantics_defined": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "Node struct",
+              "line": 47,
+              "reason": "Documentation states crash recovery is not defined; all state is in-memory only."
+            }
+          ],
+          "reason": "The code explicitly states the opposite: 'Pause and Resume only control execution; they do not define crash recovery' (node.go:47) and no persistent/volatile split exists."
+        },
+        "restart_or_recovery_boundary": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "Node.Pause",
+              "line": 170,
+              "reason": "Comment: 'Pause and Resume model a scheduler pause, not process crash/restart.'"
+            }
+          ],
+          "reason": "No restart or recovery API exists. Pause/Resume (node.go:171-181) are a scheduler pause explicitly not equivalent to crash/restart, and NewNode always starts from empty state."
+        },
+        "state_ownership_defined": {
+          "status": "MISSING",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "Node struct",
+              "line": 48,
+              "reason": "Single struct mixes persistent-looking (term, vote, log, commit) and volatile (role, leader, votes, elapsed) fields."
+            }
+          ],
+          "reason": "The Node struct (node.go:48-70) owns all state in one object; recoverable state (term, vote, log) is not separated from volatile state (role, leader, votes, elapsed counters), and no ownership model for recoverable state is defined."
+        },
+        "stop_boundary": {
+          "status": "SATISFIED",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "Node.Pause",
+              "line": 171,
+              "reason": "running=false gates both Tick (ErrPaused at node.go:114) and Step (ErrPaused at node.go:141)."
+            }
+          ],
+          "reason": "Pause()/Resume() (node.go:171-181) define an exact stop/pause boundary: running=false makes Tick and Step return ErrPaused (node.go:113, 140), and Resume restores execution. Its meaning is documented as a scheduler pause."
+        }
+      }
     },
     "message_capture": {
       "status": "PATCHABLE",
       "evidence": [
         {
-          "file": "transport.go",
-          "symbol": "MemoryTransport",
-          "line": 16,
-          "reason": "Documented: Send immediately calls the target node's Step method, so delivery is synchronous and uncontrollable — capture/suppression must be inserted before it."
-        },
-        {
           "file": "node.go",
           "symbol": "Node.emit",
           "line": 332,
-          "reason": "Single outbound choke point: iterates all produced messages and calls transport.Send; all campaign/append/response paths return []Message into emit."
+          "reason": "Single outbound funnel: iterates messages and calls node.transport.Send(message); the only call site of Transport.Send in the package, so it is the point where the original send path can be intercepted and suppressed."
         },
         {
           "file": "node.go",
-          "symbol": "Node.emit",
-          "line": 335,
-          "reason": "transport.Send(message) is the last controllable point before the environment-owned send path."
+          "symbol": "Node.Tick",
+          "line": 130,
+          "reason": "Leader heartbeats and campaign vote requests both reach emit via appendMessagesLocked/campaignLocked; no outbound message bypasses emit."
         },
         {
-          "file": "transport.go",
-          "symbol": "Transport",
-          "line": 11,
-          "reason": "Transport is an injected interface (Config.Transport, node.go:31/79), so a wrapper can intercept Send without touching protocol logic."
+          "file": "node.go",
+          "symbol": "Node.Step",
+          "line": 145,
+          "reason": "Inbound processing returns outbound messages that also flow through node.emit, so responses are captured by the same funnel."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Propose",
+          "line": 167,
+          "reason": "Proposal-triggered append entries also flow through emit."
         },
         {
           "file": "message.go",
           "symbol": "Message.Clone",
           "line": 39,
-          "reason": "Deep-copies entries/payloads; a captured message can be retained as a stable snapshot after Send returns."
+          "reason": "Deep-clones entries so a captured message can be retained in a stable snapshot after Send returns."
         },
         {
-          "file": "node.go",
-          "symbol": "Node.Tick",
-          "line": 121,
-          "reason": "Heartbeats are appendMessagesLocked(nil) on the same emit path — no separate bypass channel."
-        },
-        {
-          "file": "acceptance/message_control_test.go",
-          "symbol": "ControlledTransport",
-          "line": 20,
-          "reason": "Acceptance tests reference raft.NewControlledTransport/MessageMeta/ListPending/Inject, which do not exist in the source (find_symbol returns no declaration) — the missing additive seam."
+          "file": "transport.go",
+          "symbol": "MemoryTransport.Send",
+          "line": 33,
+          "reason": "The original uncontrollable send path: it synchronously calls target.Step, so a captured message must not continue along this path automatically."
         }
       ],
-      "boundary": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.",
-      "gap": "No ControlledTransport, MessageMeta, pending store, or capture/suppress logic exists; MC1/MC2 acceptance tests cannot compile or pass under the consensusseam tag.",
-      "reason": "No capture seam exists today: MemoryTransport.Send synchronously calls target.Step, so outbound messages always enter the uncontrollable send path. However, every outbound message (vote requests, vote responses, append entries, append responses, heartbeats-as-empty-append) funnels through the single choke point Node.emit -> Transport.Send, and Transport is injected via Config — a clean additive wrapper (ControlledTransport + MessageMeta + ListPending) can capture and suppress before the wrapped transport, with no Node changes. Message.Clone already provides stable snapshots.",
+      "boundary": "protocol_library: capture applies at the protocol's outbound funnel before the environment-owned Transport.Send path",
+      "gap": "No capture controller exists: NewMessageController(Transport), ListPending() (with ID, From, To, Type, CaptureSequence), and ClearPending() from the testing contract are all absent, and emit currently always forwards to transport.Send without any capture/suppress mode.",
+      "reason": "Every outbound protocol message is created inside stepLocked/campaignLocked/appendMessagesLocked and exits exclusively through Node.emit (node.go:332-340), the single funnel that calls transport.Send. This funnel is a complete suppression point: heartbeats (appendMessagesLocked(nil) from Tick), vote requests, and append entries all pass through it; there are no retries, snapshots, or forwarded requests. Message.Clone (message.go:39) provides stable deep copies. What is missing is purely additive: a NewMessageController(Transport) with ListPending()/ClearPending() and capture-and-suppress semantics in emit, so the change is PATCHABLE, not invasive.",
       "limitations": [
-        "MemoryTransport.Delivered() records post-delivery copies only (transport.go:38), not pre-send capture.",
-        "No retries, snapshots, or forwarded requests exist, so there are no capture bypasses beyond the single Send path.",
-        "Real networking and durable storage are outside the boundary; capture applies only to the in-process Transport seam."
+        "MemoryTransport.Send delivers synchronously to target.Step; in test mode that delivery must be suppressed at emit. Message identity (ID/CaptureSequence) does not exist yet and must be introduced. Real network send is outside the boundary."
       ],
-      "suggested_direction": "Add package-level ControlledTransport wrapping Transport: Send() stores message.Clone() with a stable ID and monotonic CaptureSequence and does not forward; expose ListPending() []MessageMeta. No changes to Node or emit required.",
+      "suggested_direction": "Add a controller seam at Node.emit: when capture mode is enabled, clone the message, assign a CaptureSequence, store it in the pending store, and skip transport.Send. Add NewMessageController(Transport)/ListPending()/ClearPending() as pure additions.",
       "entrypoints": [
         "Node.emit",
-        "Node.Tick",
-        "Node.Step",
-        "Node.Propose",
-        "Transport.Send"
-      ]
+        "Transport.Send",
+        "MemoryTransport.Send"
+      ],
+      "obligations": {}
     },
     "message_injection": {
       "status": "PATCHABLE",
@@ -148,41 +236,38 @@
           "file": "node.go",
           "symbol": "Node.Step",
           "line": 134,
-          "reason": "Normal protocol input boundary: rejects wrong target (ErrWrongTarget), clones message, processes synchronously, returns errors such as ErrPaused."
-        },
-        {
-          "file": "transport.go",
-          "symbol": "MemoryTransport.Send",
-          "line": 36,
-          "reason": "Target selection by nodes[stable.To] and ErrUnknownNode on missing target — the delivery mechanism an Inject can reuse."
+          "reason": "Normal protocol input boundary; verifies To == node.id and processes the message synchronously under the mutex."
         },
         {
           "file": "node.go",
           "symbol": "Node.Step",
           "line": 143,
-          "reason": "stepLocked(message.Clone()) — injected messages are processed through the identical path as normal deliveries."
+          "reason": "message.Clone() ensures the injected message content is processed unchanged and the caller's copy is never mutated."
         },
         {
-          "file": "acceptance/message_control_test.go",
-          "symbol": "ControlledTransport.Inject",
-          "line": 93,
-          "reason": "MC3 requires Inject(id) to consume exactly one pending message, deliver to its recorded target, and keep it pending on failure (lines 116-134) — API does not exist yet."
+          "file": "node.go",
+          "symbol": "Node.Step",
+          "line": 139,
+          "reason": "Returns ErrPaused when the target is paused; a failed injection (e.g. paused target) can leave the pending message unconsumed."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.stepLocked",
+          "line": 199,
+          "reason": "Message type dispatch handles request_vote, request_vote_response, append_entries, append_entries_response; all legal captured messages are accepted."
         }
       ],
-      "boundary": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.",
-      "gap": "No pending store or Inject(id) exists; consume-on-success / keep-on-failure semantics must be added at the transport layer.",
-      "reason": "Node.Step is a clean synchronous normal input boundary (validates message.To == node.id, clones, processes under mutex) and MemoryTransport already selects targets by message.To from its node registry. The missing piece is additive transport-layer logic: Inject(id) removes the selected pending message only after successful delivery through the wrapped transport (target.Step), leaving it pending on error — exactly matching MC3.",
+      "boundary": "protocol_library: injection re-enters the target through the normal protocol input boundary Node.Step",
+      "gap": "Inject(messageID) with consume-on-success / keep-on-failure semantics does not exist, and the required message_id_scope declaration (pending_store_instance or test_session) is not made. Message identity is not yet assigned.",
+      "reason": "The normal protocol input boundary is Node.Step (node.go:134), which selects the target via message.To == node.id (ErrWrongTarget otherwise, node.go:136), processes synchronously under node.mu, and operates on message.Clone() so sender, receiver, and content remain unchanged. An Inject(messageID) operation is a pure addition: look up a pending captured message by ID, call target.Step, and consume it only on success (leave pending on failure, e.g. ErrPaused). Processing is synchronous, so deterministic delivery is achievable. No semantic change to the protocol core is required, hence PATCHABLE.",
       "limitations": [
-        "Injection failure modes (ErrUnknownNode, ErrPaused, wrapped transport errors) must leave the pending message untouched.",
-        "No deduplication or replay protection exists beyond per-pending-ID consumption; re-capture of equivalent messages is possible.",
-        "Injection is only meaningful for in-process nodes registered with the underlying MemoryTransport; real networking is outside the boundary."
+        "Injection is synchronous within Step; outbound messages produced during injection re-enter the capture funnel (outbound capture may occur concurrently per the contract). Real network transport is outside the boundary."
       ],
-      "suggested_direction": "Implement ControlledTransport.Inject(id): look up the pending MessageMeta, deliver the stored message via the wrapped transport's Send (which reaches the target's Step), and remove from pending only on nil error; return the transport error otherwise. Additive, no Node changes.",
+      "suggested_direction": "Add a controller method Inject(messageID) that resolves the pending store instance/test session, delivers the recorded message via target.Step, and removes it from the pending set only on nil error.",
       "entrypoints": [
-        "Node.Step",
-        "MemoryTransport.Send",
-        "ControlledTransport.Inject"
-      ]
+        "Node.Step"
+      ],
+      "obligations": {}
     },
     "observation": {
       "status": "SUPPORTED",
@@ -191,63 +276,69 @@
           "file": "node.go",
           "symbol": "Node.Status",
           "line": 183,
-          "reason": "Exposes ID, Running, Role, Term, Vote, Leader, CommitIndex, LastIndex, RandomizedElectionTimeout under lock."
+          "reason": "Returns role, term, vote, leader, commit index, last log index, and randomized election timeout under node.mu."
         },
         {
           "file": "node.go",
           "symbol": "Node.Status",
           "line": 194,
-          "reason": "LastIndex = len(node.log) provides log-range observation."
+          "reason": "LastIndex: uint64(len(node.log)) provides the log range upper bound."
         },
         {
           "file": "transport.go",
           "symbol": "MemoryTransport.Delivered",
           "line": 47,
-          "reason": "Returns deep copies of all delivered messages — the only global observation channel."
+          "reason": "Returns deep-cloned delivered messages, enabling observation of the global message flow."
+        },
+        {
+          "file": "transport.go",
+          "symbol": "MemoryTransport.ClearDelivered",
+          "line": 57,
+          "reason": "Resets the delivered log for observation."
         }
       ],
-      "boundary": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.",
+      "boundary": "protocol_library: observation covers in-memory node state and transport-recorded messages",
       "gap": null,
-      "reason": "Node.Status exposes role, term, vote, leader, commit index, last index, randomized election timeout, and running; MemoryTransport.Delivered exposes delivered-message history. This is the minimum per-node/global state needed by the MC capability checks (they verify Status().Term and Status().LastIndex).",
+      "reason": "Node.Status (node.go:183-197) exposes ID, Running, Role, Term, Vote, Leader, CommitIndex, LastIndex, and RandomizedElectionTimeout under the mutex — covering the protocol-specific minimum (role, term, commit_index, log range via LastIndex). MemoryTransport.Delivered (transport.go:47) exposes stable clones of delivered messages and is already exercised by the tests. No new API is required for v0.1 verification.",
       "limitations": [
-        "No applied_index: the core has no apply loop (leader sets commit directly at proposal), so no applied index exists to expose.",
-        "No log-content accessor: Status exposes LastIndex but not entries.",
-        "No global multi-node aggregate; tests must assemble per-node Status and Delivered()."
+        "No applied_index exists in this implementation (no apply path), so it is not observable. Full log entry contents are not exposed (only LastIndex); cluster-level state is limited to MemoryTransport.Delivered. Peers are not exposed."
       ],
       "suggested_direction": null,
       "entrypoints": [
         "Node.Status",
-        "MemoryTransport.Delivered"
-      ]
+        "MemoryTransport.Delivered",
+        "MemoryTransport.ClearDelivered"
+      ],
+      "obligations": {}
     },
     "randomness_control": {
       "status": "PATCHABLE",
       "evidence": [
         {
           "file": "node.go",
-          "symbol": "NewNode",
+          "symbol": "Node.NewNode",
           "line": 80,
-          "reason": "node.random = rand.New(rand.NewSource(time.Now().UnixNano() + int64(config.ID))) — wall-clock seed, no injection seam."
+          "reason": "random is seeded from time.Now().UnixNano() + config.ID with no injection seam; same initial state cannot be reproduced."
         },
         {
           "file": "node.go",
           "symbol": "Node.resetElectionTimeoutLocked",
           "line": 325,
-          "reason": "randomizedElectionTimeout = electionTick + node.random.Intn(electionTick) — the single protocol-randomness consumer."
+          "reason": "Sole consumption of the RNG: randomizedElectionTimeout = electionTick + random.Intn(electionTick); one call site makes a seed/rand injection trivial."
         }
       ],
-      "boundary": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.",
-      "gap": "No seed/rand-source injection point exists; identical initial state does not currently produce repeatable election timeouts.",
-      "reason": "Protocol randomness (randomized election timeout) is used at exactly one call site, but the rand source is constructed internally from time.Now().UnixNano()+ID with no injection point, so runs are not repeatable. A localized additive patch (optional seed or rand source in Config) makes it deterministic without restructuring.",
+      "boundary": "protocol_library: randomness control targets the RNG used inside the protocol core",
+      "gap": "No way to fix or inject the random source; a Config.RandomSource/Seed field or equivalent setter is required to make initial state + seed produce repeatable choices.",
+      "reason": "The only protocol-relevant randomness is the randomized election timeout: NewNode seeds rand.New(rand.NewSource(time.Now().UnixNano()+int64(config.ID))) (node.go:80) and resetElectionTimeoutLocked draws randomizedElectionTimeout = electionTick + random.Intn(electionTick) (node.go:325). The seed is derived from the wall clock and there is no Config field or setter to inject a seed or rand.Source, so choices are not repeatable today. Adding an injectable seed/rand.Source to Config is a contained, single-call-site change: PATCHABLE.",
       "limitations": [
-        "Randomness is used only for election timeout randomization; no other random choices exist in the core.",
-        "README (lines 48-49) notes the transform pipeline does not yet patch randomness, so determinism requires the future patch."
+        "Wall-clock seeding only affects election-timeout randomness, not protocol time itself."
       ],
-      "suggested_direction": "Add optional RandomSeed int64 or RandomSource *rand.Rand to Config; default to the current time-based behavior when unset, and use it in NewNode.",
+      "suggested_direction": "Add an optional seed or rand.Source to Config (e.g. Config.RandomSource), used by NewNode when provided, falling back to the current wall-clock default.",
       "entrypoints": [
-        "Node.resetElectionTimeoutLocked",
-        "NewNode"
-      ]
+        "Node.NewNode",
+        "Node.resetElectionTimeoutLocked"
+      ],
+      "obligations": {}
     },
     "time_control": {
       "status": "SUPPORTED",
@@ -256,39 +347,32 @@
           "file": "node.go",
           "symbol": "Node.Tick",
           "line": 110,
-          "reason": "Advances exactly one unit of protocol logical time; increments heartbeat/election elapsed counters and emits messages."
+          "reason": "Advances exactly one unit of logical time; increments heartbeatElapsed or electionElapsed and emits heartbeats/campaigns at thresholds."
         },
         {
           "file": "node.go",
-          "symbol": "Node.Tick",
-          "line": 124,
-          "reason": "Election triggers only when electionElapsed >= randomizedElectionTimeout — no direct timeout-forcing operation."
-        },
-        {
-          "file": "node.go",
-          "symbol": "Node.Tick",
-          "line": 119,
-          "reason": "Heartbeats fire when heartbeatElapsed >= heartbeatTick, purely tick-driven."
-        },
-        {
-          "file": "node.go",
-          "symbol": "NewNode",
+          "symbol": "Node.NewNode",
           "line": 80,
-          "reason": "time.Now() is used only to seed randomness; it never advances protocol-observed time."
+          "reason": "Only wall-clock use (RNG seed); it does not advance protocol time, so time remains fully tick-driven."
+        },
+        {
+          "file": "node_test.go",
+          "symbol": "TestTickIsExplicitLogicalTime",
+          "line": 58,
+          "reason": "Existing test confirms no state changes without Tick, i.e. time only advances via explicit ticks."
         }
       ],
-      "boundary": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.",
+      "boundary": "protocol_library: time is logical and fully driven by the explicit Tick API",
       "gap": null,
-      "reason": "Protocol time is advanced exclusively by the explicit Node.Tick logical-time API; there are no wall-clock timers, goroutines, or sleeps in the core, and no ForceTimeout/ForceElection operation exists (campaigning occurs only when electionElapsed reaches the randomized timeout). time.Now() appears only as a randomness seed, not as protocol-observed time.",
+      "reason": "The accepted v0.1 form 'explicit_tick' is met: Node.Tick (node.go:110) advances exactly one unit of logical protocol time, incrementing heartbeatElapsed (leader) or electionElapsed (follower/candidate) and firing heartbeats or campaigns when thresholds are reached. No protocol timing uses wall clock: the only time.Now() use (node.go:80) seeds the RNG, which belongs to randomness_control. There is no ForceTimeout or ForceElection API. Deterministic advancement of protocol-observed time is therefore supported.",
       "limitations": [
-        "Tick is per-node; a multi-node test must call Tick on each node to advance the whole cluster.",
-        "Wall clock is used indirectly for the randomness seed (node.go:80) — affects election-timeout values, not the tick timeline.",
-        "No injectable Clock variant exists, but explicit_tick alone satisfies the accepted v0.1 forms."
+        "The exact tick at which an election fires depends on randomizedElectionTimeout, which is drawn from the RNG; repeatable tick counts therefore also require randomness_control (currently PATCHABLE)."
       ],
       "suggested_direction": null,
       "entrypoints": [
         "Node.Tick"
-      ]
+      ],
+      "obligations": {}
     }
   }
 }

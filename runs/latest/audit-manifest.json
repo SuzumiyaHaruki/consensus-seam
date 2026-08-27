@@ -3,15 +3,11 @@
     "patched-worktree*"
   ],
   "experiment": {
-    "kind": "engineering_smoke",
-    "oracle_visible_to_agents": true,
-    "research_claim": "First end-to-end successful execution only"
+    "kind": "blind_capability",
+    "oracle_visible_to_agents": false,
+    "research_claim": "Blind capability classification and low-intrusion message-control transformation"
   },
   "included": "reports, patch, statistics, and logs",
-  "historical_limitations": [
-    "This engineering-smoke run predates structured Reviewer checks.",
-    "This engineering-smoke run predates tool-call audit capture."
-  ],
-  "published_at": "2026-08-27T03:46:08.599793+00:00",
-  "source_run": "20260827T033048.636031Z"
+  "published_at": "2026-08-27T05:19:57.823796+00:00",
+  "source_run": "20260827T045803.196668Z"
 }

@@ -1,0 +1,1512 @@
+[
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": ".",
+      "scope": "source"
+    },
+    "duration_ms": 5.483761000505183,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 159,
+    "returned_lines": 8,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "..",
+      "scope": "source"
+    },
+    "duration_ms": 1.3516079998225905,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 79,
+    "returned_lines": null,
+    "success": false,
+    "tool": "list_files"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "message.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.6846189992065774,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1574,
+    "returned_lines": 46,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "node.go",
+      "scope": "source"
+    },
+    "duration_ms": 2.07116700039478,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 11627,
+    "returned_lines": 340,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "transport.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.7004330000199843,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2058,
+    "returned_lines": 61,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "node_test.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.937209000767325,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "doc.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.4437669997278135,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 460,
+    "returned_lines": 6,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "README.md",
+      "scope": "source"
+    },
+    "duration_ms": 0.9816019992285874,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 896,
+    "returned_lines": 21,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "go.mod",
+      "scope": "source"
+    },
+    "duration_ms": 0.6689849997201236,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 167,
+    "returned_lines": 3,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": ".",
+      "query": "Send(",
+      "scope": "source"
+    },
+    "duration_ms": 5.347500000425498,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": ".",
+      "query": "time.",
+      "scope": "source"
+    },
+    "duration_ms": 7.081436000589747,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": ".",
+      "query": "go func",
+      "scope": "source"
+    },
+    "duration_ms": 2.715374001127202,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": ".",
+      "query": "rand",
+      "scope": "source"
+    },
+    "duration_ms": 2.59989799997129,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "check": "go_test",
+      "package": "./...",
+      "scope": "source"
+    },
+    "duration_ms": 0.9033170008478919,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 109,
+    "returned_lines": null,
+    "success": false,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "check": "go_doc",
+      "package": "./...",
+      "scope": "source",
+      "symbol": "Node.Tick"
+    },
+    "duration_ms": 100.21544899973378,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 240,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 50,
+      "path": "node.go",
+      "scope": "source",
+      "start": 46
+    },
+    "duration_ms": 1.8164829998568166,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 327,
+    "returned_lines": 5,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": ".",
+      "scope": "worktree"
+    },
+    "duration_ms": 5.648472999382648,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 167,
+    "returned_lines": 9,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "node.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 2.5411099995835684,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 11627,
+    "returned_lines": 340,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "message.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 1.9457050002529286,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1574,
+    "returned_lines": 46,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "transport.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 2.3404539988405304,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2058,
+    "returned_lines": 61,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "doc.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 2.051196999673266,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 460,
+    "returned_lines": 6,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "go.mod",
+      "scope": "worktree"
+    },
+    "duration_ms": 1.2541639989649411,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 167,
+    "returned_lines": 3,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "node_test.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 2.4140719997376436,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "content_bytes": 8072,
+      "path": "controller.go"
+    },
+    "duration_ms": 2.6713629995356314,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 64,
+    "returned_lines": null,
+    "success": true,
+    "tool": "write_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 325
+    },
+    "duration_ms": 23.327290000452194,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 656
+    },
+    "duration_ms": 11.287633999017999,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 800
+    },
+    "duration_ms": 20.178425998892635,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 221
+    },
+    "duration_ms": 17.000062000079197,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 105,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 280
+    },
+    "duration_ms": 20.569305999742937,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 280
+    },
+    "duration_ms": 34.63590299907082,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 41,
+    "returned_lines": null,
+    "success": true,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 592
+    },
+    "duration_ms": 19.363187000635662,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 592
+    },
+    "duration_ms": 19.006906000868184,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "end": 62,
+      "path": "transport.go",
+      "scope": "worktree",
+      "start": 40
+    },
+    "duration_ms": 2.1419140011857962,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 774,
+    "returned_lines": 22,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 540
+    },
+    "duration_ms": 19.201867000447237,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "end": 95,
+      "path": "node.go",
+      "scope": "worktree",
+      "start": 80
+    },
+    "duration_ms": 2.0688560016424162,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 837,
+    "returned_lines": 16,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 390
+    },
+    "duration_ms": 14.679175001219846,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 592
+    },
+    "duration_ms": 37.689595999836456,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 41,
+    "returned_lines": null,
+    "success": true,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "end": 75,
+      "path": "transport.go",
+      "scope": "worktree",
+      "start": 40
+    },
+    "duration_ms": 2.0419130014488474,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1187,
+    "returned_lines": 32,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "content_bytes": 7460,
+      "path": "controller_test.go"
+    },
+    "duration_ms": 2.5822609986789757,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 69,
+    "returned_lines": null,
+    "success": true,
+    "tool": "write_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_test",
+      "package": "./...",
+      "scope": "worktree"
+    },
+    "duration_ms": 562.3844330002612,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 156,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_doc",
+      "package": "./...",
+      "scope": "worktree",
+      "symbol": "MessageController"
+    },
+    "duration_ms": 122.59705700125778,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1656,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "scope": "original"
+    },
+    "duration_ms": 4.195646000880515,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 159,
+    "returned_lines": 8,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "scope": "patched"
+    },
+    "duration_ms": 11.717731998942327,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 206,
+    "returned_lines": 11,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "node.go",
+      "scope": "original"
+    },
+    "duration_ms": 4.08787400010624,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 11627,
+    "returned_lines": 340,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "node.go",
+      "scope": "patched"
+    },
+    "duration_ms": 3.1762140006321715,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 11752,
+    "returned_lines": 343,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "message.go",
+      "scope": "original"
+    },
+    "duration_ms": 1.8661430003703572,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 1574,
+    "returned_lines": 46,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "message.go",
+      "scope": "patched"
+    },
+    "duration_ms": 1.7171069994219579,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 1574,
+    "returned_lines": 46,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "transport.go",
+      "scope": "original"
+    },
+    "duration_ms": 1.263889000256313,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 2058,
+    "returned_lines": 61,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "transport.go",
+      "scope": "patched"
+    },
+    "duration_ms": 1.3591700007964391,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 2471,
+    "returned_lines": 71,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "controller.go",
+      "scope": "patched"
+    },
+    "duration_ms": 3.828326998700504,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 10281,
+    "returned_lines": 251,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "controller_test.go",
+      "scope": "patched"
+    },
+    "duration_ms": 2.878597000744776,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 9691,
+    "returned_lines": 232,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "node_test.go",
+      "scope": "patched"
+    },
+    "duration_ms": 1.728884999465663,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "node_test.go",
+      "scope": "original"
+    },
+    "duration_ms": 3.934235999622615,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "query": "transport.Send",
+      "scope": "patched"
+    },
+    "duration_ms": 4.16423900060181,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "query": "transport.Send",
+      "scope": "original"
+    },
+    "duration_ms": 1.9187639991287142,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "scope": "patched",
+      "symbol": "Send"
+    },
+    "duration_ms": 10.763553998913267,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 1418,
+    "returned_lines": 17,
+    "success": true,
+    "tool": "find_references"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "scope": "patched",
+      "symbol": "transport.Send"
+    },
+    "duration_ms": 8.96296000064467,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 1156,
+    "returned_lines": 8,
+    "success": true,
+    "tool": "find_references"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "scope": "patched"
+    },
+    "duration_ms": 6.681860000753659,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 206,
+    "returned_lines": 11,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "scope": "original"
+    },
+    "duration_ms": 3.200957999069942,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 159,
+    "returned_lines": 8,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 260,
+      "path": "controller.go",
+      "scope": "patched",
+      "start": 1
+    },
+    "duration_ms": 3.7478239992196904,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 10281,
+    "returned_lines": 251,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 360,
+      "path": "node.go",
+      "scope": "patched",
+      "start": 1
+    },
+    "duration_ms": 3.209051999874646,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 11752,
+    "returned_lines": 343,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 100,
+      "path": "transport.go",
+      "scope": "patched",
+      "start": 1
+    },
+    "duration_ms": 1.1352310011716327,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 2471,
+    "returned_lines": 71,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 120,
+      "path": "message.go",
+      "scope": "patched",
+      "start": 1
+    },
+    "duration_ms": 0.9548549987812294,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 1574,
+    "returned_lines": 46,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 360,
+      "path": "node.go",
+      "scope": "original",
+      "start": 1
+    },
+    "duration_ms": 4.066636000061408,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 11627,
+    "returned_lines": 340,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 100,
+      "path": "transport.go",
+      "scope": "original",
+      "start": 1
+    },
+    "duration_ms": 1.8422249995637685,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 2058,
+    "returned_lines": 61,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 250,
+      "path": "node_test.go",
+      "scope": "original",
+      "start": 1
+    },
+    "duration_ms": 3.990957999121747,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 250,
+      "path": "node_test.go",
+      "scope": "patched",
+      "start": 1
+    },
+    "duration_ms": 2.0192510000924813,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "query": ".Send(",
+      "scope": "patched"
+    },
+    "duration_ms": 7.381935000012163,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "query": "emit",
+      "scope": "patched"
+    },
+    "duration_ms": 4.721239998616511,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "query": "Step(",
+      "scope": "patched"
+    },
+    "duration_ms": 4.307672001232277,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "scope": "patched",
+      "symbol": "emit"
+    },
+    "duration_ms": 15.727525000329479,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 230,
+    "returned_lines": 4,
+    "success": true,
+    "tool": "find_references"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "scope": "patched",
+      "symbol": "Send"
+    },
+    "duration_ms": 11.17314300063299,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 1418,
+    "returned_lines": 17,
+    "success": true,
+    "tool": "find_references"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "scope": "patched",
+      "symbol": "Step"
+    },
+    "duration_ms": 8.251891000327305,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 905,
+    "returned_lines": 10,
+    "success": true,
+    "tool": "find_references"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": ".",
+      "scope": "worktree"
+    },
+    "duration_ms": 5.69412599907082,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 167,
+    "returned_lines": 9,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "query": "MessageController",
+      "scope": "worktree"
+    },
+    "duration_ms": 5.7832660004351055,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 86,
+    "returned_lines": null,
+    "success": false,
+    "tool": "search_text"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "node.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 4.735350999908405,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 11627,
+    "returned_lines": 340,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "transport.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 2.2806519991718233,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2058,
+    "returned_lines": 61,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "message.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 2.1557019990723347,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1574,
+    "returned_lines": 46,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "node_test.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 1.8061150003632065,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "name": "MessageController",
+      "scope": "worktree"
+    },
+    "duration_ms": 124.73759100066673,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 26,
+    "returned_lines": 0,
+    "success": true,
+    "tool": "go_find_type"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "method": "ListPending",
+      "receiver": "MessageController",
+      "scope": "worktree"
+    },
+    "duration_ms": 111.93093700057943,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 26,
+    "returned_lines": 0,
+    "success": true,
+    "tool": "go_find_method"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "max_files": 5000,
+      "path": ".",
+      "scope": "worktree"
+    },
+    "duration_ms": 3.4344070008955896,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 167,
+    "returned_lines": 9,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "_consensus_seam_hidden",
+      "scope": "worktree"
+    },
+    "duration_ms": 0.5486640002345666,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 77,
+    "returned_lines": null,
+    "success": false,
+    "tool": "list_files"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "doc.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 1.7681709996395512,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 460,
+    "returned_lines": 6,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "README.md",
+      "scope": "worktree"
+    },
+    "duration_ms": 1.3552569998864783,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 896,
+    "returned_lines": 21,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": ".git/logs/HEAD",
+      "scope": "worktree"
+    },
+    "duration_ms": 0.7298170003195992,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 82,
+    "returned_lines": null,
+    "success": false,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "go.mod",
+      "scope": "worktree"
+    },
+    "duration_ms": 2.0314540015533566,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 167,
+    "returned_lines": 3,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": ".gitignore",
+      "scope": "worktree"
+    },
+    "duration_ms": 1.7914990003191633,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 146,
+    "returned_lines": 3,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": ".git",
+      "scope": "worktree"
+    },
+    "duration_ms": 0.426938000600785,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 82,
+    "returned_lines": null,
+    "success": false,
+    "tool": "list_files"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "content_bytes": 4710,
+      "path": "message_control.go"
+    },
+    "duration_ms": 2.370453999901656,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 69,
+    "returned_lines": null,
+    "success": true,
+    "tool": "write_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "content_bytes": 4745,
+      "path": "message_control_test.go"
+    },
+    "duration_ms": 2.6981389983120607,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 74,
+    "returned_lines": null,
+    "success": true,
+    "tool": "write_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 886
+    },
+    "duration_ms": 20.783739999387763,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "content_bytes": 4694,
+      "path": "message_control_test.go"
+    },
+    "duration_ms": 3.876683998896624,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 74,
+    "returned_lines": null,
+    "success": true,
+    "tool": "write_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_test",
+      "package": "./...",
+      "scope": "worktree"
+    },
+    "duration_ms": 454.040888000236,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 331,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_test_compile",
+      "package": "./...",
+      "scope": "worktree"
+    },
+    "duration_ms": 375.52483299987216,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 185,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "patch_bytes": 978
+    },
+    "duration_ms": 15.015228000265779,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 71,
+    "returned_lines": null,
+    "success": false,
+    "tool": "apply_patch"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "content_bytes": 4916,
+      "path": "message_control_test.go"
+    },
+    "duration_ms": 3.0884510015312117,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 74,
+    "returned_lines": null,
+    "success": true,
+    "tool": "write_file"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_test",
+      "package": "./...",
+      "scope": "worktree"
+    },
+    "duration_ms": 437.9630900002667,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 156,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_test",
+      "package": "./_consensus_seam_hidden/acceptance",
+      "run": "^TestMC1Capture$",
+      "scope": "worktree"
+    },
+    "duration_ms": 37.86481399947661,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 411,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_test",
+      "package": "./...",
+      "run": "^TestMessageController",
+      "scope": "worktree"
+    },
+    "duration_ms": 387.74928900056693,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 187,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "check": "go_doc",
+      "package": ".",
+      "scope": "worktree",
+      "symbol": "MessageController"
+    },
+    "duration_ms": 136.69266199940466,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1340,
+    "returned_lines": null,
+    "success": true,
+    "tool": "run_readonly_check"
+  },
+  {
+    "agent": "transformer",
+    "arguments": {
+      "path": "message_control.go",
+      "scope": "worktree"
+    },
+    "duration_ms": 3.367920000528102,
+    "model": "deepseek-v4-flash",
+    "output_bytes": 5921,
+    "returned_lines": 139,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "scope": "original"
+    },
+    "duration_ms": 4.410424000525381,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 159,
+    "returned_lines": 8,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": ".",
+      "scope": "patched"
+    },
+    "duration_ms": 4.414565999468323,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 216,
+    "returned_lines": 11,
+    "success": true,
+    "tool": "list_files"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "node.go",
+      "scope": "patched"
+    },
+    "duration_ms": 3.712968002218986,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 11627,
+    "returned_lines": 340,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "message.go",
+      "scope": "patched"
+    },
+    "duration_ms": 1.5133639972191304,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 1574,
+    "returned_lines": 46,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "transport.go",
+      "scope": "patched"
+    },
+    "duration_ms": 3.4147909973398782,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 2058,
+    "returned_lines": 61,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "message_control.go",
+      "scope": "patched"
+    },
+    "duration_ms": 2.0943419985997025,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 5921,
+    "returned_lines": 139,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "node_test.go",
+      "scope": "patched"
+    },
+    "duration_ms": 2.454602999932831,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "path": "message_control_test.go",
+      "scope": "patched"
+    },
+    "duration_ms": 2.056795001408318,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 6296,
+    "returned_lines": 146,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 120,
+      "path": "node_test.go",
+      "scope": "original",
+      "start": 1
+    },
+    "duration_ms": 3.0510530013998505,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 3831,
+    "returned_lines": 102,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 340,
+      "path": "node.go",
+      "scope": "original",
+      "start": 320
+    },
+    "duration_ms": 1.3295780008775182,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 840,
+    "returned_lines": 21,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "reviewer",
+    "arguments": {
+      "end": 50,
+      "path": "transport.go",
+      "scope": "original",
+      "start": 30
+    },
+    "duration_ms": 0.8034029997361358,
+    "model": "deepseek-v4-pro",
+    "output_bytes": 808,
+    "returned_lines": 21,
+    "success": true,
+    "tool": "read_file"
+  }
+]

@@ -1,120 +1,154 @@
-diff --git a/controlled_transport.go b/controlled_transport.go
+diff --git a/message_control.go b/message_control.go
 new file mode 100644
-index 0000000..ec9261d
+index 0000000..abd931b
 --- /dev/null
-+++ b/controlled_transport.go
-@@ -0,0 +1,105 @@
++++ b/message_control.go
+@@ -0,0 +1,139 @@
 +package miniraft
 +
 +import (
 +	"errors"
-+	"fmt"
++	"sort"
 +	"sync"
 +)
 +
-+// ErrUnknownMessage reports an Inject call for an ID that is not pending.
++// ErrUnknownMessage is returned by Inject when no pending message carries the
++// given message ID.
 +var ErrUnknownMessage = errors.New("mini-raft: no pending message with that ID")
 +
-+// MessageMeta describes one captured outbound message. The embedded Message is
-+// the stable snapshot taken at capture time; the controlled transport never
-+// mutates it.
-+type MessageMeta struct {
-+	// ID uniquely identifies the captured message within this transport.
-+	ID string
-+	// CaptureSequence is a strictly increasing counter in capture order.
++// PendingMessage is the stable metadata snapshot of one captured outbound
++// protocol message. Values returned by ListPending are independent of the
++// controller's internal store and safe to retain.
++type PendingMessage struct {
++	ID              uint64
++	From            uint64
++	To              uint64
++	Type            MessageType
 +	CaptureSequence uint64
-+	// Message is the stable clone captured before the original send path.
-+	Message
 +}
 +
-+// ControlledTransport is the test-mode capture/injection seam around a
-+// Transport. Send captures every outbound message as a pending snapshot and
-+// suppresses the original delivery path; Inject delivers a selected pending
-+// message through the wrapped transport's normal protocol boundary. It does
-+// not implement any scheduling policy.
-+type ControlledTransport struct {
-+	mu           sync.Mutex
-+	wrapped      Transport
-+	pending      []MessageMeta
-+	nextSequence uint64
++// pendingEntry is one captured message together with its capture order.
++type pendingEntry struct {
++	message  Message
++	sequence uint64
 +}
 +
-+// NewControlledTransport wraps transport so outbound messages are captured
-+// instead of delivered. Delivery happens only through Inject.
-+func NewControlledTransport(transport Transport) *ControlledTransport {
-+	return &ControlledTransport{wrapped: transport}
++// MessageController is the thin external test-control seam for outbound
++// protocol messages.
++//
++// When installed as a node's Config.Transport (test mode), Send captures a
++// stable snapshot of every outbound message before the original
++// environment-owned send path and suppresses that send: a captured message
++// never continues automatically along the underlying transport. Inject then
++// delivers a selected pending message through the recorded target's normal
++// protocol input boundary (Node.Step) without mutating its content.
++//
++// Test-controller operations (Inject and ClearPending) are serialized through
++// a single operation lock; outbound capture (Send) may still occur
++// concurrently. Message IDs are scoped to this controller instance's pending
++// store.
++type MessageController struct {
++	opMu sync.Mutex // serializes controller operations (Inject, ClearPending)
++	mu   sync.Mutex // guards the pending store
++
++	transport Transport
++	pending   map[uint64]pendingEntry
++	nextID    uint64
++	sequence  uint64
 +}
 +
-+// Send captures message before the wrapped transport would see it and does
-+// not forward it, so a captured message never continues automatically along
-+// the original uncontrollable send path.
-+func (transport *ControlledTransport) Send(message Message) error {
-+	transport.mu.Lock()
-+	defer transport.mu.Unlock()
-+	transport.nextSequence++
-+	transport.pending = append(transport.pending, MessageMeta{
-+		ID:              fmt.Sprintf("%d", transport.nextSequence),
-+		CaptureSequence: transport.nextSequence,
-+		Message:         message.Clone(),
-+	})
++// NewMessageController wraps the given environment transport. The returned
++// controller itself implements Transport, so it can be installed as the
++// Config.Transport of nodes to put the cluster in test mode.
++func NewMessageController(transport Transport) *MessageController {
++	return &MessageController{
++		transport: transport,
++		pending:   make(map[uint64]pendingEntry),
++		nextID:    1,
++	}
++}
++
++// Send implements Transport. In test mode every outbound protocol message is
++// captured as a stable snapshot and the original send is suppressed, so the
++// message never reaches the underlying transport automatically.
++func (controller *MessageController) Send(message Message) error {
++	stable := message.Clone()
++	controller.mu.Lock()
++	controller.sequence++
++	id := controller.nextID
++	controller.nextID++
++	controller.pending[id] = pendingEntry{message: stable, sequence: controller.sequence}
++	controller.mu.Unlock()
 +	return nil
 +}
 +
-+// ListPending returns stable copies of all captured, not-yet-injected
-+// messages in capture order.
-+func (transport *ControlledTransport) ListPending() []MessageMeta {
-+	transport.mu.Lock()
-+	defer transport.mu.Unlock()
-+	result := make([]MessageMeta, len(transport.pending))
-+	for index, meta := range transport.pending {
-+		result[index] = MessageMeta{
-+			ID:              meta.ID,
-+			CaptureSequence: meta.CaptureSequence,
-+			Message:         meta.Message.Clone(),
-+		}
++// ListPending returns stable metadata for every pending message in capture
++// order. The returned slice is a snapshot; it does not share state with the
++// controller's store.
++func (controller *MessageController) ListPending() []PendingMessage {
++	controller.mu.Lock()
++	defer controller.mu.Unlock()
++	result := make([]PendingMessage, 0, len(controller.pending))
++	for id, entry := range controller.pending {
++		result = append(result, PendingMessage{
++			ID:              id,
++			From:            entry.message.From,
++			To:              entry.message.To,
++			Type:            entry.message.Type,
++			CaptureSequence: entry.sequence,
++		})
 +	}
++	sort.Slice(result, func(i, j int) bool {
++		return result[i].CaptureSequence < result[j].CaptureSequence
++	})
 +	return result
 +}
 +
-+// Inject delivers the pending message identified by id through the wrapped
-+// transport, which routes it to the recorded target's normal Step boundary
-+// without mutating the message content. The message is consumed only after
-+// delivery succeeds; a failed delivery leaves it pending and returns the
-+// delivery error unchanged.
-+func (transport *ControlledTransport) Inject(id string) error {
-+	transport.mu.Lock()
-+	var snapshot Message
-+	found := false
-+	for _, meta := range transport.pending {
-+		if meta.ID == id {
-+			snapshot = meta.Message.Clone()
-+			found = true
-+			break
-+		}
-+	}
-+	transport.mu.Unlock()
-+	if !found {
++// ClearPending removes all pending messages. It is serialized with Inject.
++func (controller *MessageController) ClearPending() {
++	controller.opMu.Lock()
++	defer controller.opMu.Unlock()
++	controller.mu.Lock()
++	controller.pending = make(map[uint64]pendingEntry)
++	controller.mu.Unlock()
++}
++
++// Inject delivers the pending message identified by messageID through the
++// recorded target's normal protocol input boundary. The message content is
++// delivered unchanged: the stored snapshot is deep-cloned before delivery and
++// the caller's message is never mutated.
++//
++// The selected message is consumed only after delivery succeeds. If the
++// underlying delivery returns an error, the message is preserved in PENDING
++// state.
++func (controller *MessageController) Inject(messageID uint64) error {
++	controller.opMu.Lock()
++	defer controller.opMu.Unlock()
++	controller.mu.Lock()
++	entry, ok := controller.pending[messageID]
++	if !ok {
++		controller.mu.Unlock()
 +		return ErrUnknownMessage
 +	}
-+	if err := transport.wrapped.Send(snapshot); err != nil {
-+		return err
++	message := entry.message.Clone()
++	controller.mu.Unlock()
++	if controller.transport == nil {
++		return ErrUnknownMessage
 +	}
-+	transport.mu.Lock()
-+	for index, meta := range transport.pending {
-+		if meta.ID == id {
-+			transport.pending = append(transport.pending[:index], transport.pending[index+1:]...)
-+			break
-+		}
++	err := controller.transport.Send(message)
++	controller.mu.Lock()
++	if err == nil {
++		delete(controller.pending, messageID)
 +	}
-+	transport.mu.Unlock()
-+	return nil
++	controller.mu.Unlock()
++	return err
 +}
-diff --git a/controlled_transport_test.go b/controlled_transport_test.go
+diff --git a/message_control_test.go b/message_control_test.go
 new file mode 100644
-index 0000000..2cd5aa3
+index 0000000..5cdc0ae
 --- /dev/null
-+++ b/controlled_transport_test.go
-@@ -0,0 +1,129 @@
++++ b/message_control_test.go
+@@ -0,0 +1,146 @@
 +package miniraft
 +
 +import (
@@ -122,18 +156,14 @@ index 0000000..2cd5aa3
 +	"testing"
 +)
 +
-+type failingTransport struct {
-+	err error
-+}
-+
-+func (transport failingTransport) Send(Message) error {
-+	return transport.err
-+}
-+
-+func newControlledCluster(t *testing.T) (map[uint64]*Node, *ControlledTransport) {
++// newControllerCluster builds a 3-node cluster whose nodes send outbound
++// messages through the MessageController (test mode). Nodes are registered
++// with the wrapped MemoryTransport so Inject can reach them through the
++// normal protocol input boundary.
++func newControllerCluster(t *testing.T) (map[uint64]*Node, *MemoryTransport, *MessageController) {
 +	t.Helper()
-+	network := NewMemoryTransport()
-+	controlled := NewControlledTransport(network)
++	transport := NewMemoryTransport()
++	controller := NewMessageController(transport)
 +	nodes := make(map[uint64]*Node)
 +	for id := uint64(1); id <= 3; id++ {
 +		peers := make([]uint64, 0, 2)
@@ -144,103 +174,124 @@ index 0000000..2cd5aa3
 +		}
 +		node, err := NewNode(Config{
 +			ID: id, Peers: peers, ElectionTick: 4, HeartbeatTick: 1,
-+			Transport: controlled,
++			Transport: controller,
 +		})
 +		if err != nil {
 +			t.Fatalf("NewNode(%d): %v", id, err)
 +		}
 +		nodes[id] = node
-+		network.Register(node)
++		transport.Register(node)
 +	}
-+	return nodes, controlled
++	return nodes, transport, controller
 +}
 +
-+func tickUntilCaptured(t *testing.T, node *Node, controlled *ControlledTransport) []MessageMeta {
++// captureFirstCampaign ticks node 1 until at least one outbound message has
++// been captured (its first campaign), so exactly one campaign's messages are
++// pending.
++func captureFirstCampaign(t *testing.T, node *Node, controller *MessageController) {
 +	t.Helper()
-+	for tick := 0; tick < 16; tick++ {
++	for tick := 0; tick < 16 && len(controller.ListPending()) == 0; tick++ {
 +		if err := node.Tick(); err != nil {
 +			t.Fatalf("Tick: %v", err)
 +		}
-+		if pending := controlled.ListPending(); len(pending) > 0 {
-+			return pending
-+		}
 +	}
-+	t.Fatal("Tick did not produce a pending outbound message")
-+	return nil
 +}
 +
-+func TestControlledTransportCaptureAndSuppress(t *testing.T) {
-+	nodes, controlled := newControlledCluster(t)
-+	pending := tickUntilCaptured(t, nodes[1], controlled)
++func TestMessageControllerCapturesVoteRequests(t *testing.T) {
++	nodes, transport, controller := newControllerCluster(t)
++	captureFirstCampaign(t, nodes[1], controller)
++	pending := controller.ListPending()
 +	if len(pending) != 2 {
 +		t.Fatalf("pending count = %d, want 2 vote requests", len(pending))
 +	}
-+	if pending[0].ID == pending[1].ID || pending[0].CaptureSequence >= pending[1].CaptureSequence {
-+		t.Fatalf("message identity/order is not stable: %+v", pending)
-+	}
-+	for _, id := range []uint64{2, 3} {
-+		if status := nodes[id].Status(); status.Term != 0 {
-+			t.Fatalf("node %d processed a message before Inject: %+v", id, status)
++	for _, message := range pending {
++		if message.Type != MessageRequestVote {
++			t.Fatalf("pending type = %s, want %s", message.Type, MessageRequestVote)
 +		}
++		if message.From != 1 {
++			t.Fatalf("pending from = %d, want 1", message.From)
++		}
++	}
++	// Capture suppressed the original send: nothing reached the transport.
++	if delivered := len(transport.Delivered()); delivered != 0 {
++		t.Fatalf("delivered count = %d, want 0 (capture must suppress the send)", delivered)
 +	}
 +}
 +
-+func TestControlledTransportInjection(t *testing.T) {
-+	nodes, controlled := newControlledCluster(t)
-+	pending := tickUntilCaptured(t, nodes[1], controlled)
++func TestMessageControllerInjectConsumesOnSuccess(t *testing.T) {
++	nodes, _, controller := newControllerCluster(t)
++	captureFirstCampaign(t, nodes[1], controller)
++	pending := controller.ListPending()
 +	if len(pending) != 2 {
 +		t.Fatalf("pending count = %d, want 2", len(pending))
 +	}
-+	first, second := pending[0], pending[1]
-+	if second.To != 3 {
-+		first, second = second, first
++	first := pending[0].ID
++	if err := controller.Inject(first); err != nil {
++		t.Fatalf("Inject: %v", err)
 +	}
-+	if second.To != 3 {
-+		t.Fatalf("no pending request targets node 3: %+v", pending)
++	ids := map[uint64]bool{}
++	for _, message := range controller.ListPending() {
++		ids[message.ID] = true
 +	}
-+	if err := controlled.Inject(second.ID); err != nil {
-+		t.Fatalf("Inject(%q): %v", second.ID, err)
++	if ids[first] {
++		t.Fatalf("injected message %d still pending after successful delivery", first)
 +	}
-+	remaining := controlled.ListPending()
-+	foundFirst := false
-+	for _, message := range remaining {
-+		if message.ID == second.ID {
-+			t.Fatalf("injected message %q remains pending", second.ID)
-+		}
-+		if message.ID == first.ID {
-+			foundFirst = true
-+		}
-+	}
-+	if !foundFirst {
-+		t.Fatalf("unselected message %q was consumed: %+v", first.ID, remaining)
-+	}
-+	if status := nodes[3].Status(); status.Term == 0 {
-+		t.Fatalf("selected target did not process injected message: %+v", status)
-+	}
-+	if status := nodes[2].Status(); status.Term != 0 {
-+		t.Fatalf("unselected target processed a message: %+v", status)
-+	}
++}
 +
-+	deliveryError := errors.New("injected delivery failed")
-+	rejecting := NewControlledTransport(failingTransport{err: deliveryError})
-+	if err := rejecting.Send(Message{
-+		From: 1, To: 2, Type: MessageRequestVote, Term: 1,
-+	}); err != nil {
-+		t.Fatalf("capture before failed injection: %v", err)
++func TestMessageControllerInjectKeepsPendingOnFailure(t *testing.T) {
++	nodes, _, controller := newControllerCluster(t)
++	captureFirstCampaign(t, nodes[1], controller)
++	pending := controller.ListPending()
++	if len(pending) != 2 {
++		t.Fatalf("pending count = %d, want 2", len(pending))
 +	}
-+	failedPending := rejecting.ListPending()
-+	if len(failedPending) != 1 {
-+		t.Fatalf("pending before failed injection = %+v, want one", failedPending)
++	// Pause the target of the first captured message; its delivery must fail
++	// and the message must remain pending.
++	nodes[pending[0].To].Pause()
++	if err := controller.Inject(pending[0].ID); !errors.Is(err, ErrPaused) {
++		t.Fatalf("Inject error = %v, want %v", err, ErrPaused)
 +	}
-+	failedID := failedPending[0].ID
-+	if err := rejecting.Inject(failedID); !errors.Is(err, deliveryError) {
-+		t.Fatalf("Inject(%q) error = %v, want %v", failedID, err, deliveryError)
++	ids := map[uint64]bool{}
++	for _, message := range controller.ListPending() {
++		ids[message.ID] = true
 +	}
-+	stillPending := rejecting.ListPending()
-+	if len(stillPending) != 1 || stillPending[0].ID != failedID {
-+		t.Fatalf("failed injection consumed pending message: %+v", stillPending)
++	if !ids[pending[0].ID] {
++		t.Fatalf("failed injection consumed message %d", pending[0].ID)
 +	}
-+	if err := rejecting.Inject("does-not-exist"); !errors.Is(err, ErrUnknownMessage) {
-+		t.Fatalf("unknown Inject error = %v, want %v", err, ErrUnknownMessage)
++}
++
++func TestMessageControllerInjectUnknown(t *testing.T) {
++	_, _, controller := newControllerCluster(t)
++	if err := controller.Inject(99999); !errors.Is(err, ErrUnknownMessage) {
++		t.Fatalf("Inject unknown error = %v, want %v", err, ErrUnknownMessage)
++	}
++}
++
++func TestMessageControllerClearPending(t *testing.T) {
++	nodes, _, controller := newControllerCluster(t)
++	captureFirstCampaign(t, nodes[1], controller)
++	if pending := controller.ListPending(); len(pending) != 2 {
++		t.Fatalf("pending count = %d, want 2 before clear", len(pending))
++	}
++	controller.ClearPending()
++	if pending := controller.ListPending(); len(pending) != 0 {
++		t.Fatalf("pending count = %d, want 0 after clear", len(pending))
++	}
++}
++
++func TestMessageControllerInjectionDrivesElection(t *testing.T) {
++	nodes, _, controller := newControllerCluster(t)
++	captureFirstCampaign(t, nodes[1], controller)
++	// Drive the election entirely through injection: vote requests, then the
++	// captured vote responses, until node 1 reaches leader.
++	for rounds := 0; rounds < 8 && nodes[1].Status().Role != RoleLeader; rounds++ {
++		for _, message := range controller.ListPending() {
++			if err := controller.Inject(message.ID); err != nil {
++				t.Fatalf("Inject: %v", err)
++			}
++		}
++	}
++	if status := nodes[1].Status(); status.Role != RoleLeader {
++		t.Fatalf("node 1 role = %s, want leader after injecting vote grants", status.Role)
 +	}
 +}

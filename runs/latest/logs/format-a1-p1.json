@@ -1,7 +1,7 @@
 {
-  "command": "gofmt -w controlled_transport.go controlled_transport_test.go",
+  "command": "gofmt -w controller.go controller_test.go node.go transport.go",
   "returncode": 0,
   "stdout": "",
   "stderr": "",
-  "duration_seconds": 0.009246478000932257
+  "duration_seconds": 0.015010708999398048
 }

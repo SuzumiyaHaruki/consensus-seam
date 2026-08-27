@@ -1,7 +1,7 @@
 {
   "command": "go test -run '^$' ./...",
   "returncode": 0,
-  "stdout": "ok  \tgithub.com/SuzumiyaHaruki/mini-raft\t0.011s [no tests to run]\n",
+  "stdout": "ok  \tgithub.com/SuzumiyaHaruki/mini-raft\t0.008s [no tests to run]\n",
   "stderr": "",
-  "duration_seconds": 0.3625463789994683
+  "duration_seconds": 0.23056762899977912
 }

@@ -1,4 +1,197 @@
 {
   "overall": "PASS",
-  "issues": []
+  "checks": [
+    {
+      "name": "original_send_suppressed",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Send",
+          "line": 107,
+          "reason": "Send branches on captureMode: only the production branch calls transport.Send; the capture branch increments nextSeq, clones, stores, and returns nil at line 136."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Send",
+          "line": 117,
+          "reason": "Capture path performs no wrapped transport.Send call, so the message never continues along the original send path."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.emit",
+          "line": 335,
+          "reason": "Node.emit is the only call site of node.transport.Send; all heartbeats, vote requests, append entries, and responses exit through this funnel."
+        }
+      ],
+      "reason": "MessageController.Send is the transport implementation reached by the node's single outbound funnel (Node.emit), and in capture mode it records the message and returns nil without ever calling the wrapped transport's Send. The original uncontrollable delivery path is therefore suppressed."
+    },
+    {
+      "name": "protocol_logic_unchanged",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "node.go",
+          "symbol": "Node.NewNode",
+          "line": 88,
+          "reason": "Only additive change to node.go: after resetElectionTimeoutLocked, if config.Transport is *MessageController then Register(node) is called; no protocol state or algorithm is modified."
+        },
+        {
+          "file": "transport.go",
+          "symbol": "MemoryTransport.Node",
+          "line": 50,
+          "reason": "New read-only accessor returns a registered node; it does not modify MemoryTransport.Send or the delivered log behavior."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.emit",
+          "line": 335,
+          "reason": "emit is unchanged from the original and remains the sole outbound path, so production forwarding through a non-controller transport behaves as before."
+        }
+      ],
+      "reason": "The patch does not alter Tick, Step, Propose, the message handlers, emit, election-timeout logic, or quorum logic. The only node.go change is an opt-in registration hook that is inert for existing MemoryTransport users, and transport.go gains only a read-only Node accessor."
+    },
+    {
+      "name": "message_snapshot_stable",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Send",
+          "line": 119,
+          "reason": "stable := message.Clone() captures a deep copy at ingress into the pending store."
+        },
+        {
+          "file": "message.go",
+          "symbol": "Message.Clone",
+          "line": 39,
+          "reason": "Message.Clone copies the Entries slice and calls Entry.Clone on each entry, so entry Data payloads are not shared."
+        },
+        {
+          "file": "message.go",
+          "symbol": "Entry.Clone",
+          "line": 21,
+          "reason": "Entry.Clone appends a fresh []byte copy of Data."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "PendingMessage.clone",
+          "line": 31,
+          "reason": "PendingMessage.clone rebuilds the Entries slice with Entry.Clone for every read path."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.ListPending",
+          "line": 185,
+          "reason": "ListPending appends record.meta.clone(), not the stored PendingMessage, so callers cannot mutate the pending store."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "PendingMessage.toMessage",
+          "line": 42,
+          "reason": "toMessage builds a fresh Message with fresh entry clones before delivery."
+        }
+      ],
+      "reason": "Capture stores Message.Clone(), which deep-copies entry payloads; ListPending returns PendingMessage.clone(); and toMessage rebuilds a fresh message with fresh entry clones before injection. No mutable slice or byte payload is shared with the pending store."
+    },
+    {
+      "name": "exact_target_preserved",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Send",
+          "line": 125,
+          "reason": "From and To are copied directly from the stable clone into PendingMessage."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Send",
+          "line": 133,
+          "reason": "The delivery target is resolved from stable.To at capture time and stored in the pendingRecord."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "PendingMessage.toMessage",
+          "line": 48,
+          "reason": "The rebuilt message preserves pending.From and pending.To exactly."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 218,
+          "reason": "Inject uses the recorded target, falling back to resolving by record.meta.To only if the recorded target is nil."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Step",
+          "line": 137,
+          "reason": "Step still enforces message.To == node.id, so an injected message cannot be delivered to a different node."
+        }
+      ],
+      "reason": "The captured To field is stored verbatim, the recorded target is resolved from that To at capture time, and injection rebuilds the message with the same To and delivers it through that recorded target via Node.Step, which still verifies message.To == node.id."
+    },
+    {
+      "name": "failed_injection_preserves_pending",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 213,
+          "reason": "Unknown message ID returns ErrUnknownMessage before any state mutation."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 224,
+          "reason": "Unresolved target returns ErrUnknownNode without deleting the pending record."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 227,
+          "reason": "If target.Step returns any error, Inject returns immediately and does not reach the delete."
+        },
+        {
+          "file": "controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 231,
+          "reason": "The pending record is deleted only after a nil Step result."
+        }
+      ],
+      "reason": "Inject removes the pending record only after target.Step returns nil. Unknown ID, unresolved target, and any Step error all return before the delete, leaving the message pending."
+    },
+    {
+      "name": "existing_tests_unchanged",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "node_test.go",
+          "symbol": null,
+          "line": 1,
+          "reason": "Patched node_test.go is byte-for-byte the same as the original for the existing test functions; the diff adds only new controller_test.go and does not modify existing test files."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.NewNode",
+          "line": 88,
+          "reason": "The new type assertion config.Transport.(*MessageController) is false for the MemoryTransport used by existing tests, so their construction path is unchanged."
+        },
+        {
+          "file": "transport.go",
+          "symbol": "MemoryTransport.Node",
+          "line": 50,
+          "reason": "The added Node accessor is read-only and does not alter MemoryTransport.Send or Delivered used by existing tests."
+        }
+      ],
+      "reason": "No existing test file was modified. The production changes are additive: the NewNode registration hook only activates for the new *MessageController transport type, and the MemoryTransport.Node accessor does not change Send behavior. Existing node_test.go tests use MemoryTransport and remain unaffected."
+    }
+  ],
+  "issues": [],
+  "risks": [
+    "Inject is not explicitly restricted to capture mode. If DisableCapture is used and a pending message is injected while forwarding is enabled, target.Step can process the message and then return a wrapped transport error; because the pending message is removed only on nil error, a retry could reapply an already-processed message. The supplied tests inject only while capture mode remains enabled, where outbound sends return nil.",
+    "MessageController must be constructed through NewMessageController; constructing a zero-value MessageController directly would leave pending and nodes maps nil and panic on Send/Register. The documented constructor avoids this.",
+    "SetCaptureMode, Register, and Unregister are serialized by controller.mu but not by opMu. There is no data race, but the 'test-controller operations serialized' guarantee is explicit only for Inject, ListPending, and ClearPending."
+  ]
 }

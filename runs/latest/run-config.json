@@ -2,40 +2,30 @@
   "capability_checks": [
     {
       "capability": "message_capture",
-      "command": "go test -tags consensusseam ./acceptance -run '^TestMC1Capture$' -count=1",
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC1Capture$' -count=1",
       "failure_code": "MESSAGE_CAPTURE_FAILED",
       "name": "MC1 capture"
     },
     {
       "capability": "message_capture",
-      "command": "go test -tags consensusseam ./acceptance -run '^TestMC2Suppression$' -count=1",
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC2Suppression$' -count=1",
       "failure_code": "MESSAGE_SUPPRESSION_FAILED",
       "name": "MC2 suppression"
     },
     {
       "capability": "message_injection",
-      "command": "go test -tags consensusseam ./acceptance -run '^TestMC3ExactInjection$' -count=1",
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC3ExactInjection$' -count=1",
       "failure_code": "MESSAGE_INJECTION_FAILED",
       "name": "MC3 exact injection"
     }
   ],
   "experiment": {
-    "kind": "engineering_smoke",
-    "oracle_visible_to_agents": true,
-    "research_claim": "First end-to-end successful execution only"
+    "kind": "blind_capability",
+    "oracle_visible_to_agents": false,
+    "research_claim": "Blind capability classification and low-intrusion message-control transformation"
   },
   "model_profile": "manifest",
   "project": "mini-raft",
-  "source_revisions": {
-    "controller": {
-      "dirty": false,
-      "revision": "52ab69049af3610c5b5bd4146584064db273ec13"
-    },
-    "target": {
-      "dirty": false,
-      "revision": "1e1b72e71a0d5ad97bde10fe2ac4909804329914"
-    }
-  },
   "resolved_models": {
     "analyzer": {
       "max_tokens": 32768,
@@ -56,12 +46,28 @@
       "thinking": "enabled"
     }
   },
+  "source_revisions": {
+    "controller": {
+      "dirty": true,
+      "revision": "c1d98868e831a921d9dc578cf993c3812efe525f"
+    },
+    "target": {
+      "dirty": false,
+      "revision": "591faf0ce73a607c369b1b0f5f5e9d38222d3917"
+    }
+  },
   "system_boundary": {
-    "description": "Analyze the Mini Raft protocol core in this repository. Real networking, durable storage, and application process behavior are outside the boundary.\n",
+    "description": "Analyze the Mini Raft protocol core. Real networking, durable storage, and application process behavior are outside the boundary.\n",
     "kind": "protocol_library"
   },
   "transform_capabilities": [
     "message_capture",
     "message_injection"
+  ],
+  "verification_fixtures": [
+    {
+      "destination": "_consensus_seam_hidden/acceptance/message_control_test.go",
+      "source": "hidden-acceptance/message_control_test.go"
+    }
   ]
 }
