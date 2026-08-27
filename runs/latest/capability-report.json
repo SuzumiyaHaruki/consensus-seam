@@ -5,67 +5,70 @@
       "status": "SUPPORTED",
       "evidence": [
         {
-          "file": "rawnode.go",
-          "symbol": "(*RawNode).Propose",
-          "line": 90,
-          "reason": "提案外部输入入口，构造 MsgProp 消息同步步入状态机。"
-        },
-        {
-          "file": "rawnode.go",
-          "symbol": "(*RawNode).ProposeConfChange",
-          "line": 101,
-          "reason": "成员变更外部输入入口，经 confChangeToMsg 构造 MsgProp。"
-        },
-        {
-          "file": "rawnode.go",
-          "symbol": "(*RawNode).ReadIndex",
-          "line": 561,
-          "reason": "线性化读请求入口，构造 MsgReadIndex 消息。"
-        },
-        {
           "file": "node.go",
           "symbol": "(*node).Propose",
           "line": 474,
-          "reason": "Node 异步路径的提案入口，经 propc 通道交付 run 循环。"
+          "reason": "Application proposal workload entrypoint on the async Node path."
+        },
+        {
+          "file": "node.go",
+          "symbol": "(*node).ProposeConfChange",
+          "line": 495,
+          "reason": "Membership-change workload entrypoint on the async Node path."
+        },
+        {
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).Propose",
+          "line": 90,
+          "reason": "Application proposal workload entrypoint on the synchronous RawNode path."
+        },
+        {
+          "file": "node.go",
+          "symbol": "(*node).Step",
+          "line": 478,
+          "reason": "Peer-to-peer protocol ingress (recvc); excluded from workload entrypoints."
         }
       ],
-      "boundary": "系统边界为 go.etcd.io/raft/v3 协议库。外部输入指来自应用的工作负载请求（提案、成员变更、读请求），经 RawNode/Node 的公开方法进入状态机；Step 对等协议入口、Tick 计时器与内部回调不属于外部输入。",
+      "boundary": "Public Node/RawNode protocol APIs inside the module; real application state machines and transport outside. v0.1 adds no new business-input API.",
       "gap": null,
-      "reason": "提案、成员变更与读请求入口在 RawNode 与 Node 两层均有公开 API，rafttest 亦提供 propose / propose-conf-change 命令；Step 与 Tick 被明确排除在外部输入之外。",
+      "reason": "Node and RawNode expose complete application workload entrypoints (Propose, ProposeConfChange, ReadIndex, Campaign), peer-to-peer ingress is confined to Step/recvc, and Tick/internal messages are excluded. rafttest wraps the same entrypoints.",
       "limitations": [
-        "Campaign（MsgHup）是本地控制消息而非外部工作负载，不计入本能力。",
-        "Node 异步路径中提案可被丢弃或转发给 leader（node.go:391-398 与 ErrProposalDropped），这是既有协议语义。"
+        "Application state machines and real transports consuming Propose/Ready are outside the boundary.",
+        "Proposals may be dropped (ErrProposalDropped) by design; retry semantics are the application's concern."
       ],
       "suggested_direction": null,
       "entrypoints": [
-        "RawNode.Propose (rawnode.go:90)",
-        "RawNode.ProposeConfChange (rawnode.go:101)",
-        "RawNode.ReadIndex (rawnode.go:561)",
         "Node.Propose (node.go:474)",
         "Node.ProposeConfChange (node.go:495)",
         "Node.ReadIndex (node.go:613)",
-        "rafttest InteractionEnv.Propose / ProposeConfChange"
+        "Node.Campaign (node.go:472)",
+        "Node.TransferLeadership / Node.ForgetLeader (node.go:600, 609)",
+        "RawNode.Propose (rawnode.go:90)",
+        "RawNode.ProposeConfChange (rawnode.go:101)",
+        "RawNode.ReadIndex (rawnode.go:561)",
+        "RawNode.Campaign (rawnode.go:83)",
+        "rafttest InteractionEnv.Propose / Campaign (rafttest/interaction_env_handler_propose.go:32, campaign.go:29)"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "现有公开 API 已直接覆盖提案、成员变更与读请求入口，无需新增目标代码；testing_contract 为空。",
+      "test_support_reason": "Node/RawNode public APIs directly expose proposals, membership changes, and read requests; rafttest propose/propose-conf-change/campaign handlers wrap them without new target code.",
       "suggested_changes": [],
       "execution_paths": [
-        "RawNode 同步路径：Propose/ProposeConfChange/ReadIndex 构造 pb.Message 后同步调用 raft.Step 进入状态机。",
-        "Node 异步事件循环路径：Propose 经 propc 通道（node.go:391-398），ReadIndex 等经 step 走 recvc 或 propc，由 run() 循环处理。",
-        "rafttest 数据驱动路径：propose / propose-conf-change 命令直接调用节点 RawNode 的 Propose/ProposeConfChange。"
+        "RawNode synchronous path: RawNode.Propose/ProposeConfChange/ReadIndex/Campaign -> raft.Step",
+        "Node async goroutine path: Node.Propose/ProposeConfChange/ReadIndex/Campaign -> propc/recvc channels -> node.run -> raft.Step",
+        "rafttest InteractionEnv handlers -> same RawNode methods"
       ],
       "obligations": {
         "protocol_ingress_excluded": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "raft.go",
-              "symbol": "(*raft).Step",
-              "line": 1085,
-              "reason": "协议消息统一入口，明确为 peer-to-peer 协议入站而非应用工作负载入口。"
+              "file": "rawnode.go",
+              "symbol": "(*RawNode).Step",
+              "line": 118,
+              "reason": "Peer-to-peer protocol input boundary; distinct from workload APIs."
             }
           ],
-          "reason": "Step（raft.go:1085 与 node.go:478）是对等协议消息入口，不属于外部工作负载输入。"
+          "reason": "Peer messages enter exclusively via Node.Step (node.go:478) / RawNode.Step (rawnode.go:118) and the recvc channel in node.run (node.go:399-404); these are identified and excluded from workload entrypoints."
         },
         "timer_and_internal_events_excluded": {
           "status": "SATISFIED",
@@ -74,22 +77,22 @@
               "file": "raft.go",
               "symbol": "(*raft).tickElection",
               "line": 850,
-              "reason": "选举计时内部回调，由显式 Tick 驱动。"
+              "reason": "Internal timer callback generating MsgHup; not external application input."
             }
           ],
-          "reason": "Tick 驱动的 tickElection/tickHeartbeat（raft.go:850/862）与 MsgHup/MsgBeat 等本地消息为内部事件，不视为外部输入。"
+          "reason": "Tick (node.go:463, rawnode.go:64) and internally generated messages such as MsgHup/MsgBeat from tickElection/tickHeartbeat (raft.go:855, 885) are not workload entrypoints; only Propose/ProposeConfChange/ReadIndex/Campaign-style APIs are."
         },
         "workload_entrypoint": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "rawnode.go",
-              "symbol": "(*RawNode).Propose",
-              "line": 90,
-              "reason": "标识应用提案工作负载入口。"
+              "file": "node.go",
+              "symbol": "(*node).ProposeConfChange",
+              "line": 495,
+              "reason": "Membership-change application entrypoint."
             }
           ],
-          "reason": "Propose、ProposeConfChange、ReadIndex 构成完整的外部工作负载入口集合。"
+          "reason": "Proposals (Node.Propose node.go:474, RawNode.Propose rawnode.go:90), membership changes (Node.ProposeConfChange node.go:495, RawNode.ProposeConfChange rawnode.go:101), and read requests (Node.ReadIndex node.go:613, RawNode.ReadIndex rawnode.go:561) are the external application entrypoints."
         }
       }
     },
@@ -100,83 +103,76 @@
           "file": "node.go",
           "symbol": "(*node).Stop",
           "line": 336,
-          "reason": "停止边界：向 stop 通道发送信号并阻塞等待 run() 关闭 done。"
+          "reason": "Explicit stop boundary: signals run() and blocks until done is closed."
         },
         {
           "file": "node.go",
           "symbol": "RestartNode",
           "line": 286,
-          "reason": "恢复/重启路径：从 Storage 重建节点而不重新引导 peers。"
+          "reason": "Existing restart/recovery path reconstructing a node from Storage."
         },
         {
-          "file": "raft.go",
-          "symbol": "newRaft",
-          "line": 442,
-          "reason": "恢复边界：从 Storage.InitialState() 读取 HardState 与 ConfState。"
+          "file": "node.go",
+          "symbol": "(*node).run",
+          "line": 454,
+          "reason": "Stop case in the run loop: close(done) and return terminates the node."
         },
         {
           "file": "node.go",
           "symbol": "SoftState",
-          "line": 38,
-          "reason": "注释明确 SoftState 为易失状态，无需持久化，定义持久/易失划分。"
+          "line": 40,
+          "reason": "Explicit volatile-state declaration ('does not need to be persisted to the WAL')."
         }
       ],
-      "boundary": "生命周期控制限定在协议库内：Node.Stop 停止 goroutine，StartNode/RestartNode/NewRawNode 创建节点，RestartNode 从 Storage 恢复；崩溃后状态存活与否由既有 HardState/SoftState/unstable 与 Storage 语义定义，未发明新的持久/易失划分。",
+      "boundary": "Node lifecycle and Storage-owned persistent state inside the module; process supervision, WAL/disk, and external recovery tooling outside.",
       "gap": null,
-      "reason": "创建（NewRawNode/StartNode/RestartNode）、停止（Node.Stop）与恢复（RestartNode 经 Storage.InitialState 重建）路径均存在且语义明确；持久状态（HardState、稳定日志）与易失状态（SoftState、unstable 日志）的划分在代码注释与 MustSync 中显式定义。",
+      "reason": "Creation (StartNode/RestartNode/NewRawNode), stop (Node.Stop), and recovery (RestartNode from Storage with Config.Applied) semantics already exist; persistent (HardState/log/snapshot) vs volatile (SoftState) state is explicitly defined and not invented.",
       "limitations": [
-        "真实磁盘/WAL 持久化在系统边界外，崩溃恢复的物理持久性依赖应用提供的 Storage。",
-        "rafttest 的 ProcessReady 注释明确尚未支持崩溃模拟（interaction_env_handler_process_ready.go:46）。",
-        "RawNode 无停止语义（同步对象、无后台 goroutine）。"
+        "Crash recovery beyond Storage contents (disk/WAL) is outside the boundary.",
+        "RawNode has no Stop; lifecycle control for the synchronous path is only creation and abandonment, which is inherent to its thread-unsafe design."
       ],
       "suggested_direction": null,
       "entrypoints": [
-        "NewRawNode (rawnode.go:51)",
-        "RawNode.Bootstrap (bootstrap.go:30)",
+        "Node.Stop (node.go:336)",
         "StartNode (node.go:276)",
         "RestartNode (node.go:286)",
-        "Node.Stop (node.go:336)",
-        "rafttest InteractionEnv.AddNodes (interaction_env_handler_add_nodes.go:94)"
+        "RawNode.Bootstrap (bootstrap.go:30)",
+        "NewRawNode (rawnode.go:51)",
+        "Config.Applied / Config.Storage (raft.go:144-149)",
+        "rafttest node stop/restart/pause/resume (rafttest/node.go:122, 131, 151, 156)"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "创建、停止、恢复 API 均为公开接口，测试可直接组合（例如用同一 MemoryStorage 先后 RestartNode 模拟重启）；未发明持久/易失划分。",
+      "test_support_reason": "Public APIs (StartNode, RestartNode, NewRawNode, Bootstrap, Node.Stop, Config.Applied, MemoryStorage) already compose into creation/stop/recovery tests without new target code; no persistent/volatile split needs to be invented.",
       "suggested_changes": [],
       "execution_paths": [
-        "RawNode 同步路径：NewRawNode/Bootstrap 构造，无 goroutine、无 Stop，生命周期由调用方同步控制。",
-        "Node 异步路径：StartNode/RestartNode 启动 run() 事件循环，Node.Stop 关闭 done 并阻塞至循环退出（node.go:336-346）。",
-        "恢复路径：RestartNode 从同一 Storage 重建 RawNode，newRaft 读取 InitialState（raft.go:442）并经 loadState（raft.go:2033）恢复 HardState 与日志。",
-        "rafttest 路径：AddNodes 以 MemoryStorage+快照创建 RawNode，未提供停止操作（RawNode 无 goroutine）。"
+        "Node async path: StartNode/RestartNode spawn node.run goroutine; Stop signals the run loop (node.go:454-456) and blocks on done",
+        "RawNode synchronous path: NewRawNode/Bootstrap create a thread-unsafe node with no goroutine; lifecycle is the application's (no Stop on RawNode)",
+        "Recovery path: RestartNode -> NewRawNode -> newRaft reads Storage.InitialState (raft.go:442)"
       ],
       "obligations": {
         "persistent_volatile_semantics_defined": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "rawnode.go",
-              "symbol": "MustSync",
-              "line": 193,
-              "reason": "定义哪些持久状态必须同步写入稳定存储。"
-            },
-            {
-              "file": "log_unstable.go",
-              "symbol": "unstable",
-              "line": 33,
-              "reason": "未写入 Storage 的易失日志/快照状态。"
+              "file": "node.go",
+              "symbol": "SoftState",
+              "line": 40,
+              "reason": "Explicit volatile vs persistent distinction for node state."
             }
           ],
-          "reason": "HardState（Term/Vote/Commit）经 Ready 持久化并由 MustSync 定义必须同步写入的条件（rawnode.go:193）；SoftState（lead/raftState）注释为易失（node.go:38-43）；unstable 日志在稳定化前为易失（log_unstable.go:19-32）。"
+          "reason": "SoftState is documented volatile (node.go:38-43); HardState must be saved before messages are sent (Ready contract, node.go:58-66); Storage interface and MemoryStorage (storage.go:104-107) hold HardState/log/snapshot as the crash-surviving set."
         },
         "restart_or_recovery_boundary": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "raft.go",
-              "symbol": "(*raft).loadState",
-              "line": 2033,
-              "reason": "从持久 HardState 恢复 Term/Vote/Commit。"
+              "symbol": "newRaft",
+              "line": 442,
+              "reason": "Recovery reads HardState/ConfState from the application-provided Storage."
             }
           ],
-          "reason": "RestartNode 从 Storage 重建状态机，newRaft 读取 InitialState 并经 loadState 恢复 Term/Vote/Commit；调度器 resume 不存在于此库。"
+          "reason": "RestartNode (node.go:286) reconstructs from Storage via NewRawNode -> newRaft reading Storage.InitialState (raft.go:442); Config.Applied (raft.go:145-149) sets the restart applied index. Scheduler resume is not used as recovery."
         },
         "state_ownership_defined": {
           "status": "SATISFIED",
@@ -185,22 +181,22 @@
               "file": "storage.go",
               "symbol": "Storage",
               "line": 46,
-              "reason": "应用所有持久存储的接口定义与所有权边界。"
+              "reason": "Defines the ownership boundary of recoverable state between raft and the application."
             }
           ],
-          "reason": "Storage 接口（storage.go:46-90）为应用所有并定义持久日志/状态的读写契约；raftLog 与 unstable 为库内内存所有权；rafttest 的 Storage 接口进一步扩展了 SetHardState/ApplySnapshot/Append/Compact。"
+          "reason": "Storage interface is application-owned (storage.go:40-45); raft never persists directly, it emits Ready/HardState/Entries/Snapshot for the application to store (node.go:52-115); MemoryStorage is the module-provided implementation."
         },
         "stop_boundary": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "node.go",
-              "symbol": "(*node).Stop",
-              "line": 336,
-              "reason": "停止语义：触发 run() 退出并阻塞确认。"
+              "symbol": "(*node).run",
+              "line": 454,
+              "reason": "The exact stop/pause boundary of the Node: close(done); return."
             }
           ],
-          "reason": "Node.Stop 是唯一停止边界：停止后通道操作返回 ErrStopped（node.go:520-522）；RawNode 无 goroutine 故无 Stop 方法。"
+          "reason": "Node.Stop (node.go:336-346) triggers the run loop stop case (node.go:454-456) and blocks until done closes; ErrStopped (node.go:35) is returned for post-stop operations."
         }
       }
     },
@@ -208,59 +204,57 @@
       "status": "PATCHABLE",
       "evidence": [
         {
-          "file": "rawnode.go",
-          "symbol": "(*RawNode).Ready",
-          "line": 133,
-          "reason": "协议输出点：向应用暴露待发送消息切片（捕获原语）。"
-        },
-        {
           "file": "rafttest/interaction_env_handler_process_ready.go",
           "symbol": "(*InteractionEnv).ProcessReady",
           "line": 45,
-          "reason": "捕获点：将 rd.Messages 中的非本地消息追加到 env.Messages，捕获后不自动投递。"
+          "reason": "Capture point for the RawNode path: outbound protocol messages are parked in env.Messages instead of being sent."
         },
         {
           "file": "rafttest/interaction_env.go",
           "symbol": "InteractionEnv.Messages",
           "line": 52,
-          "reason": "实际待发送 pending 存储（in-flight messages），但无稳定控制面 ID 与 list/clear 入口。"
+          "reason": "Existing pending message store, but without stable control-plane IDs or list/clear entrypoints."
         },
         {
-          "file": "rafttest/interaction_env_handler_process_append_thread.go",
-          "symbol": "(*InteractionEnv).ProcessAppendThread",
-          "line": 47,
-          "reason": "异步存储路径的捕获点：本地存储线程响应消息（含对等输出）在此汇入 env.Messages。"
+          "file": "rafttest/node.go",
+          "symbol": "(*node).start",
+          "line": 74,
+          "reason": "Node-async path: captured messages continue automatically through iface.send; capture hook missing."
+        },
+        {
+          "file": "rawnode.go",
+          "symbol": "(*RawNode).readyWithoutAccept",
+          "line": 141,
+          "reason": "Protocol output point: Ready.Messages is populated from r.msgs before acceptReady clears it (rawnode.go:433)."
         }
       ],
-      "boundary": "协议输出点为 Ready.Messages（以及 AsyncStorageWrites 下内嵌于 MsgStorageAppend.Responses 的对等消息）；捕获发生在 Ready 边界与 rafttest 的 env.Messages/AppendWork/ApplyWork 存储处；真实网络发送在边界外。",
-      "gap": "缺少稳定控制面 ID 的待发送存储访问层：无按 ID 列出 pending 消息的入口、无显式清空入口；原始库路径（RawNode/Node）仅有 Ready.Messages 原语，需包装层持有待发送存储并阻止自动发送。",
-      "reason": "捕获原语与待发送存储已存在：RawNode.Ready 返回 rd.Messages，rafttest 的 ProcessReady 将非本地消息存入 env.Messages（捕获后不会自动投递，需显式 DeliverMsgs），异步模式下响应消息在 ProcessAppendThread 中汇入 env.Messages；但缺少稳定控制面消息 ID、按 ID 列出 pending 的入口与显式清空入口，未满足完整契约。",
+      "boundary": "Ready processing and rafttest support are inside the boundary; real network send and WAL are outside.",
+      "gap": "No stable control-plane IDs assigned at capture time; no callable list/clear entrypoints; Node-async path auto-continues messages (rafttest/node.go:85-91) instead of parking them.",
+      "reason": "Protocol output points exist (Ready.Messages from r.msgs; rafttest ProcessReady parks messages in env.Messages without auto-continuation), but there is no stable control-plane ID and no callable list/clear entrypoint; the Node-async path (rafttest/node.go ready loop) still auto-sends messages with no capture store.",
       "limitations": [
-        "真实网络发送在系统边界外；库只输出 Ready.Messages，从不自行发送。",
-        "Node 路径的 Ready 经通道异步交付，捕获点在应用侧。",
-        "AsyncStorageWrites 下对等输出内嵌于本地存储消息的 Responses，需先处理本地存储线程才可见。"
+        "Real network send (outside boundary) is not captured; only the protocol output inside the module.",
+        "Path coverage: RawNode and AsyncStorageWrites paths park messages; the Node-async goroutine path (rafttest/node.go) does not."
       ],
-      "suggested_direction": "以 rafttest 为宿主扩展捕获层（ID 分配 + list/clear + 数据驱动命令），并让包装同时覆盖同步与异步存储路径。",
+      "suggested_direction": "Add low-intrusion capture support in rafttest (ID assignment + list/clear); protocol output path (r.msgs -> Ready) remains unchanged.",
       "entrypoints": [
-        "RawNode.Ready (rawnode.go:133)",
-        "RawNode.Advance (rawnode.go:482)",
-        "Node.Ready 通道 (node.go:552)",
-        "rafttest InteractionEnv.ProcessReady (interaction_env_handler_process_ready.go:45)",
-        "rafttest InteractionEnv.ProcessAppendThread (interaction_env_handler_process_append_thread.go:47)",
-        "rafttest InteractionEnv.Messages 字段 (interaction_env.go:52)"
+        "RawNode.Ready / readyWithoutAccept (rawnode.go:133, 141)",
+        "rafttest ProcessReady (rafttest/interaction_env_handler_process_ready.go:45)",
+        "rafttest env.Messages pending slice (rafttest/interaction_env.go:52)",
+        "rafttest ProcessAppendThread / ProcessApplyThread (rafttest/interaction_env_handler_process_append_thread.go:47, process_apply_thread.go:46)",
+        "rafttest node Ready loop (rafttest/node.go:74)"
       ],
       "existing_test_interface_complete": false,
-      "test_support_reason": "env.Messages 已是真实 pending 存储且捕获后不会自动继续，但契约要求可调用入口按稳定消息 ID 列出（含 sender/receiver/type/捕获顺序）并可清空；现有接口既无稳定控制面 ID 也无 list/clear 入口，属于低侵入即可补齐的测试面缺口。",
+      "test_support_reason": "env.Messages is a raw exported slice: no stable message IDs, no callable ListPending/ClearPending, and the Node-async path has no capture at all. Per the capture contract this is only a primitive, so additional rafttest support is required.",
       "suggested_changes": [
-        "在 rafttest InteractionEnv 之上增加捕获层：为 env.Messages 中每条消息分配稳定控制面 ID，提供 ListPending()/ClearPending() 及对应数据驱动命令。",
-        "为 RawNode/Node 路径提供包装：在 Ready()/ProcessReady 处接管 rd.Messages 存入带 ID 的 pending 存储，阻止自动发送，由测试控制是否 Advance。",
-        "AsyncStorageWrites 路径：在 ProcessAppendThread 处理 Responses 时（现 interaction_env_handler_process_append_thread.go:77）同步登记 ID。"
+        "Extend rafttest.InteractionEnv with a captured-message store that assigns a stable control-plane ID when ProcessReady parks messages, plus ListPending() and ClearPending() entrypoints.",
+        "Add a capture hook in rafttest/node.go's Ready loop (line 85) to route rd.Messages into the same pending store instead of iface.send.",
+        "Keep suppression semantics: messages stay parked until explicitly delivered (DeliverMsgs/Stabilize already guarantee no auto-continuation on the RawNode path).",
+        "Declare ID scope (per-InteractionEnv pending store) in the interface report."
       ],
       "execution_paths": [
-        "RawNode 同步路径：输出点为 Ready().Messages（readyWithoutAccept rawnode.go:141-189），消息不会自动继续，continuation 是应用发送后调用 Advance；suppression 点是应用不发送（acceptReady 在 rawnode.go:433 清空 r.msgs）。仅有捕获原语，无带 ID 的 pending 存储。",
-        "Node 异步路径：输出点为 Ready 通道（node.go:440 readyc <- rd），捕获点在应用侧接收 Ready 处；消息同样不自动继续。",
-        "AsyncStorageWrites 路径：对等输出内嵌于 MsgStorageAppend.Responses（rawnode.go:257），经 MsgStorageAppendResp/ApplyResp 回注状态机；rafttest 中响应消息在 ProcessAppendThread 处理后才汇入 env.Messages（interaction_env_handler_process_append_thread.go:77）。",
-        "rafttest InteractionEnv 路径：ProcessReady 捕获非本地消息到 env.Messages（保持捕获顺序、sender/receiver/type 可用），本地存储消息分别进入 AppendWork/ApplyWork；投递/丢弃由 DeliverMsgs 显式触发，捕获后不自动继续。"
+        "RawNode synchronous path: readyWithoutAccept exposes r.msgs (rawnode.go:147); ProcessReady moves rd.Messages into env.Messages; no automatic continuation (delivery only via DeliverMsgs/Stabilize)",
+        "Node async goroutine path: node.run emits Ready on readyc (node.go:440); rafttest/node.go goroutine sends rd.Messages via iface.send immediately (rafttest/node.go:85-91) - no pending store",
+        "AsyncStorageWrites path: MsgStorageAppend/MsgStorageApply go to AppendWork/ApplyWork (process_ready.go:60-76); their Responses are appended to env.Messages after thread processing (process_append_thread.go:77, process_apply_thread.go:67)"
       ],
       "obligations": {}
     },
@@ -271,47 +265,53 @@
           "file": "rafttest/interaction_env_handler_deliver_msgs.go",
           "symbol": "(*InteractionEnv).DeliverMsgs",
           "line": 81,
-          "reason": "注入原语：按接收者/类型从 env.Messages 取出消息并通过真实目标 RawNode 的 Step 投递。"
-        },
-        {
-          "file": "rafttest/interaction_env.go",
-          "symbol": "Node",
-          "line": 37,
-          "reason": "真实目标绑定：Node 结构内嵌 *raft.RawNode，由 env.Nodes 切片持有。"
+          "reason": "Existing delivery path: selects messages by recipient ID and delivers through the real RawNode binding via Step; lacks stable-ID selection."
         },
         {
           "file": "rawnode.go",
           "symbol": "(*RawNode).Step",
           "line": 118,
-          "reason": "RawNode 正常协议输入入口，注入消息经其进入状态机。"
+          "reason": "Normal protocol input entrypoint used by injection; mutates no protocol state directly."
+        },
+        {
+          "file": "node.go",
+          "symbol": "(*node).stepWithWaitOption",
+          "line": 513,
+          "reason": "Normal asynchronous protocol input boundary (recvc/propc channels) for the Node path."
+        },
+        {
+          "file": "rafttest/interaction_env.go",
+          "symbol": "InteractionEnv.Nodes",
+          "line": 51,
+          "reason": "Real target-object binding: node index -> *raft.RawNode used by delivery."
         }
       ],
-      "boundary": "注入通过目标节点的正常协议输入入口（RawNode.Step / node.Step，最终进入 raft.Step）完成，不直接改写协议状态；目标绑定为 rafttest Node 切片中真实持有的 *raft.RawNode 或调用方持有的 Node/RawNode 对象引用。",
-      "gap": "缺少按稳定 ID 选择并投递单条 pending 消息的入口；现有 DeliverMsgs 不保证只消费选定的一条消息。",
-      "reason": "投递原语与真实目标绑定已存在：rafttest 的 DeliverMsgs 通过 env.Nodes[toIdx].Step(msg) 同步把消息送入真实目标对象（interaction_env_handler_deliver_msgs.go:98），From/To/内容保持不变；RawNode.Step 与 node.Step 均为正常协议输入入口。但选择方式是接收者+类型批量匹配，缺少按稳定控制面 ID 单选一条消息并只消费该消息的注入入口。",
+      "boundary": "Injection enters Node.Step / RawNode.Step (normal protocol input); no direct mutation of protocol state; real transport outside.",
+      "gap": "No callable inject-by-stable-ID; DeliverMsgs selects by recipient only; control-plane IDs are never assigned and ID scope is undeclared.",
+      "reason": "Real target bindings and the normal protocol input boundary exist (RawNode.Step, Node.Step via recvc; env.Nodes slice; rafttest node iface), and delivery preserves sender/receiver/content, but selection is by recipient ID and type rather than a stable control-plane message ID, and no inject-by-ID entrypoint exists.",
       "limitations": [
-        "Node 路径注入为异步（recvc 通道），无同步错误返回。",
-        "RawNode.Step / node.Step 会拒绝本地消息类型（IsLocalMsg 检查，rawnode.go:120），注入范围限定为对等协议消息。",
-        "目标 ID 本身不是目标绑定；现有绑定来自 env.Nodes 切片持有的真实 RawNode 对象。"
+        "Injection on the Node-async path requires a started node wrapper (rafttest/node.go) with its own goroutine; delivery is asynchronous.",
+        "Real transports outside the boundary are not injection targets; only protocol input entrypoints are used."
       ],
-      "suggested_direction": "在 message_capture 的捕获层上同步实现按 ID 注入，选择与投递都经由同一 pending 存储。",
+      "suggested_direction": "Extend rafttest with stable-ID inject reusing existing Step delivery; no core raft changes needed.",
       "entrypoints": [
         "RawNode.Step (rawnode.go:118)",
-        "Node.Step (node.go:478)",
-        "rafttest InteractionEnv.DeliverMsgs (interaction_env_handler_deliver_msgs.go:81)",
-        "rafttest InteractionEnv.Nodes（真实 RawNode 持有者，interaction_env.go:37）"
+        "Node.Step / stepWithWaitOption (node.go:478, 513)",
+        "rafttest DeliverMsgs (rafttest/interaction_env_handler_deliver_msgs.go:81)",
+        "rafttest env.Nodes target binding (rafttest/interaction_env.go:51)",
+        "rafttest node iface / pause-resume buffering (rafttest/node.go:93, 101-114)"
       ],
       "existing_test_interface_complete": false,
-      "test_support_reason": "真实目标绑定与投递原语齐备（对象切片 + Step），但现有 DeliverMsgs 按接收者+类型批量投递，无法按稳定控制面 ID 精确选择并只消费一条消息，缺一个低侵入的按 ID 注入入口。",
+      "test_support_reason": "Delivery through the normal input boundary with preserved sender/receiver/content exists, but the contract requires selecting one captured message by a stable control-plane ID; IDs do not exist yet and there is no inject-by-ID entrypoint or declared ID scope.",
       "suggested_changes": [
-        "在捕获层提供 Inject(id)/Deliver(id)：按 ID 取出单条消息，同步调用 env.Nodes[msg.To-1].Step(msg) 投递，投递后从 pending 存储移除，并声明 ID 属于 pending 存储作用域。",
-        "为 Node 路径提供基于 ID 的注入：通过 node.Step(ctx, m)（异步）投递，保持 sender/receiver/content 不变。"
+        "Add InteractionEnv.InjectByID(id) that selects a captured message from the pending store by stable control-plane ID and delivers it through the recorded target binding (env.Nodes[toIdx].Step, or node.Step on the async path).",
+        "Assign IDs at capture time in the same store built for message_capture; document ID scope (per-InteractionEnv pending store).",
+        "Verify sender/receiver/content preservation in tests after injection; keep injection confined to Step so protocol state is not mutated directly."
       ],
       "execution_paths": [
-        "RawNode 同步路径：测试持有 *RawNode 引用，调用 rn.Step(m) 同步注入；目标绑定为直接对象引用；缺少按稳定 ID 从 pending 存储单选消息的协调层。",
-        "Node 异步路径：node.Step(ctx, m) 将消息送入 recvc 通道，由 run() 循环处理（node.go:399-404），注入为异步、无同步错误返回；消息内容原样保留。",
-        "rafttest 路径：DeliverMsgs 按接收者+类型（或丢弃）匹配 env.Messages 中的消息，同步调用目标节点 Step；目标绑定为 env.Nodes[msg.To-1].RawNode（真实对象，按 To 路由）。",
-        "AsyncStorageWrites 路径：本地存储响应消息（MsgStorageAppendResp/ApplyResp）经 Step 回注，属于既有协议输入路径，无需另行注入。"
+        "RawNode synchronous path: DeliverMsgs -> env.Nodes[toIdx].Step(msg) (deliver_msgs.go:97-101); synchronous delivery; sender/receiver/content preserved",
+        "Node async goroutine path: node.Step(ctx,m) -> recvc (node.go:516) -> run loop -> raft.Step (node.go:404); asynchronous delivery",
+        "AsyncStorageWrites path: storage-thread Responses appended to env.Messages (process_append_thread.go:77) and later delivered to the node via Step; MsgStorageAppend/MsgStorageApply can also be stepped directly"
       ],
       "obligations": {}
     },
@@ -322,49 +322,50 @@
           "file": "status.go",
           "symbol": "Status",
           "line": 26,
-          "reason": "状态结构：BasicStatus（ID/HardState/SoftState/Applied/LeadTransferee）+ Config + Progress。"
+          "reason": "Aggregates BasicStatus (ID, HardState, SoftState, Applied) plus Config and leader Progress."
         },
         {
           "file": "status.go",
           "symbol": "getStatus",
           "line": 68,
-          "reason": "只读聚合现有状态并返回副本，不创建协议状态。"
+          "reason": "Read-only snapshot of role, term, vote, commit, applied, lead, progress, and config."
+        },
+        {
+          "file": "storage.go",
+          "symbol": "(*MemoryStorage).LastIndex",
+          "line": 174,
+          "reason": "Module-provided accessor enabling log-range observation (with FirstIndex/Term/Entries)."
         },
         {
           "file": "rawnode.go",
-          "symbol": "(*RawNode).Status",
-          "line": 498,
-          "reason": "RawNode 侧只读状态访问器。"
-        },
-        {
-          "file": "rafttest/interaction_env_handler_raft_log.go",
-          "symbol": "(*InteractionEnv).RaftLog",
-          "line": 33,
-          "reason": "测试面日志范围观察入口（经 Storage.Entries）。"
+          "symbol": "(*RawNode).BasicStatus",
+          "line": 505,
+          "reason": "Allocation-free read-only status accessor on the RawNode path."
         }
       ],
-      "boundary": "观察量为协议库内节点/全局状态：role（SoftState.RaftState）、term/vote/commit（HardState）、applied、日志范围与 Progress；全部通过只读访问器暴露，不创建协议状态。",
+      "boundary": "Node/RawNode status APIs and module-provided Storage inside the boundary; application state machine internals outside.",
       "gap": null,
-      "reason": "Status/BasicStatus/WithProgress 提供 role、term、vote、commit、applied、lead、Progress 与配置视图；rafttest 的 status / raft-log / raft-state 命令可直接输出观察量；均为只读。",
+      "reason": "Status/BasicStatus/WithProgress expose role, term, commit, applied, lead, progress, and config; log range is observable via the module-provided MemoryStorage (FirstIndex/LastIndex/Term/Entries) and rafttest raft-log/raft-state/status handlers. All read-only, no protocol state created.",
       "limitations": [
-        "Progress 仅在 leader 填充（status.go:25-30）。",
-        "rafttest 的 Status 处理器目前只打印 Progress 映射（interaction_env_handler_status.go:34 TODO）。"
+        "RawNode/Node do not expose an in-memory firstIndex; log range is read through Storage, which is application-backed outside the boundary for real deployments.",
+        "Status.Progress is only populated on the leader (status.go:71-73)."
       ],
       "suggested_direction": null,
       "entrypoints": [
+        "Node.Status (node.go:574)",
         "RawNode.Status (rawnode.go:498)",
         "RawNode.BasicStatus (rawnode.go:505)",
         "RawNode.WithProgress (rawnode.go:521)",
-        "Node.Status (node.go:574)",
-        "rafttest Status / RaftLog / handleRaftState 处理器"
+        "MemoryStorage.FirstIndex/LastIndex/Term/Entries (storage.go:186, 174, 159, 135)",
+        "rafttest status/raft-log/raft-state handlers (rafttest/interaction_env_handler_status.go:33, raft_log.go:33, raftstate.go:36)"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "现有 Status/BasicStatus/WithProgress 与 rafttest 输出命令直接满足观察契约（role/term/commit/applied/log range），无需新增目标代码。",
+      "test_support_reason": "The Status API plus MemoryStorage accessors directly satisfy the observation contract (role, term, commit_index, applied_index, log_range) without new target code; a read-only wrapper is unnecessary.",
       "suggested_changes": [],
       "execution_paths": [
-        "RawNode 同步路径：Status()/BasicStatus()/WithProgress() 同步返回状态快照。",
-        "Node 异步路径：Status() 经 status 通道由 run() 循环内的 getStatus 应答（node.go:452-453）。",
-        "rafttest 路径：status 命令打印 Progress 映射，raft-log 命令经 Storage.Entries 打印日志范围，raft-state 命令打印各节点 role/term/lead。"
+        "RawNode synchronous path: Status/BasicStatus/WithProgress direct read of raft state (status.go:68)",
+        "Node async path: Node.Status round-trips through the status channel in node.run (node.go:452-453)",
+        "rafttest paths: status/raft-state handlers call n.Status(); raft-log handler reads Storage"
       ],
       "obligations": {}
     },
@@ -375,51 +376,52 @@
           "file": "raft.go",
           "symbol": "(*raft).resetRandomizedElectionTimeout",
           "line": 2049,
-          "reason": "唯一协议随机选择点，使用不可播种的 globalRand（crypto/rand）。"
+          "reason": "Randomness production point: randomizedElectionTimeout = electionTimeout + globalRand.Intn(electionTimeout)."
         },
         {
           "file": "raft.go",
-          "symbol": "lockedRand.Intn",
-          "line": 95,
-          "reason": "随机源实现基于 crypto/rand.Reader，无种子、无注入点。"
+          "symbol": "lockedRand",
+          "line": 91,
+          "reason": "Global non-seedable crypto/rand source shared by all raft instances; no injection point."
         },
         {
           "file": "raft_test.go",
           "symbol": "SetRandomizedElectionTimeout",
           "line": 4098,
-          "reason": "测试二进制内导出的固定随机值钩子，外部消费者不可见。"
+          "reason": "Only existing control mechanism; defined in a test file, so unavailable in shipped library builds."
         },
         {
-          "file": "rafttest/interaction_env_handler_set_randomized_election_timeout.go",
-          "symbol": "(*InteractionEnv).handleSetRandomizedElectionTimeout",
-          "line": 24,
-          "reason": "rafttest 侧固定随机化超时值的可调用入口。"
+          "file": "raft.go",
+          "symbol": "(*raft).reset",
+          "line": 793,
+          "reason": "Re-randomization on every role transition overwrites any fixed value."
         }
       ],
-      "boundary": "协议相关随机性仅体现在 randomizedElectionTimeout（electionTimeout 到 2*electionTimeout-1），来源为包级 globalRand 的 crypto/rand，抽取点在 resetRandomizedElectionTimeout。",
-      "gap": "随机源不可注入/播种（crypto/rand），固定值钩子仅存在于测试二进制且会被 reset() 重新随机化，无法实现同一种子的可复现随机选择。",
-      "reason": "测试侧已有 SetRandomizedElectionTimeout（raft_test.go:4098，仅在测试二进制中导出）与 rafttest 的 set-randomized-election-timeout 命令（经 InteractionOpts 管道）直接改写随机化超时值；但随机源 crypto/rand 不可播种，且 reset() 在每次状态转换（becomeFollower/Candidate/Leader）时重新抽取（raft.go:793），无法满足“同一种子产生可复现随机选择”的完整契约。",
+      "boundary": "Randomized election timeout selection inside the raft core; test harnesses outside.",
+      "gap": "No shipped Config option or injectable random source; test-only setter is unavailable to library consumers and is overwritten by r.reset on each role transition.",
+      "reason": "The only protocol randomization (randomized election timeout) draws from a global crypto/rand source (raft.go:91-102, 2049-2051) with no Config option or injectable source. The only setter, raft.SetRandomizedElectionTimeout, lives in raft_test.go (test-only, not shipped) and is overwritten by r.reset on every role transition.",
       "limitations": [
-        "随机化超时在每次状态转换的 reset() 中重新抽取（raft.go:793），固定值在转换后失效。",
-        "SetRandomizedElectionTimeout 定义在 raft_test.go（测试文件），模块外部使用者无法导入。"
+        "Same seed determinism is impossible with crypto/rand; even a fixed value is lost on each becomeFollower/becomeCandidate/becomeLeader.",
+        "rafttest data-driven tests work only because raft_test.go exports the setter within this repo's test builds."
       ],
-      "suggested_direction": "优先为 Config 增加种子化随机源，使 same-seed 可复现；保留 rafttest 命令作为直接固定手段。",
+      "suggested_direction": "Expose the existing random choice via a Config option or public setter; do not replace the election-timeout algorithm.",
       "entrypoints": [
         "raft.resetRandomizedElectionTimeout (raft.go:2049)",
-        "raft.globalRand (raft.go:102)",
-        "raft.SetRandomizedElectionTimeout（测试文件导出，raft_test.go:4098）",
-        "rafttest set-randomized-election-timeout 处理器 (interaction_env_handler_set_randomized_election_timeout.go:24)"
+        "raft.reset -> resetRandomizedElectionTimeout (raft.go:793)",
+        "raft.SetRandomizedElectionTimeout (raft_test.go:4098, test-only export)",
+        "rafttest InteractionOpts.SetRandomizedElectionTimeout (rafttest/interaction_env.go:31-33)",
+        "rafttest set-randomized-election-timeout handler (rafttest/interaction_env_handler_set_randomized_election_timeout.go:24)"
       ],
       "existing_test_interface_complete": false,
-      "test_support_reason": "现有钩子+处理器只能固定单个随机值，且依赖测试二进制内的导出函数与 InteractionOpts 管道；随机源本身不可播种，状态转换后固定值失效，测试接口不完整。",
+      "test_support_reason": "The shipped library exposes no Config option, injected source, or hook for the randomized election timeout; the sole setter is a test-only symbol and is clobbered on state transitions, so external test code cannot produce repeatable random choices.",
       "suggested_changes": [
-        "为 Config 增加可选的随机源/种子字段（如 RandSeed 或 rand 源），newRaft 时构造 r.rand，resetRandomizedElectionTimeout 改用 r.rand.Intn，默认回退 crypto/rand；低侵入且不替换算法。",
-        "或保留现有钩子并文档化其测试二进制限定与状态转换重置行为，为 RawNode 提供同等测试构造器。"
+        "Add a Config option (e.g., RandomizedElectionTimeout override or a small rand-source hook) consulted in resetRandomizedElectionTimeout (raft.go:2049).",
+        "Alternatively promote a public RawNode setter that suppresses re-randomization when set (guard in r.reset).",
+        "Wire the option through rafttest raftConfigStub/AddNodes so data-driven tests no longer depend on the test-file export."
       ],
       "execution_paths": [
-        "RawNode 路径：randomizedElectionTimeout 在 reset() 时由 globalRand.Intn 抽取，tickElection 经 pastElectionTimeout 触发选举；测试只能通过测试二进制内的 SetRandomizedElectionTimeout 改写。",
-        "Node 路径：同一状态机字段，经 Tick 通道驱动，无额外随机源。",
-        "rafttest 路径：set-randomized-election-timeout 命令在状态转换前固定超时值，状态转换后失效（reset 重新抽取）。"
+        "Election path: becomeFollower/becomeCandidate -> r.reset (raft.go:784) -> resetRandomizedElectionTimeout -> globalRand.Intn(crypto/rand) -> randomizedElectionTimeout [electionTimeout, 2*electionTimeout)",
+        "rafttest path: set-randomized-election-timeout handler -> Options.SetRandomizedElectionTimeout -> raft.SetRandomizedElectionTimeout direct field write (test-only, resets on next state transition)"
       ],
       "obligations": {}
     },
@@ -427,52 +429,52 @@
       "status": "SUPPORTED",
       "evidence": [
         {
+          "file": "node.go",
+          "symbol": "(*node).Tick",
+          "line": 463,
+          "reason": "Explicit tick entrypoint on the async Node path; no wall-clock dependence."
+        },
+        {
           "file": "rawnode.go",
           "symbol": "(*RawNode).Tick",
           "line": 64,
-          "reason": "显式逻辑时钟推进入口。"
+          "reason": "Explicit tick entrypoint on the synchronous RawNode path."
         },
         {
           "file": "raft.go",
           "symbol": "(*raft).tickElection",
           "line": 850,
-          "reason": "选举超时完全由 tick 计数驱动，无墙钟依赖。"
-        },
-        {
-          "file": "raft.go",
-          "symbol": "(*raft).tickHeartbeat",
-          "line": 862,
-          "reason": "心跳超时完全由 tick 计数驱动。"
+          "reason": "Election timeout is purely a tick counter; no ForceElection or time.Now shortcut exists."
         },
         {
           "file": "rafttest/interaction_env_handler_tick.go",
           "symbol": "(*InteractionEnv).Tick",
           "line": 34,
-          "reason": "测试面确定性推进时间的入口。"
+          "reason": "Test harness advances time by explicit tick counts, including election/heartbeat intervals."
         }
       ],
-      "boundary": "协议时间完全由显式 Tick 驱动：tick 计数推进 electionElapsed/heartbeatElapsed，选举与心跳超时以 tick 为单位；库的非测试代码不读取墙钟。",
+      "boundary": "Tick-driven clock inside the raft core; wall-clock tickers used by test harnesses outside the protocol core.",
       "gap": null,
-      "reason": "RawNode.Tick / Node.Tick / rafttest Tick 均为可调用的确定性推进入口，tickElection/tickHeartbeat 在 tick 计数上触发事件，符合 accepted v0.1 形式 explicit_tick；库内无散布的墙钟使用（非测试代码不导入 time，state_trace.go 位于 with_tla 构建标签下）。",
+      "reason": "The protocol observes time exclusively through explicit Tick counters (Node.Tick, RawNode.Tick, TickQuiesced); no wall clock is used anywhere in the non-test raft package (no time.Now in raft core), so tests advance time deterministically via tick.",
       "limitations": [
-        "TickQuiesced（rawnode.go:78）已废弃，不应用于新测试。",
-        "Node.Tick 在 run 循环繁忙时可能丢弃 tick 并仅告警（node.go:467-469）。",
-        "ReadOnlyLeaseBased 依赖应用层时钟漂移假设（raft.go:63-67），时钟本身在系统边界外。"
+        "rafttest/node.go uses a real 5ms time.Ticker (rafttest/node.go:67) in its demo Node wrapper; that is harness-side and not part of the protocol's time model.",
+        "No injectable wall-clock exists, but none is needed: the protocol has no wall-clock reads."
       ],
       "suggested_direction": null,
       "entrypoints": [
-        "RawNode.Tick (rawnode.go:64)",
-        "RawNode.TickQuiesced (rawnode.go:78，已废弃)",
         "Node.Tick (node.go:463)",
-        "rafttest Tick / tick-election / tick-heartbeat (interaction_env_handler_tick.go:34)"
+        "RawNode.Tick (rawnode.go:64)",
+        "RawNode.TickQuiesced (rawnode.go:78)",
+        "raft.tickElection / tickHeartbeat (raft.go:850, 862)",
+        "rafttest tick-election / tick-heartbeat handlers (rafttest/interaction_env_handler_tick.go:23-31)"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "显式 Tick 入口在 RawNode、Node 与 rafttest 三层均可直接调用，协议内无墙钟使用，无需时钟注入即可确定性推进时间。",
+      "test_support_reason": "Explicit Tick satisfies the explicit_tick accepted form directly on both Node and RawNode; the protocol's only time inputs are tick counters, so no coordination wrapper or injectable clock is required.",
       "suggested_changes": [],
       "execution_paths": [
-        "RawNode 同步路径：Tick() 直接调用 raft.tick()（tickElection/tickHeartbeat），测试可逐 tick 推进。",
-        "Node 异步路径：Tick() 向缓冲 tickc 通道发送（容量 128），由 run() 循环消费并调用 n.rn.Tick()（node.go:438-439）。",
-        "rafttest 路径：Tick(idx, num) 循环调用节点 Tick，tick-election/tick-heartbeat 命令按配置的 ElectionTick/HeartbeatTick 推进。"
+        "Node async path: Node.Tick -> tickc (buffered, node.go:328) -> run loop (node.go:438-439) -> rn.Tick -> raft.tick()",
+        "RawNode synchronous path: RawNode.Tick -> raft.tick() (rawnode.go:64-66)",
+        "rafttest path: env.Tick(idx, n) loops explicit Tick calls (rafttest/interaction_env_handler_tick.go:34-38)"
       ],
       "obligations": {}
     }

@@ -242,6 +242,91 @@ class SplitCapabilityRuntime:
         return json.dumps(review_report())
 
 
+class ReviewerRevisionRuntime:
+    """Reviewer 阻塞问题应在下一 fresh worktree 中修订既有候选。"""
+
+    def __init__(self) -> None:
+        self.transform_round = 0
+        self.review_round = 0
+        self.saw_prior_candidate = False
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
+    ) -> str:
+        if agent == "analyzer":
+            return json.dumps(capability_report())
+        if agent == "transformer":
+            self.transform_round += 1
+            assert tools is not None
+            payload = json.loads(user_prompt)
+            if self.transform_round == 1:
+                content = "package mini\n\nfunc InjectVersion() int { return 1 }\n"
+            else:
+                assert payload["feedback"]["failure"] == "REVIEW_REVISE_AGENT2"
+                read = json.loads(
+                    tools.execute(
+                        "read_file",
+                        json.dumps(
+                            {
+                                "scope": "worktree",
+                                "path": "injection_seam.go",
+                                "start": 1,
+                                "end": 20,
+                            }
+                        ),
+                    )
+                )
+                self.saw_prior_candidate = "return 1" in "\n".join(
+                    read["result"]["lines"]
+                )
+                content = "package mini\n\nfunc InjectVersion() int { return 2 }\n"
+            written = json.loads(
+                tools.execute(
+                    "write_file",
+                    json.dumps({"path": "injection_seam.go", "content": content}),
+                )
+            )
+            assert written["ok"] is True
+            return json.dumps(
+                {
+                    "message_injection": {
+                        "implemented": True,
+                        "message_id_scope": "test_session",
+                        "entrypoint": {
+                            "file": "injection_seam.go",
+                            "symbol": "InjectVersion",
+                        },
+                        "implementation_approach": ["target-native test seam"],
+                    }
+                }
+            )
+
+        self.review_round += 1
+        review = review_report()
+        if self.review_round == 1:
+            review["overall"] = "REVISE_AGENT2"
+            for check in review["checks"]:
+                if check["name"] == "testing_contract_conformance":
+                    check["result"] = "FAIL"
+            review["issues"] = [
+                {
+                    "capability": "message_injection",
+                    "file": "injection_seam.go",
+                    "symbol": "InjectVersion",
+                    "reason": "The first candidate needs an implementation revision.",
+                }
+            ]
+        return json.dumps(review)
+
+
 class GuardrailFakeRuntime:
     def __init__(self, mode: str) -> None:
         self.mode = mode
@@ -508,6 +593,31 @@ def test_patch_splits_multiple_capabilities_into_independent_transform_calls(
     )
     assert interface["message_capture"]["implemented"] is True
     assert interface["message_injection"]["implemented"] is True
+
+
+def test_reviewer_revision_continues_from_prior_candidate_in_fresh_worktree(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
+    runtime = ReviewerRevisionRuntime()
+
+    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(
+        load_project(manifest)
+    )
+
+    assert result.outcome is WorkflowOutcome.PASS
+    assert runtime.transform_round == 2
+    assert runtime.review_round == 2
+    assert runtime.saw_prior_candidate is True
+    first = result.run_directory / "patched-worktree/injection_seam.go"
+    revised = result.run_directory / "patched-worktree-a1-p2/injection_seam.go"
+    assert "return 1" in first.read_text(encoding="utf-8")
+    assert "return 2" in revised.read_text(encoding="utf-8")
+    usage = (result.run_directory / "USAGE.md").read_text(encoding="utf-8")
+    assert "总体结论：`PASS`" in usage
 
 
 def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:

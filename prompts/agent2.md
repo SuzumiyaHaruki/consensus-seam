@@ -21,6 +21,15 @@ Agent 1 reports materially distinct in-scope paths in `execution_paths`. Attempt
 
 List successfully supported paths in `covered_paths`. List every remaining discovered path in `uncovered_paths` with a concrete reason in `notes`. Paths outside the supplied system boundary do not need implementation.
 
+For every claimed path, state the actual consumer scope of its entrypoints: externally importable, same-package test only, or internal harness only. Do not call a path generally covered when the declared user cannot call its entrypoint. Internal test support can still be valuable, but report its narrower scope honestly or list the externally inaccessible path as uncovered.
+
+Apply these target-independent interface-hygiene rules:
+
+- returned snapshots must not expose mutable aliases into protocol or controller state; use an existing clone operation when available, copy mutable nested data when necessary, or narrow and document the claim;
+- new metadata must have one authoritative relationship to the underlying state and remain consistent with every existing mutation path; do not assume two parallel containers stay index-aligned when an existing public API can mutate only one;
+- new configuration values must preserve the target's existing legal domain or reject invalid inputs explicitly; do not silently create states the target normally considers impossible;
+- `notes` and `uncovered_paths` describe the candidate after your changes. Do not repeat an Analyzer gap as a remaining limitation when your implementation has resolved it.
+
 The basic message-capture objective is to:
 
 - obtain protocol output in the declared test path;
@@ -38,6 +47,8 @@ The basic message-injection objective is to:
 - consume only the selected message after success;
 - preserve sender, receiver, and content.
 
+An attempted asynchronous send is not automatically a successful injection. Consume the selected pending record only after the declared normal input boundary has accepted it. If the target exposes no acknowledgement and may silently drop the attempt, retain the record, return an honest uncertain outcome using existing target semantics, or report that path as uncovered. Do not invent an acknowledgement protocol merely to claim coverage.
+
 If the selected entrypoint returns synchronous errors, preserve the target's existing error semantics and document them in `notes`. Do not invent a new protocol error model or a wait-for-quiescence operation merely to make targets uniform.
 
 Declare the message-ID scope. Record in the interface report:
@@ -52,7 +63,7 @@ Before patching an existing file, read the exact target range and use its curren
 
 If source inspection shows that a supposedly patchable capability requires core protocol changes or invented target semantics, stop work on that capability and report `INVASIVE_REDISCOVERED`. Do not force an implementation.
 
-When `feedback` identifies a post-hoc repair run, the supplied worktree already contains the prior candidate patch. Repair that candidate instead of generating an unrelated interface from scratch. Preserve the public interface described by the prior interface report unless the deterministic failure demonstrates that the interface design itself is invalid. Do not modify evaluator-provided tests.
+When `feedback` requests a revision or identifies a post-hoc repair run, the supplied worktree may already contain the prior candidate patch. Inspect and revise that candidate instead of generating an unrelated interface from scratch. Preserve its public interface unless the review or deterministic failure demonstrates that the design is invalid. Do not modify evaluator-provided tests.
 
 Use only the supplied local tools and edit only the isolated worktree. Do not modify existing tests to weaken verification.
 

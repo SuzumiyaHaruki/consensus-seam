@@ -1,0 +1,7 @@
+{
+  "command": "gofmt -w raft.go rafttest/doc.go rafttest/inject.go rafttest/inject_test.go rafttest/interaction_env.go rafttest/interaction_env_handler_deliver_msgs.go rafttest/interaction_env_handler_process_append_thread.go rafttest/interaction_env_handler_process_apply_thread.go rafttest/interaction_env_handler_process_ready.go rafttest/interaction_env_handler_send_snapshot.go rafttest/node.go rafttest/pending_msgs.go rafttest/pending_msgs_test.go randomized_election_timeout_test.go",
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "duration_seconds": 0.022740779000741895
+}

@@ -274,7 +274,7 @@ class ConsensusWorkflow:
         artifacts.write_model("interface-report.json", current_interface)
         artifacts.write_model("review-report.json", source.review_report)
         artifacts.write_text("changes.patch", current_patch)
-        artifacts.write_usage(report, current_interface)
+        artifacts.write_usage(report, current_interface, source.review_report)
         artifacts.write_json(
             "post-hoc-checks.json",
             posthoc.manifest.model_dump(mode="json"),
@@ -549,6 +549,10 @@ class ConsensusWorkflow:
 
             requested_reanalysis = False
             agent2_feedback: dict[str, Any] | None = None
+            # build、Reviewer 或 Verifier 要求 Agent 2 修订时，下一轮仍从
+            # clean HEAD 创建 worktree，但先重放上一版候选。这样保留已审查
+            # 的接口设计，同时不继承原工作目录中的非 Git 残留状态。
+            prior_candidate_patch: str | None = None
             for patch_round in range(1, limits.agent2_patch_rounds + 1):
                 # 每个 patch round 都从目标 HEAD 创建全新 worktree，失败候选
                 # 的残留文件不会进入下一轮。
@@ -561,6 +565,8 @@ class ConsensusWorkflow:
                     project.repository,
                     artifacts.run_directory / worktree_name,
                 )
+                if prior_candidate_patch is not None:
+                    worktree.apply_patch(prior_candidate_patch)
                 interface_report = self._transform_selected_capabilities(
                     project,
                     report,
@@ -582,6 +588,7 @@ class ConsensusWorkflow:
                     # 实作阶段发现侵入性时，整个候选 worktree 作废；只把状态
                     # 合并回报告，再从 HEAD 处理剩余 PATCHABLE 能力。
                     report.apply_rediscovered(rediscovered)
+                    prior_candidate_patch = None
                     artifacts.write_model("capability-report.json", report)
                     artifacts.write_usage(report, interface_report)
                     artifacts.write_json(
@@ -622,6 +629,7 @@ class ConsensusWorkflow:
                             "files": protected_tests,
                         },
                     )
+                    prior_candidate_patch = None
                     agent2_feedback = {
                         "failure": "EXISTING_TEST_MODIFIED",
                         "files": protected_tests,
@@ -640,19 +648,35 @@ class ConsensusWorkflow:
                     label=label,
                 )
                 if not format_result.passed:
+                    prior_candidate_patch = worktree.diff()
                     agent2_feedback = {
                         "failure": "FORMAT_FAILED",
                         "execution": format_result.model_dump(mode="json"),
+                        "prior_interface_report": interface_report.model_dump(
+                            mode="json", exclude_none=True
+                        ),
+                        "instruction": (
+                            "The prior candidate is already applied in the fresh "
+                            "worktree. Revise it instead of regenerating from HEAD."
+                        ),
                     }
                     continue
 
                 if build_result is None or not build_result.passed:
+                    prior_candidate_patch = worktree.diff()
                     agent2_feedback = {
                         "failure": "BUILD_FAILED",
                         "execution": (
                             None
                             if build_result is None
                             else build_result.model_dump(mode="json")
+                        ),
+                        "prior_interface_report": interface_report.model_dump(
+                            mode="json", exclude_none=True
+                        ),
+                        "instruction": (
+                            "The prior candidate is already applied in the fresh "
+                            "worktree. Revise it instead of regenerating from HEAD."
                         ),
                     }
                     continue
@@ -667,6 +691,7 @@ class ConsensusWorkflow:
                     label=label,
                     invocation_id=f"reviewer-a{analysis_round}-p{patch_round}",
                 )
+                prior_candidate_patch = git_diff
 
                 if review.overall is ReviewOverall.REVISE_AGENT1:
                     # 语义边界/能力分类错误才回到 Analyzer。
@@ -674,8 +699,19 @@ class ConsensusWorkflow:
                     requested_reanalysis = True
                     break
                 if review.overall is ReviewOverall.REVISE_AGENT2:
-                    # 实现问题在下一 fresh worktree 中由 Transformer 修订。
-                    agent2_feedback = review.model_dump(mode="json")
+                    # 实现问题在下一 fresh worktree 中基于当前候选修订。
+                    agent2_feedback = {
+                        "failure": "REVIEW_REVISE_AGENT2",
+                        "review": review.model_dump(mode="json"),
+                        "prior_interface_report": interface_report.model_dump(
+                            mode="json", exclude_none=True
+                        ),
+                        "instruction": (
+                            "The reviewed candidate is already applied in the fresh "
+                            "worktree. Resolve every blocking issue, keep valid public "
+                            "interfaces stable, and update post-change limitations."
+                        ),
+                    }
                     continue
                 if review.overall is ReviewOverall.NEEDS_HUMAN:
                     self._write_unresolved(artifacts, report, project)
@@ -719,7 +755,18 @@ class ConsensusWorkflow:
                     )
                 if verification.route is FailureRoute.AGENT2:
                     # 传回的是确定性命令、退出码和失败类型，而不是隐藏源码。
-                    agent2_feedback = verification.model_dump(mode="json")
+                    agent2_feedback = {
+                        "failure": "DETERMINISTIC_VERIFICATION_FAILED",
+                        "verification": verification.model_dump(mode="json"),
+                        "prior_interface_report": interface_report.model_dump(
+                            mode="json", exclude_none=True
+                        ),
+                        "instruction": (
+                            "The verified candidate is already applied in the fresh "
+                            "worktree. Repair the implementation without changing "
+                            "evaluator-provided tests."
+                        ),
+                    }
                     continue
                 self._write_unresolved(artifacts, report, project)
                 return WorkflowResult(
@@ -788,7 +835,6 @@ class ConsensusWorkflow:
         artifacts.write_text("changes.patch", git_diff)
         artifacts.write_model("patch-metrics.json", patch_metrics)
         artifacts.write_model("interface-report.json", interface_report)
-        artifacts.write_usage(report, interface_report)
         review = reviewer.review(
             project,
             report,
@@ -800,6 +846,7 @@ class ConsensusWorkflow:
         )
         artifacts.write_model("review-report.json", review)
         artifacts.write_model(f"logs/review-{label}.json", review)
+        artifacts.write_usage(report, interface_report, review)
         return git_diff, patch_metrics, review
 
     @staticmethod

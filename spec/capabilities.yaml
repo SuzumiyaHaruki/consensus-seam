@@ -16,6 +16,19 @@ capabilities:
         A callable entrypoint lists pending messages with at least a stable
         message ID, sender, receiver, message type, and capture order.
       clear_pending: A callable entrypoint clears the current pending messages.
+      consumer_scope: >
+        For every claimed path, declare whether its entrypoints are callable by
+        external consumers, same-package tests, or only an internal harness. An
+        internal-only helper does not prove a public test interface.
+      snapshot_safety: >
+        Returned pending data must not let callers accidentally mutate the
+        controller's internal state through shared mutable slices, pointers, or
+        nested objects. Reuse a target-native clone operation when available;
+        otherwise copy the mutable parts or explicitly narrow the claim.
+      store_consistency: >
+        New IDs or metadata must remain consistent with every existing mutation
+        path for the underlying pending messages. Do not rely on parallel stores
+        staying aligned when an existing public API can mutate only one of them.
       path_coverage: >
         The Analyzer discovers materially distinct in-scope paths. The
         implementation covers every low-intrusion path it can and explicitly
@@ -48,6 +61,15 @@ capabilities:
       delivery_boundary: >
         Injection enters the normal protocol input boundary for the declared
         path and does not mutate protocol state directly.
+      success_and_consumption: >
+        Report success and consume the selected record only after the declared
+        input boundary has accepted it. If an asynchronous transport can silently
+        drop an attempted delivery and exposes no acknowledgement, retain the
+        record, expose an honest uncertain outcome, or list that path as uncovered.
+      consumer_scope: >
+        The interface report distinguishes externally callable, same-package,
+        and internal-harness injection entrypoints. A path is covered only for
+        the consumer scope that can actually call it.
       path_coverage: >
         Apply injection to every discovered in-scope path that can be supported
         without changing core semantics. Explicitly report remaining paths and
@@ -66,6 +88,10 @@ capabilities:
         Reuse a directly testable Tick or Clock when sufficient. Add a thin
         coordination wrapper, harness method, or hook only when multiple existing
         time paths or asynchronous completion prevent direct deterministic use.
+      input_domain: >
+        New control values preserve the target's existing legal domain or reject
+        invalid values explicitly; a test hook must not silently create protocol
+        states that the original implementation considers impossible.
 
   randomness_control:
     description: >
@@ -76,6 +102,10 @@ capabilities:
         Reuse existing configuration when directly testable; otherwise a Config
         option, dependency-injected source, hook, or test constructor may expose
         the existing random choice without replacing its algorithm.
+      input_domain: >
+        Fixed values, seeds, or injected sources preserve existing validation and
+        legal ranges. If the target intentionally supports a broader test-only
+        domain, the interface must validate and document that domain explicitly.
 
   lifecycle_control:
     description: >
@@ -100,6 +130,9 @@ capabilities:
       test_support_assessment: >
         Use an existing Status API directly when sufficient. A read-only wrapper
         or accessor may aggregate existing state but must not create protocol state.
+      snapshot_safety: >
+        A read-only result must not expose mutable aliases that let callers change
+        protocol or controller state through the observation interface.
 
   external_input:
     description: >

@@ -37,3 +37,13 @@ llm:
     thinking: enabled
     reasoning_effort: max
     max_tokens: 32768
+  transformer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768
+  reviewer:
+    model: deepseek-v4-pro
+    thinking: enabled
+    reasoning_effort: high
+    max_tokens: 32768

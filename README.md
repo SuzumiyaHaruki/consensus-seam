@@ -38,6 +38,8 @@ Agent 1 对每项能力保留原有六种分类：
 3. Agent 3 独立、只读地审查修改范围、接口可用性和声明一致性。
 4. Controller 负责固定流程、隔离工作树、构建、原测试和项目配置的基础能力检查。
 
+Agent 3 发现违反能力合同、路径覆盖声明或接口报告的问题时，必须通过 `REVISE_AGENT1` 或 `REVISE_AGENT2` 自动反馈；只有不妨碍合同成立的剩余限制才能保留在 `PASS.risks`。Agent 2 修订发生在重新应用上一版候选的 fresh worktree 中，不需要人工提供测试或重新从空白生成。
+
 全局能力规范只描述行为，不规定所有目标必须使用相同的 Go 接口。`Transport`、`RawNode` 或某个节点注册表只能是具体目标的实现选择，不能成为通用前提。
 
 Analyzer 必须区分“底层原语存在”和“测试接口完整存在”。例如 `Ready` 能输出消息、`Step` 能接收消息，并不等于系统已经提供消息控制能力；如果还缺少保存、控制面 ID、按 ID 选择或清空操作，就仍需 Agent 2 进行低侵入改造，能力应判为 `PATCHABLE`。控制面 ID 属于测试控制层，不要求修改协议消息格式。
@@ -153,7 +155,7 @@ consensus-seam repair  --project /绝对路径/project.yaml \
 
 - `capability-report.json`：七项能力分类、证据和限制；
 - `interface-report.json`：Agent 2 实际补充的接口；
-- `USAGE.md`：已有接口和新增接口的使用入口、适用范围与限制；
+- `USAGE.md`：区分修改前分析、修改后接口、Reviewer 阻塞问题与非阻塞剩余风险的使用说明；
 - `changes.patch`：最终候选修改；
 - `review-report.json`：Agent 3 审查；
 - `verification-report.json`：构建、原测试和能力检查；

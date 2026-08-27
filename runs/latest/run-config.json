@@ -3,7 +3,7 @@
   "experiment": {
     "kind": "blind_capability",
     "oracle_visible_to_agents": false,
-    "research_claim": "Exploratory, contract-aware, read-only analysis of seven basic test-control capabilities in a production consensus library without source modification or a human answer key.\n"
+    "research_claim": "Blind analysis and low-intrusion generation of seven basic test-control interfaces in a production consensus library without a human answer key or a predeclared target-specific API shape.\n"
   },
   "model_profile": "manifest",
   "project": "etcd-raft",
@@ -30,7 +30,7 @@
   "source_revisions": {
     "controller": {
       "dirty": false,
-      "revision": "da15269b11b93b160910a8798df45d689c6cbece"
+      "revision": "1a28bd7ca7920d50711a70f3eef49aa07d92f193"
     },
     "target": {
       "dirty": false,

@@ -14,9 +14,25 @@ Determine whether:
 
 Compilation, passing old tests, and Transformer claims are not sufficient by themselves to justify `PASS`. However, v0.1 does not require you to prove the entire consensus protocol safe or review paths outside the supplied system boundary.
 
-For message control, inspect every `covered_paths` entry: verify that its original continuation path is suppressed and that a selected message reaches its normal target entrypoint. Check that `uncovered_paths` accounts for all other paths reported by Agent 1. Record obvious mutable-object aliasing, synchronous-error handling, or similar concerns in `risks`. Unless such a concern invalidates the basic capability claim for this run, do not turn a target-specific issue into a new global contract.
+For message control, inspect every `covered_paths` entry: verify that its original continuation path is suppressed and that a selected message reaches its normal target entrypoint. Check that `uncovered_paths` accounts for all other paths reported by Agent 1. Apply the contract generically, without requiring target-specific type names or architecture:
 
-For time and randomness changes, verify that the patch does not manufacture protocol outcomes or change the original algorithm. Reject invented lifecycle recovery semantics.
+- verify the claimed consumer can actually call each entrypoint; distinguish external, same-package, and internal-harness scope;
+- verify returned snapshots do not expose mutable aliases into internal state;
+- verify IDs and metadata stay consistent across every existing mutation path instead of relying on fragile parallel-container alignment;
+- verify successful injection and record consumption occur only after the declared input boundary accepts the message; a silent best-effort send is not confirmed success.
+
+These are reviews of the existing capability contract, not new target-specific requirements. If satisfying one would require changing core protocol semantics, require the path to be reported as uncovered rather than forcing an invasive patch.
+
+For time and randomness changes, verify that the patch does not manufacture protocol outcomes or change the original algorithm, and that new values preserve or explicitly validate the target's legal domain. Reject invented lifecycle recovery semantics.
+
+Triage every concern before choosing `overall`:
+
+- if it contradicts the capability contract, a `covered_paths` claim, or an interface-report statement, put it in `issues`, fail or mark the applicable check unknown, and return `REVISE_AGENT2`;
+- if the underlying capability classification or low-intrusion feasibility is wrong, put it in `issues` and return `REVISE_AGENT1`;
+- if source evidence cannot decide it, return `NEEDS_HUMAN` with an issue;
+- use `risks` only for residual, non-blocking limitations that remain compatible with every applicable check passing.
+
+Do not return `PASS` while describing in `risks` a condition under which the advertised interface is unreachable, corrupts its own control state, reports unconfirmed delivery as success, or otherwise fails its declared basic contract.
 
 You do not perform dynamic verification and must not modify source. Use the separate `original` and `patched` read-only scopes to verify code evidence.
 

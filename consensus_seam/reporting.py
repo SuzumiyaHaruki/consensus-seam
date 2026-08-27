@@ -12,7 +12,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .models import CapabilityReport, CapabilityStatus, CodeLocation, InterfaceReport
+from .models import (
+    CapabilityReport,
+    CapabilityStatus,
+    CodeLocation,
+    InterfaceReport,
+    ReviewReport,
+)
 
 
 CAPABILITY_DISPLAY_ORDER = (
@@ -112,29 +118,38 @@ class ArtifactStore:
         self,
         report: CapabilityReport,
         interface_report: InterfaceReport | None = None,
+        review_report: ReviewReport | None = None,
     ) -> Path:
-        """用现有结构化报告生成面向使用者的中文接口说明。"""
+        """按分析、实现、审查三个时间点生成中文结构的接口说明。"""
 
+        machine_reports = ["`capability-report.json`"]
+        if interface_report is not None:
+            machine_reports.append("`interface-report.json`")
+        if review_report is not None:
+            machine_reports.append("`review-report.json`")
         lines = [
             f"# {report.target} 测试接口使用报告",
             "",
             "本报告同时列出目标系统已有接口和本次 Agent 生成的接口。",
-            "能力状态、源码证据和完整限制以 `capability-report.json` 为准。",
+            "Analyzer 内容描述修改前状态；生成接口和 Reviewer 内容描述候选修改后状态。",
+            "机器可读细节以" + "、".join(machine_reports) + "为准。",
             "",
         ]
         implemented = interface_report.capabilities() if interface_report else {}
         for name, title in CAPABILITY_DISPLAY_ORDER:
             finding = report.capabilities[name]
             generated = implemented.get(name)
-            lines.extend([f"## {title}", "", f"- 分析状态：`{finding.status.value}`"])
+            lines.extend(
+                [f"## {title}", "", f"- 修改前分析状态：`{finding.status.value}`"]
+            )
             if finding.boundary:
                 lines.append(f"- 覆盖边界：{finding.boundary}")
             lines.append(
-                "- 现有测试接口是否完整："
+                "- 修改前测试接口是否完整："
                 + ("是" if finding.existing_test_interface_complete else "否")
             )
             if finding.test_support_reason:
-                lines.append(f"- 测试支持判断：{finding.test_support_reason}")
+                lines.append(f"- 修改前测试支持判断：{finding.test_support_reason}")
             if generated is not None:
                 lines.append(
                     "- 本次修改："
@@ -143,12 +158,12 @@ class ArtifactStore:
             lines.append("")
 
             if finding.execution_paths:
-                lines.extend(["### Analyzer 发现的实现路径", ""])
+                lines.extend(["### Analyzer 发现的实现路径（修改前）", ""])
                 lines.extend(f"- {path}" for path in finding.execution_paths)
                 lines.append("")
 
             if finding.suggested_changes:
-                lines.extend(["### 建议改造", ""])
+                lines.extend(["### Analyzer 建议（修改前）", ""])
                 lines.extend(f"- {item}" for item in finding.suggested_changes)
                 lines.append("")
 
@@ -204,11 +219,42 @@ class ArtifactStore:
                     lines.append("")
 
             if finding.limitations:
-                lines.extend(["### 限制", ""])
+                heading = (
+                    "### 修改前已知限制（供对照）"
+                    if generated is not None and generated.implemented
+                    else "### 当前限制"
+                )
+                lines.extend([heading, ""])
                 lines.extend(f"- {item}" for item in finding.limitations)
                 lines.append("")
             elif finding.gap and (generated is None or not generated.implemented):
                 lines.extend(["### 当前缺口", "", f"- {finding.gap}", ""])
+
+        if review_report is not None:
+            lines.extend(
+                [
+                    "## 独立 Reviewer 结论",
+                    "",
+                    f"- 总体结论：`{review_report.overall.value}`",
+                    "",
+                ]
+            )
+            if review_report.issues:
+                lines.extend(["### 阻塞问题", ""])
+                for issue in review_report.issues:
+                    location = " / ".join(
+                        value for value in (issue.file, issue.symbol) if value
+                    )
+                    capability = f"[{issue.capability}] " if issue.capability else ""
+                    suffix = f"（{location}）" if location else ""
+                    lines.append(f"- {capability}{issue.reason}{suffix}")
+                lines.append("")
+            if review_report.risks:
+                lines.extend(["### 非阻塞剩余风险", ""])
+                lines.extend(f"- {risk}" for risk in review_report.risks)
+                lines.append("")
+            if not review_report.issues and not review_report.risks:
+                lines.extend(["- Reviewer 未报告阻塞问题或剩余风险。", ""])
 
         return self.write_text("USAGE.md", "\n".join(lines).rstrip() + "\n")
 
