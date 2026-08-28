@@ -132,6 +132,9 @@ Revision worktrees may already contain the prior candidate. Revise that candidat
 and preserve its public interface unless feedback proves the design invalid. Do
 not modify evaluator-provided tests. Return exactly the capability fields selected
 for this invocation; the Controller merges unselected prior fields.
+Use only properties declared by the supplied JSON schema. Put explanation without
+a dedicated field in `notes`; never invent `*_note` keys or emit extra null
+placeholders.
 
 Use only supplied local tools and edit only the isolated worktree. Return only
 JSON matching the interface-report schema.
