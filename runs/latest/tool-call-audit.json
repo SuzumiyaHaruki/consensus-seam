@@ -2,108 +2,57 @@
   {
     "agent": "analyzer",
     "arguments": {
+      "max_files": 2000,
       "path": ".",
       "scope": "source"
     },
-    "duration_ms": 10.351945000365959,
+    "duration_ms": 14.647391000835341,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 1758,
-    "returned_lines": 88,
+    "output_bytes": 5022,
+    "returned_lines": 162,
     "success": true,
     "tool": "list_files"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "query": "func NewRaft",
+      "path": "go.mod",
       "scope": "source"
     },
-    "duration_ms": 15.050669000629568,
+    "duration_ms": 0.2654649997566594,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 423,
-    "returned_lines": 2,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 120,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.8930079986603232,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 4900,
-    "returned_lines": 120,
+    "output_bytes": 692,
+    "returned_lines": 20,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 200,
-      "path": "config.go",
-      "scope": "source",
-      "start": 1
+      "path": "node.go",
+      "scope": "source"
     },
-    "duration_ms": 1.7448700000386452,
+    "duration_ms": 3.699145001519355,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 11311,
-    "returned_lines": 200,
+    "output_bytes": 22727,
+    "returned_lines": 500,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 420,
-      "path": "config.go",
-      "scope": "source",
-      "start": 200
+      "path": "rawnode.go",
+      "scope": "source"
     },
-    "duration_ms": 2.445001999149099,
+    "duration_ms": 2.176818999942043,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 8321,
-    "returned_lines": 177,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 180,
-      "path": "api.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 2.1546530006162357,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 7954,
-    "returned_lines": 180,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 520,
-      "path": "api.go",
-      "scope": "source",
-      "start": 180
-    },
-    "duration_ms": 1.3256630008982029,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 15280,
-    "returned_lines": 341,
+    "output_bytes": 23848,
+    "returned_lines": 500,
     "success": true,
     "tool": "read_file"
   },
@@ -111,414 +60,226 @@
     "agent": "analyzer",
     "arguments": {
       "end": 900,
-      "path": "api.go",
+      "path": "node.go",
       "scope": "source",
-      "start": 520
+      "start": 500
     },
-    "duration_ms": 2.0469150003918912,
+    "duration_ms": 0.593565000599483,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 16143,
-    "returned_lines": 381,
+    "output_bytes": 3550,
+    "returned_lines": 116,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 1250,
-      "path": "api.go",
+      "end": 700,
+      "path": "rawnode.go",
       "scope": "source",
-      "start": 900
+      "start": 496
     },
-    "duration_ms": 2.987214000313543,
+    "duration_ms": 0.3727849998540478,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 15923,
-    "returned_lines": 351,
+    "output_bytes": 3176,
+    "returned_lines": 68,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 220,
-      "path": "transport.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.2362779998511542,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 6545,
-    "returned_lines": 141,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 260,
-      "path": "inmem_transport.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.773746998878778,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 9273,
-    "returned_lines": 260,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 200,
-      "path": "state.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.900905999718816,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 5429,
-    "returned_lines": 174,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 200,
-      "path": "observer.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 2.5358880011481233,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 5640,
-    "returned_lines": 149,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 120,
-      "path": "testing.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.646900000196183,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 3979,
-    "returned_lines": 120,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 160,
-      "path": "future.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 2.611227000670624,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 5518,
-    "returned_lines": 160,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 100,
-      "path": ".",
-      "query": "rand.",
+      "path": "rafttest/interaction_env.go",
       "scope": "source"
     },
-    "duration_ms": 17.613150001125177,
+    "duration_ms": 0.45759599925077055,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 1390,
-    "returned_lines": 12,
+    "output_bytes": 3897,
+    "returned_lines": 107,
     "success": true,
-    "tool": "search_text"
+    "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "max_results": 100,
-      "path": ".",
-      "query": "randomTimeout",
+      "path": "rafttest/node.go",
       "scope": "source"
     },
-    "duration_ms": 17.493574001491652,
+    "duration_ms": 0.3393300012248801,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 1437,
-    "returned_lines": 13,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 80,
-      "path": "util.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.1358410010871012,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 2294,
-    "returned_lines": 80,
+    "output_bytes": 5165,
+    "returned_lines": 158,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 200,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 120
-    },
-    "duration_ms": 0.6775399997422937,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 2990,
-    "returned_lines": 81,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 330,
-      "path": "testing.go",
-      "scope": "source",
-      "start": 120
-    },
-    "duration_ms": 0.5552309994527604,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 8214,
-    "returned_lines": 211,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 60,
-      "path": ".",
-      "query": "consumerCh",
+      "path": "rafttest/interaction_env_handler_deliver_msgs.go",
       "scope": "source"
     },
-    "duration_ms": 9.856950999164837,
+    "duration_ms": 3.3933779996004887,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 824,
-    "returned_lines": 8,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 520,
-      "path": "testing.go",
-      "scope": "source",
-      "start": 330
-    },
-    "duration_ms": 2.820750998580479,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 7655,
-    "returned_lines": 191,
+    "output_bytes": 3870,
+    "returned_lines": 104,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "max_results": 50,
-      "path": ".",
-      "query": "Consumer()",
+      "path": "rafttest/interaction_env_handler_process_ready.go",
       "scope": "source"
     },
-    "duration_ms": 21.916490000876365,
+    "duration_ms": 0.6015630006004358,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 2803,
-    "returned_lines": 28,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 120,
-      "path": "fuzzy/transport.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.0096919995703502,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 4363,
-    "returned_lines": 120,
+    "output_bytes": 2991,
+    "returned_lines": 82,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 380,
-      "path": "fuzzy/transport.go",
-      "scope": "source",
-      "start": 120
-    },
-    "duration_ms": 0.7053999997879146,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 8239,
-    "returned_lines": 218,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 470,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 200
-    },
-    "duration_ms": 2.107388001604704,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 12086,
-    "returned_lines": 271,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 200,
-      "path": "inmem_store.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 0.9882300000754185,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 4058,
-    "returned_lines": 133,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 120,
-      "path": "log.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 0.9779600004549138,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 5322,
-    "returned_lines": 120,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 120,
-      "path": "configuration.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 0.29472199821611866,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 5112,
-    "returned_lines": 120,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 40,
-      "path": ".",
-      "query": "shutdownFuture",
+      "path": "rafttest/interaction_env_handler_tick.go",
       "scope": "source"
     },
-    "duration_ms": 16.99476300018432,
+    "duration_ms": 2.686040001208312,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 391,
-    "returned_lines": 4,
+    "output_bytes": 1641,
+    "returned_lines": 39,
     "success": true,
-    "tool": "search_text"
+    "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "max_results": 40,
-      "path": ".",
-      "query": "func (r *Raft) processRPC",
+      "path": "rafttest/interaction_env_handler_set_randomized_election_timeout.go",
       "scope": "source"
     },
-    "duration_ms": 13.941376000730088,
+    "duration_ms": 2.8252219999558292,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 145,
-    "returned_lines": 1,
+    "output_bytes": 1433,
+    "returned_lines": 34,
     "success": true,
-    "tool": "search_text"
+    "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "max_results": 40,
-      "path": ".",
-      "query": "func (r *Raft) leaderLoop",
+      "path": "rafttest/interaction_env_handler_add_nodes.go",
       "scope": "source"
     },
-    "duration_ms": 15.679452000767924,
+    "duration_ms": 0.3371719994902378,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 137,
-    "returned_lines": 1,
+    "output_bytes": 6708,
+    "returned_lines": 163,
     "success": true,
-    "tool": "search_text"
+    "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 190,
-      "path": "future.go",
-      "scope": "source",
-      "start": 160
+      "path": "rafttest/interaction_env_handler_propose.go",
+      "scope": "source"
     },
-    "duration_ms": 1.2077580013283296,
+    "duration_ms": 0.09883900020213332,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 984,
+    "output_bytes": 1487,
+    "returned_lines": 34,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/interaction_env_handler_propose_conf_change.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.10665999980119523,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 3113,
+    "returned_lines": 83,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/interaction_env_handler_raft_log.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.10292399929312523,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2065,
+    "returned_lines": 55,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/interaction_env_handler_raftstate.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.08370700015802868,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1918,
+    "returned_lines": 49,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/interaction_env_handler_status.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.07716999971307814,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1683,
+    "returned_lines": 43,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/interaction_env_handler.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.36319900027592666,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 8909,
+    "returned_lines": 241,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/interaction_env_handler_campaign.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.10784699952637311,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1304,
     "returned_lines": 31,
     "success": true,
     "tool": "read_file"
@@ -526,48 +287,505 @@
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 1560,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 1390
+      "path": "rafttest/interaction_env_handler_process_append_thread.go",
+      "scope": "source"
     },
-    "duration_ms": 1.7377429994667182,
+    "duration_ms": 0.1642360002733767,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 6845,
-    "returned_lines": 171,
+    "output_bytes": 3611,
+    "returned_lines": 97,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 800,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 660
+      "path": "rafttest/interaction_env_handler_process_apply_thread.go",
+      "scope": "source"
     },
-    "duration_ms": 1.3003539988858392,
+    "duration_ms": 0.11707500016200356,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 6504,
-    "returned_lines": 141,
+    "output_bytes": 4170,
+    "returned_lines": 111,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 220,
-      "path": "replication.go",
-      "scope": "source",
-      "start": 130
+      "path": "rafttest/interaction_env_handler_stabilize.go",
+      "scope": "source"
     },
-    "duration_ms": 0.5948100006207824,
+    "duration_ms": 0.2251030000479659,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 5166,
+    "returned_lines": 132,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 500,
+      "path": "raft.go",
+      "scope": "source",
+      "start": 1
+    },
+    "duration_ms": 5.435495000710944,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 23623,
+    "returned_lines": 500,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "raft.go",
+      "query": "func (r *raft) tick",
+      "scope": "source"
+    },
+    "duration_ms": 7.755734999591368,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 136,
+    "returned_lines": 2,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 50,
+      "path": "raft.go",
+      "query": "randomizedElectionTimeout",
+      "scope": "source"
+    },
+    "duration_ms": 5.261839998638607,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 322,
+    "returned_lines": 4,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 920,
+      "path": "raft.go",
+      "scope": "source",
+      "start": 830
+    },
+    "duration_ms": 1.546408000649535,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 3658,
+    "returned_lines": 91,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 2070,
+      "path": "raft.go",
+      "scope": "source",
+      "start": 2010
+    },
+    "duration_ms": 1.3844199984305305,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2897,
+    "returned_lines": 61,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "SetRandomizedElectionTimeout",
+      "scope": "source"
+    },
+    "duration_ms": 23.04386800096836,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1166,
+    "returned_lines": 8,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/network.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.5632390004611807,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 4895,
+    "returned_lines": 165,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "storage.go",
+      "scope": "source"
+    },
+    "duration_ms": 2.0990909997635754,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 13125,
+    "returned_lines": 310,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "status.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.7016910003585508,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
     "output_bytes": 3628,
-    "returned_lines": 91,
+    "returned_lines": 105,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 4130,
+      "path": "raft_test.go",
+      "scope": "source",
+      "start": 4060
+    },
+    "duration_ms": 2.372072000071057,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2567,
+    "returned_lines": 71,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "interaction_test.go",
+      "scope": "source"
+    },
+    "duration_ms": 0.5332290002115769,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1664,
+    "returned_lines": 38,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 40,
+      "path": "raft.go",
+      "query": "func (r *raft) reset(",
+      "scope": "source"
+    },
+    "duration_ms": 19.28604800014,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 100,
+    "returned_lines": 1,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "example_test.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.7205980002472643,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1724,
+    "returned_lines": 47,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 830,
+      "path": "raft.go",
+      "scope": "source",
+      "start": 760
+    },
+    "duration_ms": 3.6497119999694405,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2645,
+    "returned_lines": 71,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "types.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.8385950006631901,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 4845,
+    "returned_lines": 106,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 120,
+      "path": "node_test.go",
+      "scope": "source",
+      "start": 1
+    },
+    "duration_ms": 2.258374001030461,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 4207,
+    "returned_lines": 120,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 60,
+      "path": "raftpb/raft.proto",
+      "query": "MessageType",
+      "scope": "source"
+    },
+    "duration_ms": 9.491795999565511,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 223,
+    "returned_lines": 3,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 250,
+      "path": "rafttest/network_test.go",
+      "scope": "source",
+      "start": 1
+    },
+    "duration_ms": 0.4912309996143449,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 2374,
+    "returned_lines": 71,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 40,
+      "path": "raftpb/raft.proto",
+      "query": "message Message",
+      "scope": "source"
+    },
+    "duration_ms": 3.678258000945789,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 81,
+    "returned_lines": 1,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 160,
+      "path": "raftpb/raft.proto",
+      "scope": "source",
+      "start": 40
+    },
+    "duration_ms": 1.4940990004106425,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 6878,
+    "returned_lines": 121,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "read_only.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.2352289995760657,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 4647,
+    "returned_lines": 121,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/interaction_env_handler_send_snapshot.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.8229349989269394,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1979,
+    "returned_lines": 50,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": "log_unstable.go",
+      "query": "func (u *unstable)",
+      "scope": "source"
+    },
+    "duration_ms": 14.64968499931274,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 787,
+    "returned_lines": 13,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 20,
+      "path": "node_test.go",
+      "query": "RestartNode",
+      "scope": "source"
+    },
+    "duration_ms": 9.576336000463925,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 115,
+    "returned_lines": 2,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 660,
+      "path": "node_test.go",
+      "scope": "source",
+      "start": 560
+    },
+    "duration_ms": 4.048184000566835,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 3417,
+    "returned_lines": 101,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 260,
+      "path": "log_unstable.go",
+      "scope": "source",
+      "start": 90
+    },
+    "duration_ms": 1.2785060007445281,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 7484,
+    "returned_lines": 156,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 20,
+      "path": "log.go",
+      "query": "nextUnstableEnts",
+      "scope": "source"
+    },
+    "duration_ms": 18.036966999716242,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 247,
+    "returned_lines": 3,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 20,
+      "path": "raft.go",
+      "query": "func (r *raft) send(",
+      "scope": "source"
+    },
+    "duration_ms": 11.936547000004794,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 100,
+    "returned_lines": 1,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 20,
+      "path": "node_util_test.go",
+      "query": "restart()",
+      "scope": "source"
+    },
+    "duration_ms": 11.588081000809325,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 59,
+    "returned_lines": 0,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 230,
+      "path": "log.go",
+      "scope": "source",
+      "start": 190
+    },
+    "duration_ms": 1.1149700003443286,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1974,
+    "returned_lines": 41,
     "success": true,
     "tool": "read_file"
   },
@@ -577,61 +795,13 @@
       "end": 560,
       "path": "raft.go",
       "scope": "source",
-      "start": 800
+      "start": 500
     },
-    "duration_ms": 0.5219320009928197,
+    "duration_ms": 1.6241650009760633,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 306,
-    "returned_lines": null,
-    "success": false,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 30,
-      "path": ".",
-      "query": "configurationsFuture",
-      "scope": "source"
-    },
-    "duration_ms": 16.261749999102904,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 1254,
-    "returned_lines": 12,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 290,
-      "path": "future.go",
-      "scope": "source",
-      "start": 245
-    },
-    "duration_ms": 4.306045000703307,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 1651,
-    "returned_lines": 46,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 1020,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 800
-    },
-    "duration_ms": 2.7096699996036477,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 8659,
-    "returned_lines": 221,
+    "output_bytes": 3342,
+    "returned_lines": 61,
     "success": true,
     "tool": "read_file"
   },
@@ -639,107 +809,11 @@
     "agent": "analyzer",
     "arguments": {
       "max_results": 20,
-      "path": ".",
-      "query": "func (r *Raft) getLatestConfiguration",
+      "path": "node_util_test.go",
+      "query": "n.restart()",
       "scope": "source"
     },
-    "duration_ms": 15.80080299936526,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 164,
-    "returned_lines": 1,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 120,
-      "path": "inmem_snapshot.go",
-      "scope": "source",
-      "start": 1
-    },
-    "duration_ms": 1.4169810001476435,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 3816,
-    "returned_lines": 113,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 2260,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 2225
-    },
-    "duration_ms": 0.6347250000544591,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 783,
-    "returned_lines": 17,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 460,
-      "path": "replication.go",
-      "scope": "source",
-      "start": 380
-    },
-    "duration_ms": 1.6620520000287797,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 3645,
-    "returned_lines": 81,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 2225,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 2190
-    },
-    "duration_ms": 1.9359799989615567,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 1505,
-    "returned_lines": 36,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 30,
-      "path": ".",
-      "query": "func (c *configurations) Clone",
-      "scope": "source"
-    },
-    "duration_ms": 14.44089800133952,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 173,
-    "returned_lines": 1,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 40,
-      "path": ".",
-      "query": "Clock",
-      "scope": "source"
-    },
-    "duration_ms": 13.859954000508878,
+    "duration_ms": 9.418638999704854,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
     "output_bytes": 59,
@@ -751,15 +825,15 @@
     "agent": "analyzer",
     "arguments": {
       "max_results": 40,
-      "path": ".",
-      "query": "time.After",
+      "path": "node_util_test.go",
+      "query": "pause",
       "scope": "source"
     },
-    "duration_ms": 14.029508998646634,
+    "duration_ms": 3.577602001314517,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 4128,
-    "returned_lines": 40,
+    "output_bytes": 59,
+    "returned_lines": 0,
     "success": true,
     "tool": "search_text"
   },
@@ -767,14 +841,94 @@
     "agent": "analyzer",
     "arguments": {
       "max_results": 20,
-      "path": ".",
-      "query": "func (r *Raft) dispatchLogs",
+      "path": "node_util_test.go",
+      "query": "network",
       "scope": "source"
     },
-    "duration_ms": 23.333699000431807,
+    "duration_ms": 5.06099899939727,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 162,
+    "output_bytes": 59,
+    "returned_lines": 0,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 40,
+      "path": "raft_test.go",
+      "query": "newRaftNetwork",
+      "scope": "source"
+    },
+    "duration_ms": 13.567760001023998,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 59,
+    "returned_lines": 0,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "n.pause()",
+      "scope": "source"
+    },
+    "duration_ms": 21.16420199854474,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 59,
+    "returned_lines": 0,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "disconnect()",
+      "scope": "source"
+    },
+    "duration_ms": 22.838962999230716,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 300,
+    "returned_lines": 3,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "pausec",
+      "scope": "source"
+    },
+    "duration_ms": 18.32644500063907,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 526,
+    "returned_lines": 6,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "raftNetwork{",
+      "scope": "source"
+    },
+    "duration_ms": 10.160902000279748,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 135,
     "returned_lines": 1,
     "success": true,
     "tool": "search_text"
@@ -782,95 +936,32 @@
   {
     "agent": "analyzer",
     "arguments": {
-      "max_results": 20,
-      "path": ".",
-      "query": "func (r *Raft) runFSM",
-      "scope": "source"
-    },
-    "duration_ms": 18.029716999080847,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 131,
-    "returned_lines": 1,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 1330,
-      "path": "raft.go",
-      "scope": "source",
-      "start": 1244
-    },
-    "duration_ms": 2.143239998986246,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 3661,
-    "returned_lines": 87,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 170,
-      "path": "fsm.go",
-      "scope": "source",
-      "start": 60
-    },
-    "duration_ms": 1.4677910003229044,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 4392,
-    "returned_lines": 111,
-    "success": true,
-    "tool": "read_file"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 30,
-      "path": "go.mod",
+      "end": 80,
+      "path": "rafttest/node_test.go",
       "scope": "source",
       "start": 1
     },
-    "duration_ms": 0.8313590005855076,
+    "duration_ms": 1.071488000889076,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 1103,
-    "returned_lines": 26,
+    "output_bytes": 2858,
+    "returned_lines": 80,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "check": "go_test_compile",
-      "package": "./...",
+      "max_results": 20,
+      "path": "rafttest",
+      "query": "startNode",
       "scope": "source"
     },
-    "duration_ms": 0.12646600043808576,
+    "duration_ms": 23.890350999863585,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 117,
-    "returned_lines": null,
-    "success": false,
-    "tool": "run_readonly_check"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 30,
-      "path": ".",
-      "query": "func (r *Raft) requestVote",
-      "scope": "source"
-    },
-    "duration_ms": 16.906427999856533,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 171,
-    "returned_lines": 1,
+    "output_bytes": 755,
+    "returned_lines": 6,
     "success": true,
     "tool": "search_text"
   },
@@ -878,63 +969,173 @@
     "agent": "analyzer",
     "arguments": {
       "max_results": 30,
-      "path": ".",
-      "query": "func (r *Raft) electSelf",
-      "scope": "source"
-    },
-    "duration_ms": 14.483779999864055,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 156,
-    "returned_lines": 1,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "max_results": 30,
-      "path": ".",
-      "query": "func (r *Raft) installSnapshot",
-      "scope": "source"
-    },
-    "duration_ms": 13.092873999994481,
-    "invocation_id": "analyzer-a1-attempt1",
-    "model": "deepseek-v4-flash",
-    "output_bytes": 179,
-    "returned_lines": 1,
-    "success": true,
-    "tool": "search_text"
-  },
-  {
-    "agent": "analyzer",
-    "arguments": {
-      "end": 1680,
       "path": "raft.go",
-      "scope": "source",
-      "start": 1603
+      "query": "rand.",
+      "scope": "source"
     },
-    "duration_ms": 1.2946370006829966,
+    "duration_ms": 11.922413999855053,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 3740,
-    "returned_lines": 78,
+    "output_bytes": 184,
+    "returned_lines": 2,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "path": "rafttest/doc.go",
+      "scope": "source"
+    },
+    "duration_ms": 1.6082580004876945,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 902,
+    "returned_lines": 16,
     "success": true,
     "tool": "read_file"
   },
   {
     "agent": "analyzer",
     "arguments": {
-      "end": 2010,
-      "path": "raft.go",
+      "end": 120,
+      "path": "rafttest/interaction_env_handler_compact.go",
       "scope": "source",
-      "start": 1976
+      "start": 1
     },
-    "duration_ms": 1.078519000657252,
+    "duration_ms": 1.3469170007738285,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_bytes": 1676,
-    "returned_lines": 35,
+    "output_bytes": 1655,
+    "returned_lines": 40,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 20,
+      "path": "testdata",
+      "query": "set-randomized-election-timeout",
+      "scope": "source"
+    },
+    "duration_ms": 23.775158000717056,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 278,
+    "returned_lines": 2,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 40,
+      "path": "testdata/campaign.txt",
+      "scope": "source",
+      "start": 1
+    },
+    "duration_ms": 0.6481559994426789,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1779,
+    "returned_lines": 40,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "math/rand",
+      "scope": "source"
+    },
+    "duration_ms": 24.80046799973934,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 565,
+    "returned_lines": 7,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 20,
+      "path": ".",
+      "query": "crypto/rand",
+      "scope": "source"
+    },
+    "duration_ms": 22.567705000255955,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 119,
+    "returned_lines": 1,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "time.Now",
+      "scope": "source"
+    },
+    "duration_ms": 20.132073001150275,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 138,
+    "returned_lines": 1,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "max_results": 30,
+      "path": ".",
+      "query": "time.Sleep",
+      "scope": "source"
+    },
+    "duration_ms": 21.927243999016355,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 966,
+    "returned_lines": 9,
+    "success": true,
+    "tool": "search_text"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 120,
+      "path": "rafttest/interaction_env_handler_forget_leader.go",
+      "scope": "source",
+      "start": 1
+    },
+    "duration_ms": 2.1058109996374696,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1357,
+    "returned_lines": 32,
+    "success": true,
+    "tool": "read_file"
+  },
+  {
+    "agent": "analyzer",
+    "arguments": {
+      "end": 60,
+      "path": "rafttest/interaction_env_handler_report_unreachable.go",
+      "scope": "source",
+      "start": 1
+    },
+    "duration_ms": 2.28923900067457,
+    "invocation_id": "analyzer-a1-attempt1",
+    "model": "deepseek-v4-flash",
+    "output_bytes": 1369,
+    "returned_lines": 30,
     "success": true,
     "tool": "read_file"
   }

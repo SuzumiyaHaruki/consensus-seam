@@ -1,4 +1,4 @@
-# hashicorp-raft 测试接口清单
+# etcd-raft 测试接口清单
 
 本文件面向测试接口使用者，只回答有哪些入口、如何使用以及哪些路径仍有限制。
 详细分类、源码证据、修改方式和审查过程见 `AUDIT.md` 与三份 JSON 报告。
@@ -7,13 +7,13 @@
 
 | 能力 | 修改前状态 | 目标已有入口 | 本次生成入口 | 当前结论 |
 |---|---|---|---|---|
-| 消息捕获 | `PATCHABLE` | `Transport interface methods and Consumer() channel (existing primitives)`<br>`Harness-defined controlled transport: Enumerate/Take/Drop/Clear/Deliver (proposed, no target core changes)` | — | 尚需低侵入补充 |
-| 消息注入 | `PATCHABLE` | `Harness-defined controlled transport Deliver/input operations (proposed, combined single-call or separated Take-plus-input)` | — | 尚需低侵入补充 |
-| 时间控制 | `INVASIVE` | `randomTimeout`<br>`runFollower`<br>`Raft.heartbeat`<br>等 4 项 | — | INVASIVE |
-| 随机性控制 | `PATCHABLE` | `Config.Rand *rand.Rand (proposed injectable per-node source)` | — | 尚需低侵入补充 |
-| 生命周期控制 | `SUPPORTED` | `Raft.Shutdown`<br>`shutdownFuture.Error`<br>`NewRaft` | — | 直接复用目标已有接口 |
-| 状态观察 | `SUPPORTED` | `Raft.State / Raft.Stats / Raft.CurrentTerm / Raft.CommitIndex / Raft.AppliedIndex / Raft.LastIndex / Raft.LastContact / Raft.LeaderWithID`<br>`Raft.GetConfiguration (ConfigurationFuture)`<br>`InmemStore.FirstIndex/LastIndex/GetLog/GetUint64 and InmemSnapshotStore.List (caller-owned stores)` | — | 直接复用目标已有接口 |
-| 外部输入 | `SUPPORTED` | `Raft.Apply / Raft.ApplyLog`<br>`Raft.AddVoter / Raft.AddNonvoter / Raft.RemoveServer / Raft.DemoteVoter` | — | 直接复用目标已有接口 |
+| 消息捕获 | `PATCHABLE` | `rafttest.InteractionEnv.Messages`<br>`rafttest.ProcessReady`<br>`rafttest.DeliverMsgs`<br>等 7 项 | — | 尚需低侵入补充 |
+| 消息注入 | `PATCHABLE` | `rafttest.DeliverMsgs`<br>`rafttest.SendSnapshot`<br>`rafttest.InteractionEnv.Nodes`<br>等 5 项 | — | 尚需低侵入补充 |
+| 时间控制 | `SUPPORTED` | `Node.Tick`<br>`RawNode.Tick`<br>`RawNode.TickQuiesced`<br>等 5 项 | — | 直接复用目标已有接口 |
+| 随机性控制 | `PATCHABLE` | `raft.SetRandomizedElectionTimeout (test-only export, raft package test builds only)`<br>`rafttest.InteractionOpts.SetRandomizedElectionTimeout`<br>`rafttest.Handle (set-randomized-election-timeout command)` | — | 尚需低侵入补充 |
+| 生命周期控制 | `SUPPORTED` | `Node.Stop`<br>`StartNode`<br>`RestartNode`<br>等 7 项 | — | 直接复用目标已有接口 |
+| 状态观察 | `SUPPORTED` | `Node.Status`<br>`RawNode.Status`<br>`RawNode.BasicStatus`<br>等 9 项 | — | 直接复用目标已有接口 |
+| 外部输入 | `SUPPORTED` | `Node.Propose`<br>`Node.ProposeConfChange`<br>`Node.ReadIndex`<br>等 10 项 | — | 直接复用目标已有接口 |
 
 ## 接口详情与示例
 
@@ -21,85 +21,140 @@
 
 **目标已有入口**
 
-- `Transport interface methods and Consumer() channel (existing primitives)`
-- `Harness-defined controlled transport: Enumerate/Take/Drop/Clear/Deliver (proposed, no target core changes)`
+- `rafttest.InteractionEnv.Messages`
+- `rafttest.ProcessReady`
+- `rafttest.DeliverMsgs`
+- `rafttest.Stabilize`
+- `rafttest.SendSnapshot`
+- `Node.Ready`
+- `RawNode.Ready`
+
+**调用示例**
+
+```go
+// Requires: env *rafttest.InteractionEnv
+_ = env.ProcessReady(0)
+msgs := env.Messages
+env.Messages = nil // clear the cache
+_ = msgs
+```
 
 ### 消息注入
 
 **目标已有入口**
 
-- `Harness-defined controlled transport Deliver/input operations (proposed, combined single-call or separated Take-plus-input)`
+- `rafttest.DeliverMsgs`
+- `rafttest.SendSnapshot`
+- `rafttest.InteractionEnv.Nodes`
+- `RawNode.Step`
+- `Node.Step`
+
+**调用示例**
+
+```go
+// Requires: env *rafttest.InteractionEnv
+n := env.DeliverMsgs(-1, rafttest.Recipient{ID: 2})
+_ = n
+```
 
 ### 时间控制
 
-No Clock or Tick abstraction exists anywhere in the module; all protocol timing is dispersed wall-clock use (randomTimeout -> time.After for election/heartbeat/commit/snapshot staggering, leader-lease timers, replication backoff, time.Now last-contact tracking). There is no single seam a test can advance deterministically.
+**目标已有入口**
+
+- `Node.Tick`
+- `RawNode.Tick`
+- `RawNode.TickQuiesced`
+- `rafttest.Tick`
+- `rafttest.Handle (tick-election / tick-heartbeat)`
+
+**调用示例**
+
+```go
+// Requires: rn *raft.RawNode
+rn.Tick()
+```
+
+```go
+// Requires: env *rafttest.InteractionEnv
+_ = env.Tick(0, env.Nodes[0].Config.ElectionTick)
+```
 
 ### 随机性控制
 
 **目标已有入口**
 
-- `Config.Rand *rand.Rand (proposed injectable per-node source)`
+- `raft.SetRandomizedElectionTimeout (test-only export, raft package test builds only)`
+- `rafttest.InteractionOpts.SetRandomizedElectionTimeout`
+- `rafttest.Handle (set-randomized-election-timeout command)`
 
 ### 生命周期控制
 
 **目标已有入口**
 
-- `Raft.Shutdown`
-- `shutdownFuture.Error`
-- `NewRaft`
+- `Node.Stop`
+- `StartNode`
+- `RestartNode`
+- `RawNode.Tick`
+- `RawNode.Step`
+- `RawNode.Ready`
+- `RawNode.Advance`
 
 **调用示例**
 
 ```go
-// Requires: r *raft.Raft, conf *raft.Config, fsm raft.FSM, logs raft.LogStore, stable raft.StableStore, snaps raft.SnapshotStore, trans raft.Transport
-// Shutdown is terminal for the instance; the test reconnects/recreates the transport for the next cycle.
-if err := r.Shutdown().Error(); err != nil { /* handle */ }
-r2, err := raft.NewRaft(conf, fsm, logs, stable, snaps, trans)
-if err != nil { /* handle */ }
-fmt.Println(r2.State())
+// Requires: n raft.Node, st *raft.MemoryStorage
+n.Stop()
+rn := raft.RestartNode(&raft.Config{ID: 1, ElectionTick: 10, HeartbeatTick: 1, Storage: st, MaxSizePerMsg: 1024 * 1024, MaxInflightMsgs: 256})
+_ = rn
 ```
 
 ### 状态观察
 
 **目标已有入口**
 
-- `Raft.State / Raft.Stats / Raft.CurrentTerm / Raft.CommitIndex / Raft.AppliedIndex / Raft.LastIndex / Raft.LastContact / Raft.LeaderWithID`
-- `Raft.GetConfiguration (ConfigurationFuture)`
-- `InmemStore.FirstIndex/LastIndex/GetLog/GetUint64 and InmemSnapshotStore.List (caller-owned stores)`
+- `Node.Status`
+- `RawNode.Status`
+- `RawNode.BasicStatus`
+- `RawNode.WithProgress`
+- `rafttest.Status`
+- `rafttest.RaftLog`
+- `MemoryStorage.FirstIndex`
+- `MemoryStorage.LastIndex`
+- `MemoryStorage.Entries`
 
 **调用示例**
 
 ```go
-// Requires: r *raft.Raft
-fmt.Println(r.State(), r.CurrentTerm(), r.CommitIndex(), r.AppliedIndex(), r.Stats()["state"])
-```
-
-```go
-// Requires: r *raft.Raft
-future := r.GetConfiguration()
-if err := future.Error(); err != nil { /* handle */ }
-fmt.Println(future.Configuration().Servers, future.Index())
+// Requires: rn *raft.RawNode
+st := rn.Status()
+fmt.Println(st.RaftState, st.Term, st.Commit, st.Applied)
 ```
 
 ### 外部输入
 
 **目标已有入口**
 
-- `Raft.Apply / Raft.ApplyLog`
-- `Raft.AddVoter / Raft.AddNonvoter / Raft.RemoveServer / Raft.DemoteVoter`
+- `Node.Propose`
+- `Node.ProposeConfChange`
+- `Node.ReadIndex`
+- `Node.ApplyConfChange`
+- `RawNode.Propose`
+- `RawNode.ProposeConfChange`
+- `RawNode.ReadIndex`
+- `RawNode.ApplyConfChange`
+- `rafttest.InteractionEnv.Propose`
+- `rafttest.InteractionEnv.ProposeConfChange`
 
 **调用示例**
 
 ```go
-// Requires: r *raft.Raft
-future := r.Apply([]byte("set-x=1"), 10*time.Second)
-if err := future.Error(); err != nil { /* handle */ }
-fmt.Println(future.Response())
+// Requires: rn *raft.RawNode
+err := rn.Propose([]byte("cmd"))
+_ = err
 ```
 
 ```go
-// Requires: leader *raft.Raft
-f := leader.AddVoter(raft.ServerID("node-2"), raft.ServerAddress("10.0.0.2:8300"), 0, 10*time.Second)
-if err := f.Error(); err != nil { /* handle */ }
-fmt.Println(f.Index())
+// Requires: rn *raft.RawNode
+cc := raftpb.ConfChangeV2{Changes: []raftpb.ConfChangeSingle{{Type: raftpb.ConfChangeAddNode, NodeID: 2}}}
+_ = rn.ProposeConfChange(cc)
 ```

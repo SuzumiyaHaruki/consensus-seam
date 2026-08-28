@@ -1,6 +1,1 @@
-{
-  "time_control": {
-    "reason": "Protocol-visible time cannot be advanced deterministically; election and heartbeat firing depend on the real wall clock, so tests can only shrink the configured timeouts and wait in wall-clock time.",
-    "status": "INVASIVE"
-  }
-}
+{}
