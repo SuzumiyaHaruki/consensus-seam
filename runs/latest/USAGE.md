@@ -7,13 +7,13 @@
 
 | 能力 | 修改前状态 | 目标已有入口 | 本次生成入口 | 当前结论 |
 |---|---|---|---|---|
-| 消息捕获 | `PATCHABLE` | `Transport.Consumer() inbound channel (transport.go:34)`<br>`Transport.AppendEntries / RequestVote / InstallSnapshot / TimeoutNow / RequestPreVote (transport.go:44-66, 74-77)`<br>`Transport.AppendEntriesPipeline (transport.go:41, 112-123)`<br>等 5 项 | — | 尚需低侵入补充 |
-| 消息注入 | `PATCHABLE` | `RPC.Respond (transport.go:25-27)`<br>`Transport consumer channel (injection target for inbound requests)`<br>`Transport send methods and AppendPipeline (injection targets for outbound requests)`<br>等 4 项 | — | 尚需低侵入补充 |
-| 时间控制 | `INVASIVE` | `time.After / time.NewTimer usage: util.go:39 (randomTimeout), api.go:831,861,1058 (Apply/Barrier/Restore timeouts), raft.go:163-353 (heartbeat/election), replication.go:169,402,495, snapshot.go:75`<br>`time.Now / time.Since: api.go:1128 (LastContact), api.go:1215 (Stats), raft.go:221 (contact check), future.go:135 (dispatch), replication.go:416 (LastContact observation)`<br>`Config.HeartbeatTimeout / ElectionTimeout / CommitTimeout / LeaderLeaseTimeout / SnapshotInterval (config.go:149-205) with ReloadConfig (api.go:717-741)` | — | INVASIVE |
-| 随机性控制 | `PATCHABLE` | `randomTimeout (util.go:34) used at raft.go:163, 217, 310, 353, 426; replication.go:169, 402, 495; snapshot.go:75`<br>`package init seeding of global math/rand (util.go:18-21)`<br>`NewInmemAddr / generateUUID (inmem_transport.go:15-17, util.go:59-71)` | — | 尚需低侵入补充 |
-| 生命周期控制 | `SUPPORTED` | `Raft.Shutdown (api.go:1012)`<br>`Raft.NewRaft reconstruction (api.go:500)`<br>`cluster.Close / shutdown helpers in package testing support` | — | 直接复用目标已有接口 |
-| 状态观察 | `SUPPORTED` | `Raft.State (api.go:1102)`<br>`Raft.Stats (api.go:1160)`<br>`Raft.CurrentTerm / LastIndex / CommitIndex / AppliedIndex (api.go:1221-1247)`<br>等 8 项 | — | 直接复用目标已有接口 |
-| 外部输入 | `SUPPORTED` | `Raft.Apply (api.go:819)`<br>`Raft.ApplyLog (api.go:826)`<br>`Raft.AddVoter / AddNonvoter / RemoveServer / DemoteVoter (api.go:946-1007)`<br>等 4 项 | — | 直接复用目标已有接口 |
+| 消息捕获 | `PATCHABLE` | `Transport interface methods and Consumer() channel (existing primitives)`<br>`Harness-defined controlled transport: Enumerate/Take/Drop/Clear/Deliver (proposed, no target core changes)` | — | 尚需低侵入补充 |
+| 消息注入 | `PATCHABLE` | `Harness-defined controlled transport Deliver/input operations (proposed, combined single-call or separated Take-plus-input)` | — | 尚需低侵入补充 |
+| 时间控制 | `INVASIVE` | `randomTimeout`<br>`runFollower`<br>`Raft.heartbeat`<br>等 4 项 | — | INVASIVE |
+| 随机性控制 | `PATCHABLE` | `Config.Rand *rand.Rand (proposed injectable per-node source)` | — | 尚需低侵入补充 |
+| 生命周期控制 | `SUPPORTED` | `Raft.Shutdown`<br>`shutdownFuture.Error`<br>`NewRaft` | — | 直接复用目标已有接口 |
+| 状态观察 | `SUPPORTED` | `Raft.State / Raft.Stats / Raft.CurrentTerm / Raft.CommitIndex / Raft.AppliedIndex / Raft.LastIndex / Raft.LastContact / Raft.LeaderWithID`<br>`Raft.GetConfiguration (ConfigurationFuture)`<br>`InmemStore.FirstIndex/LastIndex/GetLog/GetUint64 and InmemSnapshotStore.List (caller-owned stores)` | — | 直接复用目标已有接口 |
+| 外部输入 | `SUPPORTED` | `Raft.Apply / Raft.ApplyLog`<br>`Raft.AddVoter / Raft.AddNonvoter / Raft.RemoveServer / Raft.DemoteVoter` | — | 直接复用目标已有接口 |
 
 ## 接口详情与示例
 
@@ -21,96 +21,85 @@
 
 **目标已有入口**
 
-- `Transport.Consumer() inbound channel (transport.go:34)`
-- `Transport.AppendEntries / RequestVote / InstallSnapshot / TimeoutNow / RequestPreVote (transport.go:44-66, 74-77)`
-- `Transport.AppendEntriesPipeline (transport.go:41, 112-123)`
-- `Transport.SetHeartbeatHandler (transport.go:59-63)`
-- `Observer/RegisterObserver (observer.go:106-118)`
+- `Transport interface methods and Consumer() channel (existing primitives)`
+- `Harness-defined controlled transport: Enumerate/Take/Drop/Clear/Deliver (proposed, no target core changes)`
 
 ### 消息注入
 
 **目标已有入口**
 
-- `RPC.Respond (transport.go:25-27)`
-- `Transport consumer channel (injection target for inbound requests)`
-- `Transport send methods and AppendPipeline (injection targets for outbound requests)`
-- `processRPC / processHeartbeat dispatch inside Raft (raft.go:1390-1436)`
+- `Harness-defined controlled transport Deliver/input operations (proposed, combined single-call or separated Take-plus-input)`
 
 ### 时间控制
 
-**目标已有入口**
-
-- `time.After / time.NewTimer usage: util.go:39 (randomTimeout), api.go:831,861,1058 (Apply/Barrier/Restore timeouts), raft.go:163-353 (heartbeat/election), replication.go:169,402,495, snapshot.go:75`
-- `time.Now / time.Since: api.go:1128 (LastContact), api.go:1215 (Stats), raft.go:221 (contact check), future.go:135 (dispatch), replication.go:416 (LastContact observation)`
-- `Config.HeartbeatTimeout / ElectionTimeout / CommitTimeout / LeaderLeaseTimeout / SnapshotInterval (config.go:149-205) with ReloadConfig (api.go:717-741)`
+No Clock or Tick abstraction exists anywhere in the module; all protocol timing is dispersed wall-clock use (randomTimeout -> time.After for election/heartbeat/commit/snapshot staggering, leader-lease timers, replication backoff, time.Now last-contact tracking). There is no single seam a test can advance deterministically.
 
 ### 随机性控制
 
 **目标已有入口**
 
-- `randomTimeout (util.go:34) used at raft.go:163, 217, 310, 353, 426; replication.go:169, 402, 495; snapshot.go:75`
-- `package init seeding of global math/rand (util.go:18-21)`
-- `NewInmemAddr / generateUUID (inmem_transport.go:15-17, util.go:59-71)`
+- `Config.Rand *rand.Rand (proposed injectable per-node source)`
 
 ### 生命周期控制
 
 **目标已有入口**
 
-- `Raft.Shutdown (api.go:1012)`
-- `Raft.NewRaft reconstruction (api.go:500)`
-- `cluster.Close / shutdown helpers in package testing support`
+- `Raft.Shutdown`
+- `shutdownFuture.Error`
+- `NewRaft`
 
 **调用示例**
 
 ```go
-if err := r.Shutdown().Error(); err != nil { t.Fatal(err) }
-r2, err := raft.NewRaft(cfg, fsm, logs, stable, snaps, trans2) // same LocalID and stores
-if err != nil { t.Fatal(err) }
+// Requires: r *raft.Raft, conf *raft.Config, fsm raft.FSM, logs raft.LogStore, stable raft.StableStore, snaps raft.SnapshotStore, trans raft.Transport
+// Shutdown is terminal for the instance; the test reconnects/recreates the transport for the next cycle.
+if err := r.Shutdown().Error(); err != nil { /* handle */ }
+r2, err := raft.NewRaft(conf, fsm, logs, stable, snaps, trans)
+if err != nil { /* handle */ }
+fmt.Println(r2.State())
 ```
 
 ### 状态观察
 
 **目标已有入口**
 
-- `Raft.State (api.go:1102)`
-- `Raft.Stats (api.go:1160)`
-- `Raft.CurrentTerm / LastIndex / CommitIndex / AppliedIndex (api.go:1221-1247)`
-- `Raft.LeaderWithID / Leader / LastContact / LeaderCh (api.go:786-802, 1128, 1117)`
-- `Raft.GetConfiguration (api.go:897) and ConfigurationFuture`
-- `Raft.ReloadableConfig (api.go:749)`
-- `NewObserver / RegisterObserver / DeregisterObserver (observer.go:87-118)`
-- `caller-owned LogStore for log ranges (LogStore.GetLog/FirstIndex/LastIndex, log.go)`
+- `Raft.State / Raft.Stats / Raft.CurrentTerm / Raft.CommitIndex / Raft.AppliedIndex / Raft.LastIndex / Raft.LastContact / Raft.LeaderWithID`
+- `Raft.GetConfiguration (ConfigurationFuture)`
+- `InmemStore.FirstIndex/LastIndex/GetLog/GetUint64 and InmemSnapshotStore.List (caller-owned stores)`
 
 **调用示例**
 
 ```go
-st := r.Stats() // map[string]string with "state", "term", "commit_index", "applied_index"
-state := r.State() // raft.Follower/Candidate/Leader
-cfgF := r.GetConfiguration()
-cfg := cfgF.Configuration() // raft.Configuration with Servers
+// Requires: r *raft.Raft
+fmt.Println(r.State(), r.CurrentTerm(), r.CommitIndex(), r.AppliedIndex(), r.Stats()["state"])
+```
+
+```go
+// Requires: r *raft.Raft
+future := r.GetConfiguration()
+if err := future.Error(); err != nil { /* handle */ }
+fmt.Println(future.Configuration().Servers, future.Index())
 ```
 
 ### 外部输入
 
 **目标已有入口**
 
-- `Raft.Apply (api.go:819)`
-- `Raft.ApplyLog (api.go:826)`
-- `Raft.AddVoter / AddNonvoter / RemoveServer / DemoteVoter (api.go:946-1007)`
-- `Raft.AddPeer / RemovePeer deprecated (api.go:908-936)`
+- `Raft.Apply / Raft.ApplyLog`
+- `Raft.AddVoter / Raft.AddNonvoter / Raft.RemoveServer / Raft.DemoteVoter`
 
 **调用示例**
 
 ```go
-c := raft.MakeCluster(3, t, nil)
-leader := c.Leader() // *raft.Raft
-future := leader.Apply([]byte("set x=1"), 0)
-if err := future.Error(); err != nil { t.Fatal(err) }
-idx, resp := future.Index(), future.Response()
+// Requires: r *raft.Raft
+future := r.Apply([]byte("set-x=1"), 10*time.Second)
+if err := future.Error(); err != nil { /* handle */ }
+fmt.Println(future.Response())
 ```
 
 ```go
-c := raft.MakeCluster(3, t, nil)
-leader := c.Leader()
-if err := leader.AddVoter("srv-4", "127.0.0.1:9004", 0, 0).Error(); err != nil { t.Fatal(err) }
+// Requires: leader *raft.Raft
+f := leader.AddVoter(raft.ServerID("node-2"), raft.ServerAddress("10.0.0.2:8300"), 0, 10*time.Second)
+if err := f.Error(); err != nil { /* handle */ }
+fmt.Println(f.Index())
 ```

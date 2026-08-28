@@ -27,8 +27,9 @@ capabilities:
         Message capture and injection use the same end-to-end path names. Each
         path spans protocol output, exclusive cache control, selected-instance
         operation, normal input, and completion. Do not split consecutive sender
-        and receiver boundaries of one route; evidence from one route cannot prove
-        support on another.
+        and receiver boundaries of one route. Different message families or
+        handlers remain one path when transport, cache, ingress, ownership, and
+        completion are shared; evidence from one route cannot prove another.
       snapshot_safety: >
         Returned snapshots must not let callers accidentally mutate cached,
         protocol, or controller state through shared mutable data. In Go, a
@@ -90,6 +91,13 @@ capabilities:
       direct_use_or_thin_coordination: >
         Reuse a directly testable Tick or Clock when sufficient. Add coordination
         only when existing time paths cannot be used deterministically as exposed.
+      patchability: >
+        The absence of Tick, dispersed wall-clock call sites, or edits across
+        several files is not automatically invasive. Classify PATCHABLE when a
+        clock/timer dependency can cover the protocol-relevant path while keeping
+        production defaults, timer ordering, and protocol transition conditions.
+        Use INVASIVE only when control requires redesigning scheduling, event
+        ordering, or protocol semantics.
       input_domain: >
         New values preserve the target's legal domain or reject invalid values.
 

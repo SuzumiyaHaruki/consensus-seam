@@ -73,6 +73,9 @@ Apply these common rules:
 - reuse one authoritative target-native state relationship where possible;
 - validate new time or randomness values against the target's legal domain;
 - keep the production default unchanged;
+- allow semantically narrow clock/timer dependency injection even when it
+  mechanically touches several files; preserve timer ordering and transition
+  conditions, and stop only if scheduling or protocol semantics must be redesigned;
 - make random choices reproducible for the claimed instance or scope; a shared
   seeded sequence is insufficient if concurrent call order changes assignment;
 - do not add lifecycle wrappers merely for symmetry when existing unavailable

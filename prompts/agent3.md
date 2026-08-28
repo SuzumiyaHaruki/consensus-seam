@@ -19,7 +19,9 @@ object are not separate paths unless ownership, boundaries, or completion
 semantics differ. Consecutive sender and receiver boundaries of one delivery
 route are not separate paths. Internal branches, rejected states, adjacent
 primitives, and excluded mechanisms belong in evidence or limitations; return
-`REVISE_AGENT1` when they are presented as execution paths.
+`REVISE_AGENT1` when they are presented as execution paths. Message families or
+handlers sharing the same transport, cache, ingress, ownership, and completion
+model remain one path.
 
 For each covered message path verify that:
 
@@ -61,6 +63,9 @@ persistence, or recovery semantics, treat network isolation as a stopped node,
 or add convenience wrappers despite directly composable unavailable and restore
 actions. Exclude caller-side deadlines, metrics, informational timestamps, setup
 IDs, and other non-protocol time/randomness unless they affect protocol behavior.
+Do not call time control invasive merely because Tick is absent or clock
+injection spans several files; judge whether production defaults, timer ordering,
+and protocol conditions can remain unchanged without redesigning scheduling.
 
 Reject a `SUPPORTED` classification when a stated limitation contradicts a
 path, entrypoint, snapshot-safety claim, or `existing_test_interface_complete`.
@@ -75,6 +80,10 @@ declared unused variables. Assumed variables must be named with Go types in a
 leading `// Requires:` comment so the snippet is type-check-ready.
 `public_entrypoints` must contain only operations callable by the declared
 consumer. Internal stores and hooks are not public API.
+
+For Analyzer claims, existing `entrypoints` must resolve to the unmodified source;
+proposed APIs belong only in `suggested_changes`. Applicable PATCHABLE, PARTIAL,
+and INVASIVE routes must still be present in `execution_paths`.
 
 Triage every concern:
 

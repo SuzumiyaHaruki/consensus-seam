@@ -23,13 +23,18 @@ surface. Different message types, helper functions, files, and internal branches
 that reach the same control surface are not separate paths. A path is an
 end-to-end runtime route, not each consecutive producer/consumer boundary.
 Multiple accessors on one runtime object are entrypoints, not paths, unless
-ownership, input/output boundaries, or completion semantics change.
+ownership, input/output boundaries, or completion semantics change. Different
+message methods, families, or handlers remain one path when they share the same
+transport, cache, ingress, ownership, and completion model.
 
 Record only applicable end-to-end routes in `execution_paths`. Put internal
 branches, rejected states, adjacent primitives, and mechanisms excluded from the
-capability in evidence or `limitations`, not paths. `entrypoints` contains only
-interfaces callable by the declared consumer; internal call sites belong in
-evidence. Use `SUPPORTED` only when every
+capability in evidence or `limitations`, not paths. Record applicable paths even
+when their status is PATCHABLE, PARTIAL, or INVASIVE; lack of support is not a
+reason to leave `execution_paths` empty. `entrypoints` contains only interfaces
+that already exist in the unmodified source and are callable by the declared
+consumer. Internal call sites belong in evidence, and proposed APIs belong only
+in `suggested_changes`. Use `SUPPORTED` only when every
 materially relevant in-scope path supports the capability. Use `PATCHABLE` when
 at least one missing path can be completed with a low-intrusion change, and
 `PARTIAL` when some paths work but no remaining gap is safely patchable. Never
@@ -94,9 +99,14 @@ slices, maps, pointers, interfaces, channels, futures, and consumable streams
 before claiming that observation or cached-message snapshots cannot mutate or
 consume internal state.
 
-Treat dispersed wall-clock use without explicit Tick or injectable Clock as
-`INVASIVE` in v0.1. Lifecycle control requires both making a logical node
-unavailable and making it participate again. Existing pause/resume,
+The absence of Tick, dispersed wall-clock use, or edits across several files is
+not automatically invasive. Use `PATCHABLE` when protocol time can be routed
+through an injected clock/timer while preserving production defaults, timer
+ordering, and transition conditions. Use `INVASIVE` only when control requires
+redesigning scheduling, event ordering, or protocol semantics.
+
+Lifecycle control requires both making a logical node unavailable and making it
+participate again. Existing pause/resume,
 stop/reconstruction, caller-controlled scheduling, or process control may be
 composed directly; do not require a convenience wrapper or invent crash,
 persistence, or recovery semantics. Network isolation, message loss, or a

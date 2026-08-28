@@ -1,6 +1,6 @@
 {
   "time_control": {
-    "reason": "Wall-clock time is dispersed throughout the protocol: timers are created via time.After inside randomTimeout and the user APIs, and expiry/contact decisions use time.Now/time.Since directly. There is no explicit Tick and no injectable Clock; shrinking Config durations only accelerates real time. Deterministic advancement would require threading an injectable clock or tick through the main loop, replication, snapshotting, and API timeouts \u2014 an invasive change, not a low-intrusion patch.",
+    "reason": "Protocol-visible time cannot be advanced deterministically; election and heartbeat firing depend on the real wall clock, so tests can only shrink the configured timeouts and wait in wall-clock time.",
     "status": "INVASIVE"
   }
 }
