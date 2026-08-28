@@ -32,6 +32,12 @@ changing protocol semantics.
 For an external declared consumer, `public_entrypoints` must work in an ordinary
 non-`_test.go` import without same-package access or the target project's private
 test runner.
+Do not stop after implementing the easiest path. Add a thin test-facing layer for
+each discovered path that can be completed without changing protocol semantics.
+The absence of an existing cache or wrapper is the selected gap to implement, not
+an adequate uncovered-path reason. If a path truly crosses the low-intrusion
+boundary, report that concrete semantic reason instead of substituting another
+path.
 
 When message capture or injection is selected, preserve Agent 1's shared message
 path names and implement each route end to end. Do not split consecutive outbound
@@ -95,12 +101,18 @@ Apply these common rules:
 - allow semantically narrow clock/timer dependency injection even when it
   mechanically touches several files; preserve timer ordering and transition
   conditions, and stop only if scheduling or protocol semantics must be redesigned;
-- make random choices reproducible for the claimed instance or scope; a shared
-  seeded sequence is insufficient if concurrent call order changes assignment;
-- do not add lifecycle wrappers merely for symmetry when existing unavailable
-  and restore operations are directly composable;
-- do not treat network isolation or message loss as stopping node lifecycle while
-  local protocol activity continues;
+- reproduce each claimed instance's sequence of random choices for the same
+  initial state, control parameters, and schedule, and expose or record each
+  selected value before dependent test actions; values may vary across decisions;
+- accept a shared seeded source when draw assignment is deterministic under the
+  same schedule; do not require a per-instance source or constant value merely
+  for symmetry;
+- implement lifecycle as crash/restart: discard the volatile runtime, retain only
+  state already persisted by the target, and construct a fresh runtime through
+  the normal recovery path; pause/resume of the same object is not sufficient;
+- preserve persistence-before-send ordering and keep already cached in-flight
+  messages under test control; do not implement protocol catch-up in the seam;
+- do not invent persistence semantics when the target defines no recovery state;
 - do not repeat resolved Analyzer gaps as remaining limitations.
 
 Record actual entrypoints, consumer-callable `public_entrypoints`, cache location,

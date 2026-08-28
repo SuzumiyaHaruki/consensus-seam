@@ -31,6 +31,13 @@ model remain one path.
 Reject route partitions that merge different public object ownership or
 completion models merely because they share internal state, or that create a new
 route solely for another observation accessor or store.
+When a facade owns a cache around an independently usable public runtime object,
+verify that the facade and direct-object routes were analyzed and implemented
+separately; the facade cache is not evidence for the direct route.
+Return `REVISE_AGENT2` when an uncovered path can be completed by a cache, thin
+wrapper, hook, or dependency injection without changing protocol semantics. The
+absence of an existing helper is the patchable gap, not justification for
+implementing only the easiest or project-self-test path.
 
 For each covered message path verify that:
 
@@ -72,12 +79,17 @@ conclusion under `message_cache_injection_coherence`.
 
 Also verify that new time and randomness controls preserve legal values, the
 existing algorithm, and the production default. Random control must reproduce
-choices for the claimed instance or scope, not only a shared sequence whose
-concurrent assignment can vary. Reject lifecycle changes that invent crash,
-persistence, or recovery semantics, treat network isolation as a stopped node,
-or add convenience wrappers despite directly composable unavailable and restore
-actions. Exclude caller-side deadlines, metrics, informational timestamps, setup
-IDs, and other non-protocol time/randomness unless they affect protocol behavior.
+each claimed instance's sequence for the same initial state, control parameters,
+and schedule, and let the test learn each selected value; values need not be
+constant. A shared seeded source is acceptable when draw assignment is
+deterministic under that schedule. Lifecycle control must discard the volatile
+runtime and construct a fresh runtime from state already persisted through the
+target's normal recovery path. Pause/resume of the same object, graceful stop,
+network isolation, and message loss do not prove crash/restart. Reject invented
+persistence semantics, changed persistence-before-send ordering, loss of control
+over already cached messages, or seam code that implements protocol catch-up.
+Exclude caller-side deadlines, metrics, informational timestamps, setup IDs, and
+other non-protocol time/randomness unless they affect protocol behavior.
 Do not call time control invasive merely because Tick is absent or clock
 injection spans several files; judge whether production defaults, timer ordering,
 and protocol conditions can remain unchanged without redesigning scheduling.

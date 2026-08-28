@@ -38,6 +38,9 @@ Do not let a project test facade hide a directly usable public route when its
 cache ownership, continuation, or completion model differs; conversely, do not
 duplicate a facade and its underlying primitive as paths when those properties
 are identical.
+When a facade owns a cache around a public runtime object that consumers can also
+drive directly, record the facade route and direct-object route separately; do
+not borrow the facade's cache to make the direct route appear complete.
 Apply the runtime-route partition consistently across capabilities when it is
 applicable. Do not merge routes with different public object ownership or
 completion semantics merely because they share internal state, and do not create
@@ -55,6 +58,10 @@ materially relevant in-scope path supports the capability. Use `PATCHABLE` when
 at least one missing path can be completed with a low-intrusion change, and
 `PARTIAL` when some paths work but no remaining gap is safely patchable. Never
 hide a path to simplify the result.
+For every `PATCHABLE` capability, make `suggested_changes` account for every
+discovered path that can be completed without changing protocol semantics. Do
+not recommend only the easiest facade. A public path lacking a cache or thin
+test-facing wrapper is normally the patch target, not a reason to omit it.
 
 Distinguish an underlying primitive from a complete test interface. Populate
 `existing_test_interface_complete`, `test_support_reason`, and
@@ -83,7 +90,9 @@ unless the target constructs, owns, and validates that relationship for the
 claimed path. Unresolved targets need explicit failure behavior.
 
 Do not combine capture evidence from path A with injection evidence from path B.
-One complete harness path does not cover another public path.
+One complete harness path does not cover another public path. Message control is
+complete only when every discovered low-intrusion path is complete; implementing
+only the easiest or project-self-test path is insufficient.
 
 A complete capture cache retains controlled output before delivery until a test
 action takes, drops, clears, or injects it. It exposes target-native content and
@@ -135,21 +144,25 @@ applied deterministically. A nonblocking or asynchronous surface that can drop,
 coalesce, or silently defer time events is not complete merely because another
 path has an exact Tick.
 
-Lifecycle control requires both making a logical node unavailable and making it
-participate again. Existing pause/resume,
-stop/reconstruction, caller-controlled scheduling, or process control may be
-composed directly; do not require a convenience wrapper or invent crash,
-persistence, or recovery semantics. Network isolation, message loss, or a
-partition is not lifecycle unavailability while local protocol activity
-continues.
+Lifecycle control requires crash and restart, not only unavailability. Crash
+stops protocol activity, discards the volatile runtime instance, and retains only
+state already made persistent by the target. Restart constructs a fresh runtime
+through the target's normal recovery path. Pause/resume of the same object,
+graceful stop, caller-controlled scheduling, network isolation, and message loss
+are useful primitives but do not prove crash/restart. Do not invent persistence
+semantics or implement post-restart catch-up; catch-up remains protocol behavior
+for the test to drive and observe. Preserve target-defined persistence-before-
+send ordering and leave already cached in-flight messages under test control.
 
-For randomness, `SUPPORTED` requires reproducible choices for the claimed node,
-instance, or shared scope. A fixed global random sequence is insufficient when
-concurrent call order can assign its values to different instances or protocol
-decisions. Count only time and randomness that can affect protocol behavior;
-caller-side deadlines, metrics, logging, informational timestamps, setup IDs,
-and non-protocol addresses belong in limitations unless they feed back into the
-protocol.
+For randomness, `SUPPORTED` requires the same initial state, control parameters,
+and test schedule to reproduce each claimed instance's sequence of protocol
+choices, and the test must be able to learn each selected value before scheduling
+dependent work. Values may change at every decision or reset; do not equate
+reproducibility with a constant. A shared seeded source is acceptable when draw
+assignment is deterministic, and incomplete only when the same declared schedule
+can still reassign draws. Count only randomness that affects protocol behavior;
+setup IDs, addresses, logging values, and other non-protocol randomness belong in
+limitations.
 
 For directly usable interfaces, add a short syntactically valid Go snippet to
 `usage_examples` when source evidence establishes the setup. Show mechanics, not

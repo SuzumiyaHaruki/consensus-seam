@@ -32,6 +32,11 @@ capabilities:
         and receiver boundaries of one route. Different message families or
         handlers remain one path when transport, cache, ingress, ownership, and
         completion are shared; evidence from one route cannot prove another.
+      path_coverage: >
+        Implement every discovered in-scope path that can be completed without
+        changing protocol semantics. One existing harness or the easiest path
+        does not cover another public path. A missing cache or wrapper on a public
+        path is the work to implement, not by itself a reason to leave it uncovered.
       snapshot_safety: >
         Returned snapshots must not let callers accidentally mutate cached,
         protocol, or controller state through shared mutable data. In Go, a
@@ -108,8 +113,10 @@ capabilities:
 
   randomness_control:
     description: >
-      Protocol-relevant randomness can be fixed or injected so the same initial
-      state and control parameters reproduce the same random choices.
+      With the same initial state, control parameters, and test schedule,
+      protocol-relevant random decisions reproduce the same sequence and the test
+      can learn each selected target-native value. Values may change at every
+      decision or reset; reproducibility does not require a constant value.
     testing_contract:
       protocol_relevance: >
         Count random choices that affect protocol state, message behavior,
@@ -117,39 +124,54 @@ capabilities:
         logging values, and other non-protocol randomness are not capability
         paths.
       preserve_behavior: >
-        Reuse existing configuration or expose the existing random choice through
-        a config option, injected source, hook, or test constructor. Do not replace
+        Reuse existing configuration or expose decisions through an explicit
+        choice, seed, injected source, hook, or test constructor. Do not replace
         the algorithm, and keep the production default unchanged.
+      choice_visibility: >
+        The test can obtain the value selected for each protocol-relevant random
+        decision, either because it supplied the value or because the target
+        exposes or records the draw before the test must schedule dependent work.
       scope_and_domain: >
         Document whether control is per node, instance, or shared, and preserve or
         explicitly validate the target's legal value domain.
       reproducible_assignment: >
-        For the claimed scope, the same initial state and control parameters make
-        the same instance receive the same protocol-relevant choices. Fixing only
-        a shared random-number sequence is incomplete when concurrent call order
-        can assign those values to different instances or decisions.
+        For the claimed scope, the same initial state, control parameters, and
+        schedule make each instance receive the same sequence of choices. A shared
+        seeded source is acceptable when that assignment is deterministic; it is
+        incomplete only when the same declared schedule can still assign draws to
+        different instances or decisions.
 
   lifecycle_control:
     description: >
-      Test code can make a selected logical node stop protocol activity and later
-      make it participate again. The report names the actual pause/resume,
-      stop/reconstruction, scheduling, or process-control mechanism.
+      Test code can crash a selected logical node and restart it through the
+      target's normal recovery path. Crash stops protocol activity, discards the
+      volatile runtime instance, and retains only state the target had already
+      made persistent. Restart reconstructs a fresh runtime from that state.
     obligations:
-      stop_boundary: Identify how the logical node becomes unavailable.
-      restart_or_recovery_boundary: Identify how the same logical node becomes available again.
+      stop_boundary: Identify how protocol activity stops and the volatile runtime is discarded.
+      restart_or_recovery_boundary: Identify the normal recovery path that constructs a fresh runtime from retained state.
       state_ownership_defined: Record only state ownership defined by the target, or use NOT_APPLICABLE.
       persistent_volatile_semantics_defined: Record only persistence semantics defined by the target, or use NOT_APPLICABLE.
     testing_contract:
-      availability_cycle: >
-        Both unavailable and restore actions are required, but they may be a
-        directly usable composition of existing target operations. A dedicated
-        convenience wrapper is not required.
+      crash_restart_cycle: >
+        Both crash and restart are required, but they may be a directly usable
+        composition of existing target operations. A dedicated convenience wrapper is not required.
+      state_boundary: >
+        Preserve target-defined durable state exactly as of the crash point and
+        discard volatile protocol state. Pause/resume of the same in-memory object
+        is useful but is not crash/restart. Do not invent persistence semantics.
+      message_and_ordering_boundary: >
+        In-flight messages already owned by the test cache remain under test
+        control. Preserve any target-defined persistence-before-send ordering; the
+        seam must not make output deliverable earlier than the original path.
+      recovery_scope: >
+        Restart only restores the node through its normal recovery entrypoint.
+        Catch-up after restart is protocol behavior for the test to drive and
+        observe, not behavior implemented by the seam.
       honest_semantics: >
-        State whether the same instance resumes or a new instance is constructed.
-        Do not call pause or graceful stop a production crash, and do not invent
-        persistence or recovery semantics. Network isolation, message loss, or a
-        partition alone is not lifecycle unavailability while the node continues
-        local protocol activity.
+        Do not call pause, graceful stop, network isolation, message loss, or a
+        partition a crash while the old volatile runtime remains available. Do
+        not claim durable recovery when the target defines no persistence boundary.
 
   observation:
     description: >
