@@ -1,123 +1,410 @@
 diff --git a/raft.go b/raft.go
-index 94c2363..9213769 100644
+index 94c2363..54a538f 100644
 --- a/raft.go
 +++ b/raft.go
-@@ -137,6 +137,15 @@ type Config struct {
+@@ -136,6 +136,17 @@ type Config struct {
+ 	// heartbeats. That is, a leader sends heartbeat messages to maintain its
  	// leadership every HeartbeatTick ticks.
  	HeartbeatTick int
- 
-+	// RandomizedElectionTimeout, if non-zero, fixes the randomized election
-+	// timeout to this value on every state change, instead of drawing a new
-+	// random value from [ElectionTick, 2*ElectionTick-1] (the default
-+	// behavior). It must be within that range; Config.validate rejects other
-+	// values. Setting it makes election timing deterministic and repeatable
-+	// across state changes, which is useful in tests. A value of 0 preserves
-+	// the randomized behavior.
++	// RandomizedElectionTimeout, if non-zero, is the fixed value used for the
++	// randomized election timeout. Normally the timeout is drawn uniformly from
++	// [ElectionTick, 2*ElectionTick-1] each time the raft state is reset (when
++	// becoming a follower or candidate). Setting this option fixes the draw, so
++	// the same sequence of ticks produces the same election timing, which makes
++	// election scheduling reproducible in tests.
++	//
++	// If non-zero, it must lie in [ElectionTick, 2*ElectionTick-1]; Config
++	// validation rejects any other value. A zero value preserves the default
++	// randomized behavior. No other protocol behavior is affected.
 +	RandomizedElectionTimeout int
-+
+ 
  	// Storage is the storage for raft. raft generates entries and states to be
  	// stored in storage. raft reads the persisted entries and states out of
- 	// Storage when it needs. raft reads out the previous state and configuration
-@@ -304,6 +313,12 @@ func (c *Config) validate() error {
+@@ -304,6 +315,12 @@ func (c *Config) validate() error {
  		return errors.New("election tick must be greater than heartbeat tick")
  	}
  
 +	if c.RandomizedElectionTimeout != 0 &&
 +		(c.RandomizedElectionTimeout < c.ElectionTick ||
-+			c.RandomizedElectionTimeout > 2*c.ElectionTick-1) {
-+		return errors.New("randomized election timeout must be in [election tick, 2*election tick - 1] or 0")
++			c.RandomizedElectionTimeout >= 2*c.ElectionTick) {
++		return errors.New("randomized election timeout must be in [election tick, 2 * election tick - 1]")
 +	}
 +
  	if c.Storage == nil {
  		return errors.New("storage cannot be nil")
  	}
-@@ -417,8 +432,12 @@ type raft struct {
+@@ -417,8 +434,12 @@ type raft struct {
  	// [electiontimeout, 2 * electiontimeout - 1]. It gets reset
  	// when raft changes its state to follower or candidate.
  	randomizedElectionTimeout int
 -	disableProposalForwarding bool
 -	stepDownOnRemoval         bool
-+	// randomizedElectionTimeoutOverride, when non-zero, is honored by
-+	// resetRandomizedElectionTimeout instead of drawing a new random value.
-+	// It is set once from Config.RandomizedElectionTimeout.
-+	randomizedElectionTimeoutOverride int
-+	disableProposalForwarding         bool
-+	stepDownOnRemoval                 bool
++	// fixedRandomizedElectionTimeout, if non-zero, is the value used by
++	// resetRandomizedElectionTimeout in place of a random draw. It is set from
++	// Config.RandomizedElectionTimeout and never changes.
++	fixedRandomizedElectionTimeout int
++	disableProposalForwarding      bool
++	stepDownOnRemoval              bool
  
  	tick func()
  	step stepFunc
-@@ -445,23 +464,24 @@ func newRaft(c *Config) *raft {
+@@ -464,6 +485,10 @@ func newRaft(c *Config) *raft {
+ 		traceLogger:                 c.TraceLogger,
  	}
  
- 	r := &raft{
--		id:                          c.ID,
--		lead:                        None,
--		isLearner:                   false,
--		raftLog:                     raftlog,
--		maxMsgSize:                  entryEncodingSize(c.MaxSizePerMsg),
--		maxUncommittedSize:          entryPayloadSize(c.MaxUncommittedEntriesSize),
--		trk:                         tracker.MakeProgressTracker(c.MaxInflightMsgs, c.MaxInflightBytes),
--		electionTimeout:             c.ElectionTick,
--		heartbeatTimeout:            c.HeartbeatTick,
--		logger:                      c.Logger,
--		checkQuorum:                 c.CheckQuorum,
--		preVote:                     c.PreVote,
--		readOnly:                    newReadOnly(c.ReadOnlyOption),
--		disableProposalForwarding:   c.DisableProposalForwarding,
--		disableConfChangeValidation: c.DisableConfChangeValidation,
--		stepDownOnRemoval:           c.StepDownOnRemoval,
--		traceLogger:                 c.TraceLogger,
-+		id:                                c.ID,
-+		lead:                              None,
-+		isLearner:                         false,
-+		raftLog:                           raftlog,
-+		maxMsgSize:                        entryEncodingSize(c.MaxSizePerMsg),
-+		maxUncommittedSize:                entryPayloadSize(c.MaxUncommittedEntriesSize),
-+		trk:                               tracker.MakeProgressTracker(c.MaxInflightMsgs, c.MaxInflightBytes),
-+		electionTimeout:                   c.ElectionTick,
-+		heartbeatTimeout:                  c.HeartbeatTick,
-+		randomizedElectionTimeoutOverride: c.RandomizedElectionTimeout,
-+		logger:                            c.Logger,
-+		checkQuorum:                       c.CheckQuorum,
-+		preVote:                           c.PreVote,
-+		readOnly:                          newReadOnly(c.ReadOnlyOption),
-+		disableProposalForwarding:         c.DisableProposalForwarding,
-+		disableConfChangeValidation:       c.DisableConfChangeValidation,
-+		stepDownOnRemoval:                 c.StepDownOnRemoval,
-+		traceLogger:                       c.TraceLogger,
- 	}
- 
++	if c.RandomizedElectionTimeout != 0 {
++		r.fixedRandomizedElectionTimeout = c.RandomizedElectionTimeout
++	}
++
  	traceInitState(r)
-@@ -2047,6 +2067,10 @@ func (r *raft) pastElectionTimeout() bool {
+ 
+ 	lastID := r.raftLog.lastEntryID()
+@@ -2047,6 +2072,10 @@ func (r *raft) pastElectionTimeout() bool {
  }
  
  func (r *raft) resetRandomizedElectionTimeout() {
-+	if r.randomizedElectionTimeoutOverride != 0 {
-+		r.randomizedElectionTimeout = r.randomizedElectionTimeoutOverride
++	if r.fixedRandomizedElectionTimeout != 0 {
++		r.randomizedElectionTimeout = r.fixedRandomizedElectionTimeout
 +		return
 +	}
  	r.randomizedElectionTimeout = r.electionTimeout + globalRand.Intn(r.electionTimeout)
  }
  
-diff --git a/rafttest/interaction_env_handler_add_nodes.go b/rafttest/interaction_env_handler_add_nodes.go
-index e68a295..56ba168 100644
---- a/rafttest/interaction_env_handler_add_nodes.go
-+++ b/rafttest/interaction_env_handler_add_nodes.go
-@@ -69,6 +69,8 @@ func (env *InteractionEnv) handleAddNodes(t *testing.T, d datadriven.TestData) e
- 				}
- 			case "step-down-on-removal":
- 				arg.Scan(t, i, &cfg.StepDownOnRemoval)
-+			case "randomized-election-timeout":
-+				arg.Scan(t, i, &cfg.RandomizedElectionTimeout)
- 			}
- 		}
- 	}
-diff --git a/rafttest/interaction_env_randomness_test.go b/rafttest/interaction_env_randomness_test.go
+diff --git a/raft_randomized_election_timeout_test.go b/raft_randomized_election_timeout_test.go
 new file mode 100644
-index 0000000..ec4e0d0
+index 0000000..f13cad8
 --- /dev/null
-+++ b/rafttest/interaction_env_randomness_test.go
-@@ -0,0 +1,50 @@
++++ b/raft_randomized_election_timeout_test.go
+@@ -0,0 +1,107 @@
++// Copyright 2024 The etcd Authors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package raft
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++// TestConfigRandomizedElectionTimeoutValidation verifies that
++// Config.RandomizedElectionTimeout preserves the legal domain of the
++// randomized election timeout, [ElectionTick, 2*ElectionTick-1], and rejects
++// any value outside of it instead of silently creating an impossible state.
++func TestConfigRandomizedElectionTimeoutValidation(t *testing.T) {
++	const wantErr = "randomized election timeout must be in [election tick, 2 * election tick - 1]"
++	tests := []struct {
++		name      string
++		election  int
++		heartbeat int
++		fixed     int
++		wantErr   string
++	}{
++		{"zero keeps randomized default", 10, 5, 0, ""},
++		{"lower bound", 10, 5, 10, ""},
++		{"upper bound", 10, 5, 19, ""},
++		{"mid range", 10, 5, 15, ""},
++		{"below lower bound", 10, 5, 9, wantErr},
++		{"above upper bound", 10, 5, 20, wantErr},
++		{"negative", 10, 5, -1, wantErr},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			cfg := &Config{
++				ID:                        1,
++				ElectionTick:              tt.election,
++				HeartbeatTick:             tt.heartbeat,
++				Storage:                   NewMemoryStorage(),
++				MaxSizePerMsg:             noLimit,
++				MaxInflightMsgs:           256,
++				RandomizedElectionTimeout: tt.fixed,
++			}
++			err := cfg.validate()
++			if tt.wantErr == "" {
++				require.NoError(t, err)
++				return
++			}
++			require.EqualError(t, err, tt.wantErr)
++		})
++	}
++}
++
++// TestFixedRandomizedElectionTimeout verifies that a Config-fixed randomized
++// election timeout is used at startup and survives every state reset that
++// would normally draw a new random value.
++func TestFixedRandomizedElectionTimeout(t *testing.T) {
++	cfg := newTestConfig(1, 10, 5, newTestMemoryStorage(withPeers(1)))
++	cfg.RandomizedElectionTimeout = 15
++	r := newRaft(cfg)
++	require.Equal(t, 15, r.randomizedElectionTimeout)
++
++	// Resets (becomeFollower / becomeCandidate) keep the fixed value.
++	r.becomeFollower(2, None)
++	require.Equal(t, 15, r.randomizedElectionTimeout)
++	r.becomeCandidate()
++	require.Equal(t, 15, r.randomizedElectionTimeout)
++	r.becomeFollower(3, 1)
++	require.Equal(t, 15, r.randomizedElectionTimeout)
++}
++
++// TestDefaultRandomizedElectionTimeout verifies that the default (zero) value
++// keeps drawing the randomized election timeout from its legal domain.
++func TestDefaultRandomizedElectionTimeout(t *testing.T) {
++	r := newTestRaft(1, 10, 5, newTestMemoryStorage(withPeers(1)))
++	require.GreaterOrEqual(t, r.randomizedElectionTimeout, 10)
++	require.LessOrEqual(t, r.randomizedElectionTimeout, 19)
++}
++
++// TestFixedRandomizedElectionTimeoutTick verifies end-to-end determinism
++// through the public RawNode.Tick entrypoint: with a fixed timeout, the
++// election fires at exactly the configured tick and never before.
++func TestFixedRandomizedElectionTimeoutTick(t *testing.T) {
++	storage := newTestMemoryStorage(withPeers(1))
++	cfg := newTestConfig(1, 10, 5, storage)
++	cfg.RandomizedElectionTimeout = 10
++	rn, err := NewRawNode(cfg)
++	require.NoError(t, err)
++
++	for i := 0; i < 9; i++ {
++		rn.Tick()
++		require.Equal(t, StateFollower, rn.raft.state, "expected follower at tick %d", i+1)
++	}
++	rn.Tick()
++	require.Equal(t, StateCandidate, rn.raft.state, "election must fire at exactly tick 10")
++}
+diff --git a/rafttest/interaction_env.go b/rafttest/interaction_env.go
+index 16881c4..c5073af 100644
+--- a/rafttest/interaction_env.go
++++ b/rafttest/interaction_env.go
+@@ -42,6 +42,13 @@ type Node struct {
+ 	AppendWork []pb.Message // []MsgStorageAppend
+ 	ApplyWork  []pb.Message // []MsgStorageApply
+ 	History    []pb.Snapshot
++
++	// Stopped is set by InteractionEnv.StopNode and cleared by
++	// InteractionEnv.RestartNode. While Stopped is true the node's RawNode is
++	// nil (all volatile in-memory state has been discarded) and env
++	// operations that would drive the node's protocol state fail with an
++	// error. The node's Storage and Config survive and remain readable.
++	Stopped bool
+ }
+ 
+ // InteractionEnv facilitates testing of complex interactions between the
+@@ -51,6 +58,14 @@ type InteractionEnv struct {
+ 	Nodes    []Node
+ 	Messages []pb.Message // in-flight messages
+ 
++	// msgIDs tracks one stable, unique id per entry of Messages. It is kept
++	// in lock-step with Messages by the env's mutation helpers so that
++	// MessageHandle references keep denoting the same concrete instance
++	// across removals. Do not mutate Messages directly; use the env's
++	// append/remove helpers so the ids stay aligned.
++	msgIDs    []uint64
++	nextMsgID uint64
++
+ 	Output *RedirectLogger
+ }
+ 
+diff --git a/rafttest/interaction_env_handle.go b/rafttest/interaction_env_handle.go
+new file mode 100644
+index 0000000..a7b4e06
+--- /dev/null
++++ b/rafttest/interaction_env_handle.go
+@@ -0,0 +1,177 @@
++// Copyright 2024 The etcd Authors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package rafttest
++
++import (
++	"fmt"
++
++	"go.etcd.io/raft/v3/raftpb"
++)
++
++// MessageHandle is an opaque reference to one concrete message instance in
++// an InteractionEnv's message cache. Handles are obtained from
++// EnumerateMessages and remain valid until the referenced message is
++// consumed by TakeMessage or InjectMessage, removed by DropMessage or
++// ClearMessages, or delivered/dropped via DeliverMsgs. A handle obtained
++// from one InteractionEnv is not valid for another env. Two cached messages
++// with identical content always receive distinct handles.
++type MessageHandle struct {
++	env *InteractionEnv
++	id  uint64
++}
++
++// EnvMessage pairs one cached message instance with its stable handle. Msg
++// is a snapshot copy: mutating it (including its slice fields) does not
++// affect the cache or the underlying raft state.
++type EnvMessage struct {
++	Handle MessageHandle
++	Msg    raftpb.Message
++}
++
++// EnumerateMessages returns a snapshot of the currently cached messages in
++// cache order, each paired with a stable handle for later per-instance
++// operations. The returned messages are deep copies and are safe to mutate.
++func (env *InteractionEnv) EnumerateMessages() []EnvMessage {
++	msgs := make([]EnvMessage, len(env.Messages))
++	for i, m := range env.Messages {
++		msgs[i] = EnvMessage{
++			Handle: MessageHandle{env: env, id: env.msgIDs[i]},
++			Msg:    cloneMessage(m),
++		}
++	}
++	return msgs
++}
++
++// TakeMessage removes the cached message referenced by h from the cache and
++// returns a snapshot copy of it. The second return value is false if h does
++// not reference a currently cached message (for example because it was
++// already consumed, dropped, cleared, or delivered).
++func (env *InteractionEnv) TakeMessage(h MessageHandle) (raftpb.Message, bool) {
++	i := env.indexOf(h)
++	if i < 0 {
++		return raftpb.Message{}, false
++	}
++	m := env.Messages[i]
++	env.removeIndex(i)
++	return cloneMessage(m), true
++}
++
++// DropMessage removes the cached message referenced by h from the cache
++// without delivering it anywhere. It reports whether a message was removed.
++func (env *InteractionEnv) DropMessage(h MessageHandle) bool {
++	i := env.indexOf(h)
++	if i < 0 {
++		return false
++	}
++	env.removeIndex(i)
++	return true
++}
++
++// InjectMessage removes the cached message referenced by h from the cache
++// and delivers it through the normal protocol input boundary: the message
++// is stepped into env.Nodes[msg.To-1], preserving sender, receiver, and
++// content. On success the message is gone from the cache. If Step reports a
++// synchronous error the message has already been removed from the cache and
++// the error is returned; retry/requeue/loss policy is left to the test. If
++// the cached destination is out of range, an error is returned and the
++// message stays in the cache.
++func (env *InteractionEnv) InjectMessage(h MessageHandle) error {
++	i := env.indexOf(h)
++	if i < 0 {
++		return fmt.Errorf("message handle does not reference a cached message")
++	}
++	m := env.Messages[i]
++	toIdx := int(m.To - 1)
++	if toIdx < 0 || toIdx >= len(env.Nodes) {
++		return fmt.Errorf("cached message targets unknown node %d", m.To)
++	}
++	if env.Nodes[toIdx].Stopped {
++		// The destination is down; keep the message in the cache so that it
++		// can be delivered after the node is restarted.
++		return fmt.Errorf("cached message targets stopped node %d", m.To)
++	}
++	env.removeIndex(i)
++	if err := env.Nodes[toIdx].Step(m); err != nil {
++		return err
++	}
++	return nil
++}
++
++// ClearMessages removes all messages from the cache and returns the number
++// of messages removed. All outstanding handles become invalid.
++func (env *InteractionEnv) ClearMessages() int {
++	n := len(env.Messages)
++	env.Messages = nil
++	env.msgIDs = nil
++	return n
++}
++
++// indexOf returns the cache position of the message referenced by h, or -1.
++func (env *InteractionEnv) indexOf(h MessageHandle) int {
++	if h.env != env {
++		return -1
++	}
++	for i, id := range env.msgIDs {
++		if id == h.id {
++			return i
++		}
++	}
++	return -1
++}
++
++// removeIndex removes the cache entry at position i, keeping msgIDs aligned.
++func (env *InteractionEnv) removeIndex(i int) {
++	env.Messages = append(env.Messages[:i], env.Messages[i+1:]...)
++	env.msgIDs = append(env.msgIDs[:i], env.msgIDs[i+1:]...)
++}
++
++// appendMessages adds messages to the authoritative cache, assigning each a
++// fresh stable id. All in-package cache mutations must go through this
++// method (or the removal helpers) so that message handles stay consistent.
++func (env *InteractionEnv) appendMessages(msgs ...raftpb.Message) {
++	for _, m := range msgs {
++		env.nextMsgID++
++		env.msgIDs = append(env.msgIDs, env.nextMsgID)
++		env.Messages = append(env.Messages, m)
++	}
++}
++
++// cloneMessage returns a deep copy of m so that snapshots handed to tests
++// share no mutable storage (Entries, Context, Snapshot.Data, Responses)
++// with the cache or the raft state machine.
++func cloneMessage(m raftpb.Message) raftpb.Message {
++	m.Context = append([]byte(nil), m.Context...)
++	if m.Snapshot != nil {
++		s := *m.Snapshot
++		s.Data = append([]byte(nil), m.Snapshot.Data...)
++		m.Snapshot = &s
++	}
++	if len(m.Entries) > 0 {
++		ents := make([]raftpb.Entry, len(m.Entries))
++		for i := range m.Entries {
++			ents[i] = m.Entries[i]
++			ents[i].Data = append([]byte(nil), m.Entries[i].Data...)
++		}
++		m.Entries = ents
++	}
++	if len(m.Responses) > 0 {
++		resps := make([]raftpb.Message, len(m.Responses))
++		for i := range m.Responses {
++			resps[i] = cloneMessage(m.Responses[i])
++		}
++		m.Responses = resps
++	}
++	return m
++}
+diff --git a/rafttest/interaction_env_handle_test.go b/rafttest/interaction_env_handle_test.go
+new file mode 100644
+index 0000000..1749308
+--- /dev/null
++++ b/rafttest/interaction_env_handle_test.go
+@@ -0,0 +1,193 @@
 +// Copyright 2024 The etcd Authors
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -137,43 +424,518 @@ index 0000000..ec4e0d0
 +import (
 +	"testing"
 +
-+	"github.com/cockroachdb/datadriven"
 +	"github.com/stretchr/testify/require"
 +
 +	"go.etcd.io/raft/v3"
++	"go.etcd.io/raft/v3/raftpb"
 +)
 +
-+// TestAddNodesRandomizedElectionTimeout verifies that the add-nodes command
-+// accepts a randomized-election-timeout argument and that the fixed value
-+// makes election timing deterministic: with the raftConfigStub's ElectionTick
-+// of 3, a fixed timeout of 5 fires the election on exactly the 5th tick.
-+func TestAddNodesRandomizedElectionTimeout(t *testing.T) {
++// newMessageEnv builds a 3-node InteractionEnv bootstrapped like the
++// datadriven tests (voters 1,2,3, snapshot index 2).
++func newMessageEnv(t *testing.T) *InteractionEnv {
++	t.Helper()
 +	env := NewInteractionEnv(nil)
-+	d := datadriven.TestData{
-+		Cmd: "add-nodes",
-+		CmdArgs: []datadriven.CmdArg{
-+			{Key: "1"},
-+			{Key: "voters", Vals: []string{"1"}},
-+			{Key: "index", Vals: []string{"2"}},
-+			{Key: "randomized-election-timeout", Vals: []string{"5"}},
++	cfg := raftConfigStub()
++	snap := raftpb.Snapshot{
++		Metadata: raftpb.SnapshotMetadata{
++			ConfState: raftpb.ConfState{Voters: []uint64{1, 2, 3}},
++			Index:     2,
 +		},
 +	}
-+	if err := env.handleAddNodes(t, d); err != nil {
-+		t.Fatal(err)
-+	}
-+	require.Equal(t, 5, env.Nodes[0].Config.RandomizedElectionTimeout)
-+
-+	env.Tick(0, 4)
-+	require.Equal(t, raft.StateFollower, env.Nodes[0].RawNode.Status().RaftState)
-+	env.Tick(0, 1)
-+	require.NotEqual(t, raft.StateFollower, env.Nodes[0].RawNode.Status().RaftState)
++	require.NoError(t, env.AddNodes(3, cfg, snap))
++	return env
 +}
-diff --git a/randomness_test.go b/randomness_test.go
++
++// TestInteractionEnvMessageCaptureAndInject exercises the full message
++// control seam: capture via ProcessReady, per-instance enumeration, exact
++// take, and cache-linked injection through the normal protocol input.
++func TestInteractionEnvMessageCaptureAndInject(t *testing.T) {
++	env := newMessageEnv(t)
++
++	// Activation: candidate 1 emits one MsgVote per peer into the cache.
++	require.NoError(t, env.Campaign(0))
++	require.NoError(t, env.ProcessReady(0))
++	msgs := env.EnumerateMessages()
++	require.Len(t, msgs, 2)
++	require.Equal(t, raftpb.MsgVote, msgs[0].Msg.Type)
++	require.Equal(t, raftpb.MsgVote, msgs[1].Msg.Type)
++
++	// Selection is by target-native content; the handle is the reference.
++	var voteTo2, voteTo3 EnvMessage
++	for _, em := range msgs {
++		switch em.Msg.To {
++		case 2:
++			voteTo2 = em
++		case 3:
++			voteTo3 = em
++		default:
++			t.Fatalf("unexpected MsgVote destination %d", em.Msg.To)
++		}
++	}
++
++	// Take removes exactly the referenced instance.
++	taken, ok := env.TakeMessage(voteTo3.Handle)
++	require.True(t, ok)
++	require.Equal(t, raftpb.MsgVote, taken.Type)
++	require.Equal(t, uint64(3), taken.To)
++	require.Len(t, env.EnumerateMessages(), 1)
++	_, ok = env.TakeMessage(voteTo3.Handle) // stale now
++	require.False(t, ok)
++
++	// Inject delivers the remaining cached message to its cached
++	// destination (node 2) through RawNode.Step.
++	require.NoError(t, env.InjectMessage(voteTo2.Handle))
++	require.Len(t, env.EnumerateMessages(), 0)
++	// The follower cast its vote for the candidate.
++	require.Equal(t, raft.StateFollower, env.Nodes[1].Status().RaftState)
++	require.Equal(t, uint64(1), env.Nodes[1].Status().Term)
++
++	// The follower's response is captured the same way and injected back,
++	// electing the candidate.
++	require.NoError(t, env.ProcessReady(1))
++	msgs = env.EnumerateMessages()
++	require.Len(t, msgs, 1)
++	require.Equal(t, raftpb.MsgVoteResp, msgs[0].Msg.Type)
++	require.Equal(t, uint64(1), msgs[0].Msg.To)
++	require.NoError(t, env.InjectMessage(msgs[0].Handle))
++	require.Len(t, env.EnumerateMessages(), 0)
++	require.Equal(t, uint64(1), env.Nodes[0].Status().Lead)
++}
++
++// TestInteractionEnvMessageHandleDuplicateInstances checks that two
++// equal-valued cached messages are separately addressable and that all
++// existing mutation paths keep outstanding handles consistent.
++func TestInteractionEnvMessageHandleDuplicateInstances(t *testing.T) {
++	env := NewInteractionEnv(nil)
++	dup := raftpb.Message{Type: raftpb.MsgHeartbeat, From: 1, To: 2, Term: 3}
++	env.appendMessages(dup, dup)
++
++	msgs := env.EnumerateMessages()
++	require.Len(t, msgs, 2)
++	require.Equal(t, dup, msgs[0].Msg)
++	require.Equal(t, dup, msgs[1].Msg)
++	require.NotEqual(t, msgs[0].Handle, msgs[1].Handle)
++
++	// Removing one instance leaves the other addressable.
++	require.True(t, env.DropMessage(msgs[0].Handle))
++	require.Len(t, env.EnumerateMessages(), 1)
++	got, ok := env.TakeMessage(msgs[1].Handle)
++	require.True(t, ok)
++	require.Equal(t, dup, got)
++	require.Len(t, env.EnumerateMessages(), 0)
++
++	// DeliverMsgs (bulk path) invalidates handles of handled messages.
++	env.appendMessages(dup, dup)
++	handles := env.EnumerateMessages()
++	require.Equal(t, 2, env.DeliverMsgs(-1, Recipient{ID: 2, Drop: true}))
++	_, ok = env.TakeMessage(handles[0].Handle)
++	require.False(t, ok)
++	_, ok = env.TakeMessage(handles[1].Handle)
++	require.False(t, ok)
++
++	// ClearMessages invalidates everything.
++	env.appendMessages(dup)
++	h := env.EnumerateMessages()[0].Handle
++	require.Equal(t, 1, env.ClearMessages())
++	require.False(t, env.DropMessage(h))
++	require.Len(t, env.EnumerateMessages(), 0)
++}
++
++// TestInteractionEnvMessageSnapshotSafety verifies that enumerated and
++// taken messages are deep copies that cannot mutate cache or protocol state.
++func TestInteractionEnvMessageSnapshotSafety(t *testing.T) {
++	env := NewInteractionEnv(nil)
++	orig := raftpb.Message{
++		Type:    raftpb.MsgSnap,
++		From:    1,
++		To:      2,
++		Term:    3,
++		Context: []byte("ctx"),
++		Entries: []raftpb.Entry{{Term: 1, Index: 5, Type: raftpb.EntryNormal, Data: []byte("data")}},
++		Snapshot: &raftpb.Snapshot{
++			Data:     []byte("snap"),
++			Metadata: raftpb.SnapshotMetadata{Index: 5, Term: 1},
++		},
++	}
++	env.appendMessages(orig, orig)
++
++	ems := env.EnumerateMessages()
++	require.Len(t, ems, 2)
++	require.Equal(t, orig, ems[0].Msg)
++	// Mutate every mutable part of the snapshot.
++	ems[0].Msg.Context[0] = 'X'
++	ems[0].Msg.Entries[0].Data[0] = 'X'
++	ems[0].Msg.Snapshot.Data[0] = 'X'
++	require.Equal(t, orig, env.EnumerateMessages()[1].Msg)
++
++	taken, ok := env.TakeMessage(ems[1].Handle)
++	require.True(t, ok)
++	require.Equal(t, orig, taken)
++	taken.Entries[0].Data[0] = 'Y'
++	taken.Snapshot.Data[0] = 'Y'
++	taken.Context[0] = 'Y'
++	// The cache still holds the first, unmutated instance.
++	require.Equal(t, orig, env.EnumerateMessages()[0].Msg)
++}
++
++// TestInteractionEnvInjectMessageErrors checks the error and cache-effect
++// contract of InjectMessage.
++func TestInteractionEnvInjectMessageErrors(t *testing.T) {
++	env := newMessageEnv(t)
++	other := NewInteractionEnv(nil)
++
++	msg := raftpb.Message{Type: raftpb.MsgVote, From: 1, To: 99, Term: 1}
++	env.appendMessages(msg)
++	h := env.EnumerateMessages()[0].Handle
++
++	// Unknown destination: error, message stays cached.
++	require.Error(t, env.InjectMessage(h))
++	require.Len(t, env.EnumerateMessages(), 1)
++
++	// Handle from another env: rejected.
++	other.appendMessages(msg)
++	oh := other.EnumerateMessages()[0].Handle
++	require.Error(t, env.InjectMessage(oh))
++	require.Len(t, env.EnumerateMessages(), 1)
++}
+diff --git a/rafttest/interaction_env_handler.go b/rafttest/interaction_env_handler.go
+index 2ffec2b..96ccc97 100644
+--- a/rafttest/interaction_env_handler.go
++++ b/rafttest/interaction_env_handler.go
+@@ -192,6 +192,24 @@ func (env *InteractionEnv) Handle(t *testing.T, d datadriven.TestData) string {
+ 		// Example:
+ 		// report-unreachable 1 2
+ 		err = env.handleReportUnreachable(t, d)
++	case "stop-node":
++		// Make a node unavailable by discarding all of its volatile in-memory
++		// state. The node's stable Storage (log, HardState, snapshot) is
++		// preserved and remains readable via raft-log; the node is restored
++		// with restart-node. Availability simulation only, no crash-fidelity
++		// claim.
++		//
++		// Example:
++		//
++		// stop-node 2
++		err = env.handleStopNode(t, d)
++	case "restart-node":
++		// Restore a stopped node from its stable Storage.
++		//
++		// Example:
++		//
++		// restart-node 2
++		err = env.handleRestartNode(t, d)
+ 	default:
+ 		err = fmt.Errorf("unknown command")
+ 	}
+diff --git a/rafttest/interaction_env_handler_campaign.go b/rafttest/interaction_env_handler_campaign.go
+index 8b6ccbc..b060228 100644
+--- a/rafttest/interaction_env_handler_campaign.go
++++ b/rafttest/interaction_env_handler_campaign.go
+@@ -27,5 +27,8 @@ func (env *InteractionEnv) handleCampaign(t *testing.T, d datadriven.TestData) e
+ 
+ // Campaign the node at the given index.
+ func (env *InteractionEnv) Campaign(idx int) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	return env.Nodes[idx].Campaign()
+ }
+diff --git a/rafttest/interaction_env_handler_compact.go b/rafttest/interaction_env_handler_compact.go
+index 25fa1d2..b12057c 100644
+--- a/rafttest/interaction_env_handler_compact.go
++++ b/rafttest/interaction_env_handler_compact.go
+@@ -33,6 +33,9 @@ func (env *InteractionEnv) handleCompact(t *testing.T, d datadriven.TestData) er
+ // Compact truncates the log on the node at index idx so that the supplied new
+ // first index results.
+ func (env *InteractionEnv) Compact(idx int, newFirstIndex uint64) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	if err := env.Nodes[idx].Compact(newFirstIndex); err != nil {
+ 		return err
+ 	}
+diff --git a/rafttest/interaction_env_handler_deliver_msgs.go b/rafttest/interaction_env_handler_deliver_msgs.go
+index af8534c..3e1c17b 100644
+--- a/rafttest/interaction_env_handler_deliver_msgs.go
++++ b/rafttest/interaction_env_handler_deliver_msgs.go
+@@ -77,12 +77,23 @@ type Recipient struct {
+ // DeliverMsgs goes through env.Messages and, depending on the Drop flag,
+ // delivers or drops messages to the specified Recipients. Only messages of type
+ // typ are delivered (-1 for all types). Returns the number of messages handled
+-// (i.e. delivered or dropped). A handled message is removed from env.Messages.
++// (i.e. delivered or dropped). A handled message is removed from env.Messages,
++// and any outstanding MessageHandle for it becomes invalid.
+ func (env *InteractionEnv) DeliverMsgs(typ raftpb.MessageType, rs ...Recipient) int {
+ 	var n int
+ 	for _, r := range rs {
++		// Delivery to a stopped node is not possible: the node is down. Leave
++		// its messages in flight in the cache so that they can be delivered
++		// after the node is restarted. Dropping messages to a stopped node
++		// remains allowed.
++		if !r.Drop {
++			if toIdx := int(r.ID - 1); toIdx >= 0 && toIdx < len(env.Nodes) && env.Nodes[toIdx].Stopped {
++				fmt.Fprintf(env.Output, "not delivering to stopped node %d\n", r.ID)
++				continue
++			}
++		}
+ 		var msgs []raftpb.Message
+-		msgs, env.Messages = splitMsgs(env.Messages, r.ID, typ, r.Drop)
++		msgs, env.Messages, env.msgIDs = splitMsgsWithIDs(env.Messages, env.msgIDs, r.ID, typ, r.Drop)
+ 		n += len(msgs)
+ 		for _, msg := range msgs {
+ 			if r.Drop {
+@@ -102,3 +113,19 @@ func (env *InteractionEnv) DeliverMsgs(typ raftpb.MessageType, rs ...Recipient)
+ 	}
+ 	return n
+ }
++
++// splitMsgsWithIDs is splitMsgs extended with the stable ids of the
++// extracted and remaining messages, so that cache mutation keeps message
++// handles consistent.
++func splitMsgsWithIDs(msgs []raftpb.Message, ids []uint64, to uint64, typ raftpb.MessageType, drop bool) (toMsgs []raftpb.Message, rmdr []raftpb.Message, rmdrIDs []uint64) {
++	// NB: this method does not reorder messages.
++	for i, msg := range msgs {
++		if msg.To == to && !(drop && isLocalMsg(msg)) && (typ < 0 || msg.Type == typ) {
++			toMsgs = append(toMsgs, msg)
++		} else {
++			rmdr = append(rmdr, msg)
++			rmdrIDs = append(rmdrIDs, ids[i])
++		}
++	}
++	return toMsgs, rmdr, rmdrIDs
++}
+diff --git a/rafttest/interaction_env_handler_forget_leader.go b/rafttest/interaction_env_handler_forget_leader.go
+index b239db7..db20838 100644
+--- a/rafttest/interaction_env_handler_forget_leader.go
++++ b/rafttest/interaction_env_handler_forget_leader.go
+@@ -22,11 +22,20 @@ import (
+ 
+ func (env *InteractionEnv) handleForgetLeader(t *testing.T, d datadriven.TestData) error {
+ 	idx := firstAsNodeIdx(t, d)
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	env.ForgetLeader(idx)
+ 	return nil
+ }
+ 
+ // ForgetLeader makes the follower at the given index forget its leader.
++//
++// ForgetLeader has no error return; calling it on a stopped node panics with
++// a descriptive message instead of silently doing nothing.
+ func (env *InteractionEnv) ForgetLeader(idx int) {
++	if err := env.checkNodeRunning(idx); err != nil {
++		panic(err)
++	}
+ 	env.Nodes[idx].ForgetLeader()
+ }
+diff --git a/rafttest/interaction_env_handler_process_append_thread.go b/rafttest/interaction_env_handler_process_append_thread.go
+index 4136321..29e57b1 100644
+--- a/rafttest/interaction_env_handler_process_append_thread.go
++++ b/rafttest/interaction_env_handler_process_append_thread.go
+@@ -45,6 +45,9 @@ func (env *InteractionEnv) handleProcessAppendThread(t *testing.T, d datadriven.
+ // ProcessAppendThread runs processes a single message on the "append" thread of
+ // the node with the given index.
+ func (env *InteractionEnv) ProcessAppendThread(idx int) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	n := &env.Nodes[idx]
+ 	if len(n.AppendWork) == 0 {
+ 		env.Output.WriteString("no append work to perform")
+@@ -74,7 +77,7 @@ func (env *InteractionEnv) ProcessAppendThread(idx int) error {
+ 	for _, m := range resps {
+ 		env.Output.WriteString(raft.DescribeMessage(m, defaultEntryFormatter) + "\n")
+ 	}
+-	env.Messages = append(env.Messages, resps...)
++	env.appendMessages(resps...)
+ 	return nil
+ }
+ 
+diff --git a/rafttest/interaction_env_handler_process_apply_thread.go b/rafttest/interaction_env_handler_process_apply_thread.go
+index d21317e..110fc73 100644
+--- a/rafttest/interaction_env_handler_process_apply_thread.go
++++ b/rafttest/interaction_env_handler_process_apply_thread.go
+@@ -44,6 +44,9 @@ func (env *InteractionEnv) handleProcessApplyThread(t *testing.T, d datadriven.T
+ // ProcessApplyThread runs processes a single message on the "apply" thread of
+ // the node with the given index.
+ func (env *InteractionEnv) ProcessApplyThread(idx int) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	n := &env.Nodes[idx]
+ 	if len(n.ApplyWork) == 0 {
+ 		env.Output.WriteString("no apply work to perform")
+@@ -64,7 +67,7 @@ func (env *InteractionEnv) ProcessApplyThread(idx int) error {
+ 	for _, m := range resps {
+ 		env.Output.WriteString(raft.DescribeMessage(m, defaultEntryFormatter) + "\n")
+ 	}
+-	env.Messages = append(env.Messages, resps...)
++	env.appendMessages(resps...)
+ 	return nil
+ }
+ 
+diff --git a/rafttest/interaction_env_handler_process_ready.go b/rafttest/interaction_env_handler_process_ready.go
+index e72d3d9..df867f4 100644
+--- a/rafttest/interaction_env_handler_process_ready.go
++++ b/rafttest/interaction_env_handler_process_ready.go
+@@ -43,6 +43,9 @@ func (env *InteractionEnv) handleProcessReady(t *testing.T, d datadriven.TestDat
+ 
+ // ProcessReady runs Ready handling on the node with the given index.
+ func (env *InteractionEnv) ProcessReady(idx int) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	// TODO(tbg): Allow simulating crashes here.
+ 	n := &env.Nodes[idx]
+ 	rd := n.Ready()
+@@ -71,7 +74,7 @@ func (env *InteractionEnv) ProcessReady(idx int) error {
+ 				panic(fmt.Sprintf("unexpected message type %s", m.Type))
+ 			}
+ 		} else {
+-			env.Messages = append(env.Messages, m)
++			env.appendMessages(m)
+ 		}
+ 	}
+ 
+diff --git a/rafttest/interaction_env_handler_propose.go b/rafttest/interaction_env_handler_propose.go
+index 7e88323..8a3f51e 100644
+--- a/rafttest/interaction_env_handler_propose.go
++++ b/rafttest/interaction_env_handler_propose.go
+@@ -30,5 +30,8 @@ func (env *InteractionEnv) handlePropose(t *testing.T, d datadriven.TestData) er
+ 
+ // Propose a regular entry.
+ func (env *InteractionEnv) Propose(idx int, data []byte) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	return env.Nodes[idx].Propose(data)
+ }
+diff --git a/rafttest/interaction_env_handler_propose_conf_change.go b/rafttest/interaction_env_handler_propose_conf_change.go
+index 531e553..044aa50 100644
+--- a/rafttest/interaction_env_handler_propose_conf_change.go
++++ b/rafttest/interaction_env_handler_propose_conf_change.go
+@@ -79,5 +79,8 @@ func (env *InteractionEnv) handleProposeConfChange(t *testing.T, d datadriven.Te
+ 
+ // ProposeConfChange proposes a configuration change on the node with the given index.
+ func (env *InteractionEnv) ProposeConfChange(idx int, c raftpb.ConfChangeI) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	return env.Nodes[idx].ProposeConfChange(c)
+ }
+diff --git a/rafttest/interaction_env_handler_raftstate.go b/rafttest/interaction_env_handler_raftstate.go
+index e40a192..790473f 100644
+--- a/rafttest/interaction_env_handler_raftstate.go
++++ b/rafttest/interaction_env_handler_raftstate.go
+@@ -35,6 +35,10 @@ func isVoter(id uint64, st raft.Status) bool {
+ // For each node, the information is based on its own configuration view.
+ func (env *InteractionEnv) handleRaftState() error {
+ 	for _, n := range env.Nodes {
++		if n.Stopped {
++			fmt.Fprintf(env.Output, "%d: stopped\n", n.Config.ID)
++			continue
++		}
+ 		st := n.Status()
+ 		var voterStatus string
+ 		if isVoter(st.ID, st) {
+diff --git a/rafttest/interaction_env_handler_report_unreachable.go b/rafttest/interaction_env_handler_report_unreachable.go
+index dce46ba..dbfd426 100644
+--- a/rafttest/interaction_env_handler_report_unreachable.go
++++ b/rafttest/interaction_env_handler_report_unreachable.go
+@@ -25,6 +25,9 @@ func (env *InteractionEnv) handleReportUnreachable(t *testing.T, d datadriven.Te
+ 	if len(sl) != 2 {
+ 		return errors.New("must specify exactly two node indexes: node on which to report, and reported node")
+ 	}
++	if err := env.checkNodeRunning(sl[0]); err != nil {
++		return err
++	}
+ 	env.Nodes[sl[0]].ReportUnreachable(env.Nodes[sl[1]].Config.ID)
+ 	return nil
+ }
+diff --git a/rafttest/interaction_env_handler_send_snapshot.go b/rafttest/interaction_env_handler_send_snapshot.go
+index c91d4cc..5b21275 100644
+--- a/rafttest/interaction_env_handler_send_snapshot.go
++++ b/rafttest/interaction_env_handler_send_snapshot.go
+@@ -32,6 +32,9 @@ func (env *InteractionEnv) handleSendSnapshot(t *testing.T, d datadriven.TestDat
+ 
+ // SendSnapshot sends a snapshot.
+ func (env *InteractionEnv) SendSnapshot(fromIdx, toIdx int) error {
++	if err := env.checkNodeRunning(fromIdx); err != nil {
++		return err
++	}
+ 	snap, err := env.Nodes[fromIdx].Snapshot()
+ 	if err != nil {
+ 		return err
+@@ -44,7 +47,7 @@ func (env *InteractionEnv) SendSnapshot(fromIdx, toIdx int) error {
+ 		To:       to,
+ 		Snapshot: &snap,
+ 	}
+-	env.Messages = append(env.Messages, msg)
++	env.appendMessages(msg)
+ 	_, _ = env.Output.WriteString(raft.DescribeMessage(msg, nil))
+ 	return nil
+ }
+diff --git a/rafttest/interaction_env_handler_set_randomized_election_timeout.go b/rafttest/interaction_env_handler_set_randomized_election_timeout.go
+index 36f0cd2..47fa909 100644
+--- a/rafttest/interaction_env_handler_set_randomized_election_timeout.go
++++ b/rafttest/interaction_env_handler_set_randomized_election_timeout.go
+@@ -29,6 +29,9 @@ func (env *InteractionEnv) handleSetRandomizedElectionTimeout(
+ 	d.ScanArgs(t, "timeout", &timeout)
+ 	require.NotZero(t, timeout)
+ 
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	env.Options.SetRandomizedElectionTimeout(env.Nodes[idx].RawNode, timeout)
+ 	return nil
+ }
+diff --git a/rafttest/interaction_env_handler_stabilize.go b/rafttest/interaction_env_handler_stabilize.go
+index 56ae2e1..aa6eaf1 100644
+--- a/rafttest/interaction_env_handler_stabilize.go
++++ b/rafttest/interaction_env_handler_stabilize.go
+@@ -47,13 +47,21 @@ func (env *InteractionEnv) handleStabilize(t *testing.T, d datadriven.TestData)
+ // Stabilize repeatedly runs Ready handling on and message delivery to the set
+ // of nodes specified via the idxs slice until reaching a fixed point.
+ func (env *InteractionEnv) Stabilize(idxs ...int) error {
++	// Nodes that are currently stopped are down: they cannot be driven, so
++	// they are skipped. Messages addressed to them remain in the cache.
+ 	var nodes []*Node
+ 	if len(idxs) != 0 {
+ 		for _, idx := range idxs {
++			if env.Nodes[idx].Stopped {
++				continue
++			}
+ 			nodes = append(nodes, &env.Nodes[idx])
+ 		}
+ 	} else {
+ 		for i := range env.Nodes {
++			if env.Nodes[i].Stopped {
++				continue
++			}
+ 			nodes = append(nodes, &env.Nodes[i])
+ 		}
+ 	}
+diff --git a/rafttest/interaction_env_handler_status.go b/rafttest/interaction_env_handler_status.go
+index 40bb7d3..adf65b6 100644
+--- a/rafttest/interaction_env_handler_status.go
++++ b/rafttest/interaction_env_handler_status.go
+@@ -31,6 +31,9 @@ func (env *InteractionEnv) handleStatus(t *testing.T, d datadriven.TestData) err
+ // Status pretty-prints the raft status for the node at the given index to the output
+ // buffer.
+ func (env *InteractionEnv) Status(idx int) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	// TODO(tbg): actually print the full status.
+ 	st := env.Nodes[idx].Status()
+ 	m := tracker.ProgressMap{}
+diff --git a/rafttest/interaction_env_handler_stop_node.go b/rafttest/interaction_env_handler_stop_node.go
 new file mode 100644
-index 0000000..b7c4f49
+index 0000000..4eb8a56
 --- /dev/null
-+++ b/randomness_test.go
-@@ -0,0 +1,99 @@
++++ b/rafttest/interaction_env_handler_stop_node.go
+@@ -0,0 +1,104 @@
 +// Copyright 2024 The etcd Authors
 +//
 +// Licensed under the Apache License, Version 2.0 (the "License");
@@ -188,88 +950,374 @@ index 0000000..b7c4f49
 +// See the License for the specific language governing permissions and
 +// limitations under the License.
 +
-+package raft
++package rafttest
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/cockroachdb/datadriven"
++
++	"go.etcd.io/raft/v3"
++)
++
++func (env *InteractionEnv) handleStopNode(t *testing.T, d datadriven.TestData) error {
++	idx := firstAsNodeIdx(t, d)
++	return env.StopNode(idx)
++}
++
++// StopNode makes the node at the given index unavailable by discarding all of
++// its volatile in-memory state: the RawNode (and with it the raft state
++// machine, the randomized election timeout, and any in-flight storage work)
++// is dropped. This mirrors the stop semantics of the internal network harness
++// (rafttest/node.go): "All in memory state of node is discarded. All stable
++// MUST be unchanged."
++//
++// The node's Storage (log entries, HardState, snapshot) and its Config are
++// preserved: RaftLog keeps working on a stopped node, and RestartNode
++// reconstructs the node from them. While a node is stopped, env operations
++// that would drive its protocol state (ProcessReady, Tick, Campaign, Propose,
++// DeliverMsgs to it, and so on) fail with an error, and messages in flight
++// addressed to it remain in the message cache until it is restarted.
++//
++// StopNode is an availability simulation only. It does not model crash
++// durability, fsync, or process supervision; the application's Storage
++// implementation owns any persistence semantics.
++func (env *InteractionEnv) StopNode(idx int) error {
++	if idx < 0 || idx >= len(env.Nodes) {
++		return fmt.Errorf("node index %d out of range", idx)
++	}
++	n := &env.Nodes[idx]
++	if n.Stopped {
++		return fmt.Errorf("node %d is already stopped", n.Config.ID)
++	}
++	// Record the applied index so that RestartNode can restore it from the
++	// config: committed entries that were already applied before the stop
++	// must not be re-applied by the test's state machine afterwards.
++	n.Config.Applied = n.BasicStatus().Applied
++	n.Stopped = true
++	n.RawNode = nil // discard volatile state
++	n.AppendWork = nil
++	n.ApplyWork = nil
++	return nil
++}
++
++func (env *InteractionEnv) handleRestartNode(t *testing.T, d datadriven.TestData) error {
++	idx := firstAsNodeIdx(t, d)
++	return env.RestartNode(idx)
++}
++
++// RestartNode makes the stopped node at the given index available again by
++// constructing a fresh RawNode from the node's Config, which shares the same
++// Storage the node used before it was stopped. The HardState (term, vote,
++// commit index), the log, the membership and the applied index are restored
++// from stable storage; volatile state such as elapsed tick counters, leader
++// knowledge, and in-flight messages starts fresh, exactly like the internal
++// harness's restart. Restarting a node that is not stopped is an error.
++func (env *InteractionEnv) RestartNode(idx int) error {
++	if idx < 0 || idx >= len(env.Nodes) {
++		return fmt.Errorf("node index %d out of range", idx)
++	}
++	n := &env.Nodes[idx]
++	if !n.Stopped {
++		return fmt.Errorf("node %d is not stopped", n.Config.ID)
++	}
++	rn, err := raft.NewRawNode(n.Config)
++	if err != nil {
++		return err
++	}
++	n.RawNode = rn
++	n.Stopped = false
++	return nil
++}
++
++// checkNodeRunning returns an error if the node at the given index is
++// currently stopped. It is the guard used by every env operation that would
++// drive the node's protocol state.
++func (env *InteractionEnv) checkNodeRunning(idx int) error {
++	if env.Nodes[idx].Stopped {
++		return fmt.Errorf("node %d is stopped; restart it with RestartNode before driving it again", env.Nodes[idx].Config.ID)
++	}
++	return nil
++}
+diff --git a/rafttest/interaction_env_handler_tick.go b/rafttest/interaction_env_handler_tick.go
+index 10c9ba2..2c96f08 100644
+--- a/rafttest/interaction_env_handler_tick.go
++++ b/rafttest/interaction_env_handler_tick.go
+@@ -32,6 +32,9 @@ func (env *InteractionEnv) handleTickHeartbeat(t *testing.T, d datadriven.TestDa
+ 
+ // Tick the node at the given index the given number of times.
+ func (env *InteractionEnv) Tick(idx int, num int) error {
++	if err := env.checkNodeRunning(idx); err != nil {
++		return err
++	}
+ 	for i := 0; i < num; i++ {
+ 		env.Nodes[idx].Tick()
+ 	}
+diff --git a/rafttest/interaction_env_handler_transfer_leadership.go b/rafttest/interaction_env_handler_transfer_leadership.go
+index dc7f366..6f5a58d 100644
+--- a/rafttest/interaction_env_handler_transfer_leadership.go
++++ b/rafttest/interaction_env_handler_transfer_leadership.go
+@@ -36,6 +36,9 @@ func (env *InteractionEnv) handleTransferLeadership(t *testing.T, d datadriven.T
+ // Initiate leadership transfer.
+ func (env *InteractionEnv) transferLeadership(from, to uint64) error {
+ 	fromIdx := from - 1
++	if err := env.checkNodeRunning(int(fromIdx)); err != nil {
++		return err
++	}
+ 	env.Nodes[fromIdx].TransferLeader(to)
+ 	return nil
+ }
+diff --git a/rafttest/interaction_env_lifecycle_test.go b/rafttest/interaction_env_lifecycle_test.go
+new file mode 100644
+index 0000000..1e798b9
+--- /dev/null
++++ b/rafttest/interaction_env_lifecycle_test.go
+@@ -0,0 +1,117 @@
++// Copyright 2024 The etcd Authors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package rafttest
 +
 +import (
 +	"testing"
++
++	"github.com/stretchr/testify/require"
++
++	"go.etcd.io/raft/v3"
++	"go.etcd.io/raft/v3/raftpb"
 +)
 +
-+// TestConfigRandomizedElectionTimeoutValidation verifies the legal domain of
-+// Config.RandomizedElectionTimeout: zero means "randomize as before", and any
-+// non-zero value must lie within [ElectionTick, 2*ElectionTick-1].
-+func TestConfigRandomizedElectionTimeoutValidation(t *testing.T) {
-+	storage := NewMemoryStorage()
-+	base := newTestConfig(1, 10, 1, storage)
++// electAndCommit drives the given 3-node env to a stable state with node 1 as
++// leader and one committed entry, and returns the committed (and applied)
++// index that all nodes agree on.
++func electAndCommit(t *testing.T, env *InteractionEnv) uint64 {
++	t.Helper()
++	require.NoError(t, env.Campaign(0))
++	require.NoError(t, env.Stabilize())
++	require.Equal(t, raft.StateLeader, env.Nodes[0].Status().RaftState)
 +
-+	for _, v := range []int{0, 10, 15, 19} {
-+		cfg := *base
-+		cfg.RandomizedElectionTimeout = v
-+		if err := cfg.validate(); err != nil {
-+			t.Fatalf("RandomizedElectionTimeout=%d: unexpected error: %v", v, err)
-+		}
++	require.NoError(t, env.Propose(0, []byte("foo")))
++	require.NoError(t, env.Stabilize())
++
++	commit := env.Nodes[0].Status().Commit
++	for i := range env.Nodes {
++		st := env.Nodes[i].Status()
++		require.Equal(t, commit, st.Commit)
++		require.Equal(t, commit, st.Applied)
 +	}
-+	for _, v := range []int{-1, 9, 20} {
-+		cfg := *base
-+		cfg.RandomizedElectionTimeout = v
-+		if err := cfg.validate(); err == nil {
-+			t.Fatalf("RandomizedElectionTimeout=%d: expected validation error", v)
-+		}
-+	}
++	return commit
 +}
 +
-+// TestRandomizedElectionTimeoutFixedSurvivesStateChanges ensures that a fixed
-+// Config.RandomizedElectionTimeout is honored by reset() on every state
-+// change, unlike the transient test-only setter.
-+func TestRandomizedElectionTimeoutFixedSurvivesStateChanges(t *testing.T) {
-+	cfg := newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)))
-+	cfg.RandomizedElectionTimeout = 13
-+	sm := newRaft(cfg)
-+	if sm.randomizedElectionTimeout != 13 {
-+		t.Fatalf("initial randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
-+	}
-+	sm.becomeCandidate()
-+	if sm.randomizedElectionTimeout != 13 {
-+		t.Fatalf("after becomeCandidate randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
-+	}
-+	sm.becomeLeader()
-+	if sm.randomizedElectionTimeout != 13 {
-+		t.Fatalf("after becomeLeader randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
-+	}
-+	sm.becomeFollower(sm.Term+1, None)
-+	if sm.randomizedElectionTimeout != 13 {
-+		t.Fatalf("after becomeFollower randomizedElectionTimeout = %d, want 13", sm.randomizedElectionTimeout)
-+	}
-+}
++// TestInteractionEnvStopRestart exercises the lifecycle facade: a node is
++// stopped (volatile state discarded, storage preserved), the remaining nodes
++// keep making progress while it is down, and the stopped node is restarted
++// from its storage and catches back up.
++func TestInteractionEnvStopRestart(t *testing.T) {
++	env := newMessageEnv(t)
++	commit := electAndCommit(t, env)
 +
-+// TestRandomizedElectionTimeoutDeterministicElection verifies end-to-end
-+// determinism through RawNode: with the timeout fixed at the minimum
-+// (ElectionTick), the election fires on exactly the ElectionTick-th Tick.
-+func TestRandomizedElectionTimeoutDeterministicElection(t *testing.T) {
-+	cfg := newTestConfig(1, 10, 1, newTestMemoryStorage(withPeers(1)))
-+	cfg.RandomizedElectionTimeout = 10
-+	rn, err := NewRawNode(cfg)
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	for i := 0; i < 9; i++ {
-+		rn.Tick()
-+		if st := rn.Status().RaftState; st != StateFollower {
-+			t.Fatalf("tick %d: state = %v, want StateFollower", i+1, st)
-+		}
-+	}
-+	rn.Tick()
-+	if st := rn.Status().RaftState; st == StateFollower {
-+		t.Fatalf("tick 10: election did not fire, state = %v", st)
-+	}
-+}
++	// Stop node 2 (index 1).
++	require.NoError(t, env.StopNode(1))
++	require.True(t, env.Nodes[1].Stopped)
++	require.Nil(t, env.Nodes[1].RawNode)
++	require.Error(t, env.StopNode(1))    // already stopped
++	require.Error(t, env.RestartNode(0)) // not stopped
++	require.Error(t, env.StopNode(99))   // out of range
 +
-+// TestRandomizedElectionTimeoutDefaultRange checks that the default (zero)
-+// configuration still draws from the documented
-+// [ElectionTick, 2*ElectionTick-1] range.
-+func TestRandomizedElectionTimeoutDefaultRange(t *testing.T) {
-+	cfg := newTestConfig(1, 10, 1, NewMemoryStorage())
-+	sm := newRaft(cfg)
-+	if v := sm.randomizedElectionTimeout; v < 10 || v > 19 {
-+		t.Fatalf("randomizedElectionTimeout = %d, want in [10, 19]", v)
-+	}
++	// No env operation may drive the stopped node's protocol state.
++	require.Error(t, env.ProcessReady(1))
++	require.Error(t, env.ProcessAppendThread(1))
++	require.Error(t, env.ProcessApplyThread(1))
++	require.Error(t, env.Tick(1, 1))
++	require.Error(t, env.Campaign(1))
++	require.Error(t, env.Propose(1, []byte("x")))
++	require.Error(t, env.ProposeConfChange(1, raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 4}))
++	require.Error(t, env.Compact(1, 3))
++	require.Error(t, env.Status(1))
++	require.Error(t, env.SendSnapshot(1, 2))
++	require.Panics(t, func() { env.ForgetLeader(1) })
++
++	// The stable log of the stopped node remains readable, and raft-state
++	// reports the node as stopped.
++	require.NoError(t, env.RaftLog(1))
++	require.Equal(t, commit, env.Nodes[1].History[len(env.Nodes[1].History)-1].Metadata.Index)
++	require.NoError(t, env.handleRaftState())
++	require.Contains(t, env.Output.String(), "2: stopped")
++
++	// The remaining nodes keep making progress while node 2 is down.
++	require.NoError(t, env.Propose(0, []byte("bar")))
++	require.NoError(t, env.ProcessReady(0))
++	require.Equal(t, 1, env.DeliverMsgs(-1, Recipient{ID: 3}))
++	// Delivery to the stopped node is refused; its message stays in the cache.
++	require.Equal(t, 0, env.DeliverMsgs(-1, Recipient{ID: 2}))
++	require.Len(t, env.EnumerateMessages(), 1)
++	require.Equal(t, uint64(2), env.EnumerateMessages()[0].Msg.To)
++	require.NoError(t, env.ProcessReady(2))
++	require.Equal(t, 1, env.DeliverMsgs(-1, Recipient{ID: 1}))
++	require.NoError(t, env.ProcessReady(0))
++	require.Greater(t, env.Nodes[0].Status().Commit, commit)
++
++	// Restart node 2: term, commit and applied are restored from storage, and
++	// no already-applied entry is re-applied.
++	require.NoError(t, env.RestartNode(1))
++	require.False(t, env.Nodes[1].Stopped)
++	require.NotNil(t, env.Nodes[1].RawNode)
++	st := env.Nodes[1].Status()
++	require.Equal(t, uint64(1), st.Term)
++	require.Equal(t, commit, st.Commit)
++	require.Equal(t, commit, st.Applied)
++	require.Equal(t, commit, env.Nodes[1].History[len(env.Nodes[1].History)-1].Metadata.Index)
++
++	// Deliver the messages left in flight and let the restarted node catch up.
++	env.DeliverMsgs(-1, Recipient{ID: 2})
++	require.NoError(t, env.Stabilize())
++
++	// The whole group is back in agreement.
++	c0 := env.Nodes[0].Status().Commit
++	require.Equal(t, c0, env.Nodes[1].Status().Commit)
++	require.Equal(t, c0, env.Nodes[2].Status().Commit)
++	require.Equal(t, c0, env.Nodes[1].Status().Applied)
++	require.Equal(t, env.Nodes[1].History, env.Nodes[2].History)
 +}
+diff --git a/rafttest/interaction_env_randomized_test.go b/rafttest/interaction_env_randomized_test.go
+new file mode 100644
+index 0000000..62eeb31
+--- /dev/null
++++ b/rafttest/interaction_env_randomized_test.go
+@@ -0,0 +1,56 @@
++// Copyright 2024 The etcd Authors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package rafttest
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/require"
++
++	"go.etcd.io/raft/v3"
++	"go.etcd.io/raft/v3/raftpb"
++)
++
++// TestInteractionEnvFixedRandomizedElectionTimeout verifies the rafttest path
++// for randomness control: fixing Config.RandomizedElectionTimeout through
++// InteractionOpts.OnConfig makes election timing deterministic for every node
++// created by the env.
++func TestInteractionEnvFixedRandomizedElectionTimeout(t *testing.T) {
++	env := NewInteractionEnv(&InteractionOpts{
++		OnConfig: func(c *raft.Config) {
++			c.RandomizedElectionTimeout = c.ElectionTick
++		},
++	})
++	cfg := raftConfigStub()
++	snap := raftpb.Snapshot{
++		Metadata: raftpb.SnapshotMetadata{
++			ConfState: raftpb.ConfState{Voters: []uint64{1, 2, 3}},
++			Index:     2,
++		},
++	}
++	require.NoError(t, env.AddNodes(3, cfg, snap))
++
++	// ElectionTick - 1 ticks never trigger an election...
++	require.NoError(t, env.Tick(1, cfg.ElectionTick-1))
++	require.Equal(t, raft.StateFollower, env.Nodes[1].Status().RaftState)
++
++	// ...and the ElectionTick-th tick always does, on every run.
++	require.NoError(t, env.Tick(1, 1))
++	require.Equal(t, raft.StateCandidate, env.Nodes[1].Status().RaftState)
++
++	// The fixed value is part of the stored per-node Config, so it survives
++	// node restart (which rebuilds the RawNode from this Config).
++	require.Equal(t, cfg.ElectionTick, env.Nodes[1].Config.RandomizedElectionTimeout)
++}
+diff --git a/testdata/lifecycle.txt b/testdata/lifecycle.txt
+new file mode 100644
+index 0000000..fa565a5
+--- /dev/null
++++ b/testdata/lifecycle.txt
+@@ -0,0 +1,62 @@
++log-level NONE
++----
++ok
++
++# Set up a 3-node cluster, elect node 1, and commit one entry.
++add-nodes 3 voters=(1,2,3) index=2
++----
++ok
++
++campaign 1
++----
++ok
++
++stabilize
++----
++ok
++
++propose 1 foo
++----
++ok
++
++stabilize
++----
++ok
++
++# Stop node 2. Its volatile in-memory state is discarded; its stable Storage
++# (log, HardState, snapshot) is preserved.
++stop-node 2
++----
++ok
++
++# The stopped node's stable log remains readable.
++raft-log 2
++----
++ok
++
++# Driving the stopped node fails.
++tick-election 2
++----
++node 2 is stopped; restart it with RestartNode before driving it again
++
++# The rest of the cluster keeps making progress without node 2.
++propose 1 bar
++----
++ok
++
++stabilize
++----
++ok
++
++# Restart node 2 from its Storage; it catches back up.
++restart-node 2
++----
++ok
++
++stabilize
++----
++ok
++
++raft-state
++----
++ok

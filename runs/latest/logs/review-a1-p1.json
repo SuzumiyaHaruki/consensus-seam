@@ -1,49 +1,87 @@
 {
-  "overall": "PASS",
+  "overall": "REVISE_AGENT2",
   "checks": [
     {
       "name": "exact_target_preserved",
       "result": "PASS",
       "evidence": [
         {
-          "file": "raft.go",
-          "symbol": "Config.RandomizedElectionTimeout",
-          "line": 147,
-          "reason": "New optional field added to the target module's Config struct."
+          "file": "rafttest/interaction_env_handle.go",
+          "symbol": "InteractionEnv.InjectMessage",
+          "line": 96,
+          "reason": "toIdx := int(m.To - 1) resolves the cached destination and env.Nodes[toIdx].Step(m) delivers the unmodified cached message."
         },
         {
-          "file": "rafttest/interaction_env_handler_add_nodes.go",
-          "symbol": "handleAddNodes",
-          "line": 72,
-          "reason": "rafttest add-nodes wiring inside the target module; no foreign target modified."
+          "file": "rafttest/interaction_env_handler_deliver_msgs.go",
+          "symbol": "InteractionEnv.DeliverMsgs",
+          "line": 108,
+          "reason": "toIdx := int(msg.To - 1); env.Nodes[toIdx].Step(msg) preserves the cached recipient and message content."
+        },
+        {
+          "file": "rafttest/interaction_env_handler_send_snapshot.go",
+          "symbol": "InteractionEnv.SendSnapshot",
+          "line": 43,
+          "reason": "Synthesized MsgSnap keeps From/To/Snapshot; only the cache append path changed to appendMessages."
         }
       ],
-      "reason": "All production modifications are confined to the declared etcd-raft target module: the new optional Config field and its validation/handling live in raft.go, and the rafttest add-nodes argument is wired in rafttest/interaction_env_handler_add_nodes.go. No files outside the target module were changed, and the module remains go.etcd.io/raft/v3."
+      "reason": "InjectMessage resolves the cached destination from m.To into toIdx and steps the cache's own value m unchanged into env.Nodes[toIdx]; DeliverMsgs continues to deliver the exact cached message values through the same env.Nodes[toIdx].Step boundary; SendSnapshot still constructs MsgSnap with the original From/To/Snapshot fields. No message content or destination is rewritten."
     },
     {
       "name": "existing_tests_unchanged",
       "result": "PASS",
       "evidence": [
         {
-          "file": "raft_test.go",
-          "symbol": "SetRandomizedElectionTimeout",
-          "line": 4098,
-          "reason": "Existing test helper remains unmodified; the patch does not edit any pre-existing test file."
-        },
-        {
-          "file": "randomness_test.go",
-          "symbol": null,
-          "line": 1,
-          "reason": "Newly added test file rather than a modification of an existing one."
+          "file": "raft.go",
+          "symbol": "Config",
+          "line": 124,
+          "reason": "This modified file is a production file, not a test file; the diff contains no edits to any pre-existing *_test.go file, only additive new test files."
         }
       ],
-      "reason": "The diff adds only two new test files (randomness_test.go in package raft and rafttest/interaction_env_randomness_test.go) and modifies no existing test file. The existing test-build-only helper SetRandomizedElectionTimeout in raft_test.go and the existing set-randomized-election-timeout command are untouched."
+      "reason": "The diff modifies raft.go and rafttest non-_test.go handler/env files and adds new _test.go files; no pre-existing *_test.go file appears among the modified files (patch_metrics.existing_test_files_modified is empty). The pre-existing test files remain untouched."
+    },
+    {
+      "name": "message_cache_injection_coherence",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "rafttest/interaction_env_handle.go",
+          "symbol": "InteractionEnv.EnumerateMessages",
+          "line": 46,
+          "reason": "Returns each cached message with a stable MessageHandle backed by env.msgIDs[i], the same store used by Take/Drop/Inject."
+        },
+        {
+          "file": "rafttest/interaction_env_handle.go",
+          "symbol": "InteractionEnv.InjectMessage",
+          "line": 90,
+          "reason": "indexOf finds the concrete cached instance, validates its To against len(env.Nodes), removes it, then steps it into env.Nodes[toIdx]."
+        },
+        {
+          "file": "rafttest/interaction_env_handler_deliver_msgs.go",
+          "symbol": "splitMsgsWithIDs",
+          "line": 96,
+          "reason": "Bulk delivery/drop path keeps remaining msgIDs aligned with remaining messages, so handled handles become invalid and untouched handles stay stable."
+        }
+      ],
+      "reason": "Capture (ProcessReady, SendSnapshot, ProcessAppendThread/ProcessApplyThread) and injection (InjectMessage, DeliverMsgs) all operate on the single authoritative env.Messages cache. Handles are backed by per-entry msgIDs kept in lock-step by appendMessages/removeIndex/splitMsgsWithIDs/ClearMessages across every in-tree mutation path. InjectMessage removes the exact cached instance referenced by the handle and resolves msg.To to the real RawNode object (env.Nodes[toIdx]) before a synchronous Step, with explicit consumption and failure semantics."
     },
     {
       "name": "original_send_suppressed",
-      "result": "NOT_APPLICABLE",
-      "evidence": [],
-      "reason": "This run implements randomness_control only. The interface_report contains no message_capture or message_injection covered_paths, and the patch introduces no message-send, cache, or continuation-path change. Therefore there is no original send continuation to suppress or selected message target to verify."
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "rafttest/interaction_env_handler_process_ready.go",
+          "symbol": "InteractionEnv.ProcessReady",
+          "line": 77,
+          "reason": "Non-local Ready messages are appended to env.Messages with no auto-step; local storage messages are diverted to AppendWork/ApplyWork."
+        },
+        {
+          "file": "rafttest/interaction_env_handler_deliver_msgs.go",
+          "symbol": "InteractionEnv.DeliverMsgs",
+          "line": 96,
+          "reason": "Only a declared test operation removes and delivers/drops cached messages."
+        }
+      ],
+      "reason": "For the covered rafttest env capture path, ProcessReady appends non-local Ready messages to env.Messages via appendMessages and performs no automatic continuation; messages only leave the cache through DeliverMsgs/InjectMessage/TakeMessage/DropMessage/ClearMessages. The one-shot RawNode.Ready and Node.Ready paths and the internal network harness are explicitly recorded as uncovered in the interface report rather than force-covered."
     },
     {
       "name": "protocol_logic_unchanged",
@@ -52,58 +90,59 @@
         {
           "file": "raft.go",
           "symbol": "resetRandomizedElectionTimeout",
-          "line": 2069,
-          "reason": "The default branch (line 2074) is unchanged; the new override branch only short-circuits the existing draw when non-zero."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "pastElectionTimeout",
-          "line": 2065,
-          "reason": "Election firing predicate remains electionElapsed >= randomizedElectionTimeout; not modified."
+          "line": 2075,
+          "reason": "Non-zero fixedRandomizedElectionTimeout short-circuits; otherwise the original globalRand.Intn(electionTimeout) draw is unchanged."
         },
         {
           "file": "raft.go",
           "symbol": "Config.validate",
-          "line": 316,
-          "reason": "New non-zero domain check rejects values outside [ElectionTick, 2*ElectionTick-1], matching the original draw's range."
+          "line": 318,
+          "reason": "Validation only applies when the option is non-zero and restricts it to [ElectionTick, 2*ElectionTick-1], preserving the legal domain."
         }
       ],
-      "reason": "The default code path is byte-for-byte behavior-preserving: when RandomizedElectionTimeout is 0, resetRandomizedElectionTimeout still performs electionTimeout + globalRand.Intn(electionTimeout). pastElectionTimeout, tickElection, and becomeFollower/becomeCandidate/becomeLeader transitions are unchanged; the override only supplies a fixed legal value to the existing reset path instead of drawing one. No timeout shortcut, forced election, or lifecycle recovery semantics were introduced."
+      "reason": "The only core protocol file change is an additive Config.RandomizedElectionTimeout option. With the default zero value, fixedRandomizedElectionTimeout remains zero and resetRandomizedElectionTimeout performs the original globalRand.Intn draw. No Step/tick/message/persistence semantics were altered; the hook only substitutes a validated fixed value in the existing legal domain when the option is set."
     },
     {
       "name": "testing_contract_conformance",
-      "result": "PASS",
+      "result": "FAIL",
       "evidence": [
         {
-          "file": "raft.go",
-          "symbol": "Config.validate",
-          "line": 316,
-          "reason": "Input domain explicitly validated: non-zero values must be within [ElectionTick, 2*ElectionTick-1]."
+          "file": "rafttest/interaction_env_handle.go",
+          "symbol": "cloneMessage",
+          "line": 154,
+          "reason": "It copies Context, Entries[].Data, Snapshot.Data, and Responses recursively, but copies only the Snapshot struct and leaves Snapshot.Metadata.ConfState.Voters/Learners/VotersOutgoing/LearnersNext sharing their underlying arrays."
         },
         {
-          "file": "raft.go",
-          "symbol": "newRaft",
-          "line": 476,
-          "reason": "Config.RandomizedElectionTimeout is copied into randomizedElectionTimeoutOverride at construction."
+          "file": "raftpb/raft.pb.go",
+          "symbol": "ConfState",
+          "line": 509,
+          "reason": "ConfState contains the mutable slices Voters, Learners, VotersOutgoing, and LearnersNext that cloneMessage fails to copy."
         },
         {
-          "file": "raft.go",
-          "symbol": "resetRandomizedElectionTimeout",
-          "line": 2070,
-          "reason": "Override is honored on every reset (becomeFollower/becomeCandidate/becomeLeader), so fixed values survive state changes."
-        },
-        {
-          "file": "rafttest/interaction_env_handler_add_nodes.go",
-          "symbol": "handleAddNodes",
-          "line": 72,
-          "reason": "rafttest add-nodes randomized-election-timeout argument applies the config to each newly added node."
+          "file": "rafttest/interaction_env.go",
+          "symbol": "raftConfigStub",
+          "line": 111,
+          "reason": "The message_capture usage_examples in the interface report call raftConfigStub(), but this symbol is unexported and therefore not usable by the declared external consumer scope."
         }
       ],
-      "reason": "The randomness_control contract is satisfied: a Config option reuses the existing random-choice primitive without replacing its algorithm, the new fixed values are validated to the target's existing legal domain ([ElectionTick, 2*ElectionTick-1]), and the default 0 preserves current behavior. The public entrypoints (exported Config.RandomizedElectionTimeout for external consumers and the rafttest add-nodes randomized-election-timeout argument for the harness) are real and callable by the declared scopes. Usage examples reference only real symbols (raft.Config, raft.NewRawNode, raft.StartNode, raft.NewMemoryStorage, rn.Tick, rn.Status) and demonstrate interface mechanics without embedding a test-author policy or correctness oracle."
+      "reason": "cloneMessage does not deep-copy Snapshot.Metadata.ConfState's nested slices, so enumeration/take snapshots still expose mutable aliases into the cache (and potentially raft state), violating the snapshot_safety requirement and contradicting the interface report's claim of deep-cloning every mutable field. Separately, the message_capture usage example calls the unexported raftConfigStub() helper despite declaring an externally importable consumer scope."
     }
   ],
-  "issues": [],
+  "issues": [
+    {
+      "capability": "message_capture",
+      "file": "rafttest/interaction_env_handle.go",
+      "symbol": "cloneMessage",
+      "reason": "cloneMessage misses Snapshot.Metadata.ConfState nested slices (Voters, Learners, VotersOutgoing, LearnersNext). A test mutating em.Msg.Snapshot.Metadata.ConfState.Voters[0] on an enumerated/taken snapshot would mutate the cached message's snapshot and can alias raft's unstable or storage snapshot. This violates snapshot_safety and contradicts the interface report's 'deep clone of every mutable field' claim. The added TestInteractionEnvMessageSnapshotSafety only mutates Context, Entries[].Data, and Snapshot.Data, so it does not exercise this path."
+    },
+    {
+      "capability": "message_capture",
+      "file": "rafttest/interaction_env.go",
+      "symbol": "raftConfigStub",
+      "reason": "The interface report's message_capture usage example uses raftConfigStub(), an unexported helper, while declaring the facade as externally importable (go.etcd.io/raft/v3/rafttest). An external consumer cannot compile that example, so the usage example does not match the declared consumer scope and setup."
+    }
+  ],
   "risks": [
-    "For external consumers, an out-of-domain non-zero RandomizedElectionTimeout surfaces as a panic from newRaft via NewRawNode/StartNode/RestartNode rather than a returned error; this matches the existing Config validation style for all other Config errors and is documented in the interface notes."
+    "env.Messages remains an exported field while msgIDs is private; the facade keeps them aligned only through its own helpers. All in-tree mutation paths (ProcessReady, SendSnapshot, ProcessAppendThread, ProcessApplyThread, DeliverMsgs) are rewired, and direct external splicing of env.Messages is documented as unsupported, but such direct mutation can still desynchronize handles and make EnumerateMessages mis-index or panic."
   ]
 }
