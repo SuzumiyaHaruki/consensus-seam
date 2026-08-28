@@ -11,7 +11,9 @@ capabilities:
       controlled_cache: >
         The cache retains message instances until the test explicitly takes,
         drops, clears, or injects them. A one-shot result, observable channel,
-        post-delivery log, or caller-created collection is only a primitive.
+        post-delivery log, or caller-created collection is only a primitive. In
+        controlled mode the capture point must own continuation; a second
+        consumer racing the protocol consumer is not reliable capture.
       operations: >
         Test code can enumerate target-native message content and order, take one
         selected instance and obtain its message and routing information, drop one
@@ -28,7 +30,9 @@ capabilities:
         support on another path.
       snapshot_safety: >
         Returned snapshots must not let callers accidentally mutate cached,
-        protocol, or controller state through shared mutable data.
+        protocol, or controller state through shared mutable data. In Go, a
+        by-value struct copy is not sufficient evidence when nested slices, maps,
+        pointers, interfaces, channels, futures, or consumable streams remain.
 
   message_injection:
     description: >
@@ -60,6 +64,11 @@ capabilities:
         Request-response or future-based paths preserve and document their
         original completion mechanism. Capture, removal, timeout, or injection
         must not silently orphan the sender, response channel, or future.
+      message_direction: >
+        The selected cached instance enters the normal input boundary for its
+        own direction. Completing or fabricating a response does not inject a
+        cached request; a response is injection only when that response itself
+        was the selected cached instance.
       tester_policy: >
         The interface supplies cache and ingress mechanics. The test chooses the
         message, schedule, retry behavior, duplication, and assertions.
@@ -90,6 +99,11 @@ capabilities:
       scope_and_domain: >
         Document whether control is per node, instance, or shared, and preserve or
         explicitly validate the target's legal value domain.
+      reproducible_assignment: >
+        For the claimed scope, the same initial state and control parameters make
+        the same instance receive the same protocol-relevant choices. Fixing only
+        a shared random-number sequence is incomplete when concurrent call order
+        can assign those values to different instances or decisions.
 
   lifecycle_control:
     description: >
@@ -109,7 +123,9 @@ capabilities:
       honest_semantics: >
         State whether the same instance resumes or a new instance is constructed.
         Do not call pause or graceful stop a production crash, and do not invent
-        persistence or recovery semantics.
+        persistence or recovery semantics. Network isolation, message loss, or a
+        partition alone is not lifecycle unavailability while the node continues
+        local protocol activity.
 
   observation:
     description: >
@@ -121,11 +137,20 @@ capabilities:
         accessor may aggregate existing state without creating protocol state.
       snapshot_safety: >
         Observation results must not expose mutable aliases into internal state.
+        A Go struct copied by value still needs inspection of nested reference and
+        stream fields before it can be called a safe snapshot.
 
   external_input:
     description: >
       Discover existing application workload entrypoints such as proposals,
       requests, transactions, or membership changes. v0.1 does not create them.
+    testing_contract:
+      workload_scope: >
+        Include application-originated proposals, reads, transactions, and
+        replicated membership changes. Exclude diagnostics, barriers, snapshots,
+        restore, bootstrap, leadership transfer, lifecycle, and other maintenance
+        or administrative operations unless the target explicitly defines them as
+        application workload.
     obligations:
       workload_entrypoint: Identify application work originating outside the protocol.
       protocol_ingress_excluded: Exclude peer-to-peer protocol message ingress.

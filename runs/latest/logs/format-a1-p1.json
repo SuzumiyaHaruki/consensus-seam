@@ -1,7 +1,0 @@
-{
-  "command": "gofmt -w raft.go raft_randomized_election_timeout_test.go rafttest/interaction_env.go rafttest/interaction_env_handle.go rafttest/interaction_env_handle_test.go rafttest/interaction_env_handler.go rafttest/interaction_env_handler_campaign.go rafttest/interaction_env_handler_compact.go rafttest/interaction_env_handler_deliver_msgs.go rafttest/interaction_env_handler_forget_leader.go rafttest/interaction_env_handler_process_append_thread.go rafttest/interaction_env_handler_process_apply_thread.go rafttest/interaction_env_handler_process_ready.go rafttest/interaction_env_handler_propose.go rafttest/interaction_env_handler_propose_conf_change.go rafttest/interaction_env_handler_raftstate.go rafttest/interaction_env_handler_report_unreachable.go rafttest/interaction_env_handler_send_snapshot.go rafttest/interaction_env_handler_set_randomized_election_timeout.go rafttest/interaction_env_handler_stabilize.go rafttest/interaction_env_handler_status.go rafttest/interaction_env_handler_stop_node.go rafttest/interaction_env_handler_tick.go rafttest/interaction_env_handler_transfer_leadership.go rafttest/interaction_env_lifecycle_test.go rafttest/interaction_env_randomized_test.go",
-  "returncode": 0,
-  "stdout": "",
-  "stderr": "",
-  "duration_seconds": 0.02026900900000328
-}

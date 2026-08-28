@@ -20,7 +20,9 @@ materially distinct public path in that boundary. A path is distinct when the
 test consumer uses a different public node API, protocol input/output boundary,
 cache or target ownership model, control mechanism, or synchronous/asynchronous
 surface. Different message types, helper functions, files, and internal branches
-that reach the same control surface are not separate paths.
+that reach the same control surface are not separate paths. Multiple accessors on
+the same runtime object are entrypoints, not separate paths, unless they change
+ownership, input/output boundaries, or completion semantics.
 
 Record paths in `execution_paths`, and explain entrypoints, consumer scope, and
 uncovered modes in the existing report fields. Use `SUPPORTED` only when every
@@ -43,6 +45,8 @@ both `message_capture` and `message_injection`. For every path identify:
 - enumerate, Take, Drop, and Clear mechanics;
 - the normal protocol input boundary;
 - how the declared test consumer obtains the real target object;
+- whether the cached instance is a request, response, or one-way message and
+  where that direction normally enters the protocol;
 - whether injection is separated Take-plus-input or a combined single call.
 
 Do not combine capture evidence from path A with injection evidence from path B.
@@ -54,7 +58,9 @@ an instance reference. A one-shot result, observable channel, post-delivery log,
 raw output collection, inaccessible queue, or caller-created collection is only
 a primitive. A reference must either still identify the observed instance or be
 rejected as stale; it must never silently retarget another instance. Do not
-require permanent numeric IDs or a particular cache type.
+require permanent numeric IDs or a particular cache type. A proposed capture
+point must own continuation in controlled mode; a second consumer racing the
+protocol consumer is not a reliable suppression point.
 
 `Take` is a cache operation owned by message capture: it removes and returns the
 selected message and available routing information. Complete injection may be:
@@ -69,16 +75,37 @@ for success, synchronous failure, and unconfirmed asynchronous delivery. One
 call does not imply transactional atomicity. The test owns message selection,
 scheduling, retry, duplication, and assertions.
 
+Preserve message direction. Injecting a cached request means delivering that
+request to its normal request handler; fabricating or completing a response is
+not a substitute. A response is injected through its response boundary only
+when the selected cached instance is itself that response. Preserve any response
+channel or future as the completion mechanism of the original exchange.
+
+In Go, a struct copied by value is not proof of snapshot safety. Inspect nested
+slices, maps, pointers, interfaces, channels, futures, and consumable streams
+before claiming that observation or cached-message snapshots cannot mutate or
+consume internal state.
+
 Treat dispersed wall-clock use without explicit Tick or injectable Clock as
 `INVASIVE` in v0.1. Lifecycle control requires both making a logical node
 unavailable and making it participate again. Existing pause/resume,
 stop/reconstruction, caller-controlled scheduling, or process control may be
 composed directly; do not require a convenience wrapper or invent crash,
-persistence, or recovery semantics.
+persistence, or recovery semantics. Network isolation, message loss, or a
+partition is not lifecycle unavailability while local protocol activity
+continues.
+
+For randomness, `SUPPORTED` requires reproducible choices for the claimed node,
+instance, or shared scope. A fixed global random sequence is insufficient when
+concurrent call order can assign its values to different instances or protocol
+decisions.
 
 For directly usable interfaces, add a short syntactically valid Go snippet to
 `usage_examples` when source evidence establishes the setup. Show mechanics, not
-selection policy, fault scheduling, assertions, or a correctness oracle.
+selection policy, fault scheduling, assertions, or a correctness oracle. Use a
+real receiver of the correct type, symbols visible to the declared consumer, and
+no ellipsis, invented helper, or inaccessible field. Omit the example and state
+the missing setup when a trustworthy snippet cannot be derived from source.
 
 For every capability with `obligations`, assess every named obligation as
 `SATISFIED`, `PARTIAL`, `MISSING`, `UNKNOWN`, or `NOT_APPLICABLE`. Every
@@ -86,6 +113,8 @@ For every capability with `obligations`, assess every named obligation as
 
 External input means application work originating outside the protocol. Check
 proposals, reads, membership changes, and equivalent operations. Exclude peer
-protocol messages, Tick, timers, and internal callbacks.
+protocol messages, Tick, timers, internal callbacks, diagnostics, barriers,
+snapshot/restore, bootstrap, leadership transfer, lifecycle, and maintenance
+operations unless the target explicitly defines them as application workload.
 
 Return only JSON matching the capability-report schema.

@@ -14,17 +14,23 @@ For message control, use Agent 1's shared path partition. For every path claimed
 in `covered_paths`, verify its own output boundary, cache, instance operation,
 and normal input boundary. Capture on path A and injection on path B cannot be
 combined to claim a complete path. Every other discovered path must appear in
-`uncovered_paths` with a concrete reason.
+`uncovered_paths` with a concrete reason. Multiple accessors on the same runtime
+object are not separate paths unless ownership, boundaries, or completion
+semantics differ.
 
 For each covered message path verify that:
 
 - controlled output enters retained, test-visible cache state before delivery;
+- the capture point owns continuation in controlled mode instead of racing the
+  protocol's existing consumer;
 - delivery does not continue except through a later test action;
 - enumeration exposes target-native content and an instance reference;
 - Take returns and removes one instance, Drop removes one, and Clear empties it;
 - a reference still identifies the observed instance or is rejected as stale,
   never silently retargeting after mutation;
-- returned snapshots do not expose mutable aliases into internal state;
+- returned snapshots do not expose mutable aliases into internal state; a Go
+  outer-struct copy is insufficient without checking nested reference and stream
+  fields;
 - capture and injection operate on the same cache instance and declared path;
 - injection uses either separated Take-plus-input or a combined single call and
   reaches the documented normal protocol input without changing the message;
@@ -35,6 +41,8 @@ For each covered message path verify that:
 - request-response or future-based paths preserve their original completion
   mechanism and do not orphan the sender, response channel, or future after
   capture, removal, timeout, or injection.
+- a cached request reaches its normal request handler; completing or fabricating
+  a response is not accepted as injection of that request.
 
 A one-shot result, channel, raw output collection, post-delivery log, inaccessible
 queue, caller-created collection, or standalone input function is only a
@@ -43,15 +51,19 @@ name, or transactional behavior from a combined single call. Record the joint
 conclusion under `message_cache_injection_coherence`.
 
 Also verify that new time and randomness controls preserve legal values, the
-existing algorithm, and the production default. Reject lifecycle changes that
-invent crash, persistence, or recovery semantics, and reject convenience wrappers
-that were generated despite directly composable unavailable and restore actions.
+existing algorithm, and the production default. Random control must reproduce
+choices for the claimed instance or scope, not only a shared sequence whose
+concurrent assignment can vary. Reject lifecycle changes that invent crash,
+persistence, or recovery semantics, treat network isolation as a stopped node,
+or add convenience wrappers despite directly composable unavailable and restore
+actions.
 
 Usage examples must be syntactically valid Go, use real exported or otherwise
 scope-correct symbols, and demonstrate mechanics without choosing a fault policy,
-schedule, assertion, or correctness oracle. `public_entrypoints` must contain only
-operations callable by the declared consumer. Internal stores and hooks are not
-public API.
+schedule, assertion, or correctness oracle. Reject package-qualified instance
+methods, ellipsis placeholders, invented helpers, and inaccessible fields.
+`public_entrypoints` must contain only operations callable by the declared
+consumer. Internal stores and hooks are not public API.
 
 Triage every concern:
 

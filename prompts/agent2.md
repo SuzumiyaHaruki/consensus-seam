@@ -28,6 +28,7 @@ message-control seam.
 For capture, build or extend a target-native test cache that:
 
 - receives controlled output before delivery and suppresses automatic continuation;
+- owns continuation in controlled mode instead of racing another consumer;
 - retains instances until a test action takes, drops, clears, or injects them;
 - enumerates target-native content and current order;
 - supports Take, Drop, and Clear without implementing selection policy.
@@ -41,7 +42,9 @@ as stale; it must never silently retarget. Reuse target-native records, handles,
 pointers, tokens, or mutation-safe indexes. Permanent numeric IDs are optional.
 Avoid parallel cache state that existing public mutations can desynchronize.
 Returned snapshots must not expose mutable aliases into cached, protocol, or
-controller state.
+controller state. In Go, inspect nested slices, maps, pointers, interfaces,
+channels, futures, and consumable streams; copying the outer struct by value is
+not sufficient.
 
 Injection may use either form:
 
@@ -60,13 +63,22 @@ For request-response or future-based message paths, preserve and document the
 original completion mechanism. Capture, removal, timeout, or injection must not
 silently orphan the sender, response channel, or future.
 
+Preserve message direction. A cached request is injected only by delivering that
+request to its normal request input; fabricating or completing a response is not
+a substitute. Deliver a response through its response boundary only when that
+response is the selected cached instance.
+
 Apply these common rules:
 
 - reuse one authoritative target-native state relationship where possible;
 - validate new time or randomness values against the target's legal domain;
 - keep the production default unchanged;
+- make random choices reproducible for the claimed instance or scope; a shared
+  seeded sequence is insufficient if concurrent call order changes assignment;
 - do not add lifecycle wrappers merely for symmetry when existing unavailable
   and restore operations are directly composable;
+- do not treat network isolation or message loss as stopping node lifecycle while
+  local protocol activity continues;
 - do not repeat resolved Analyzer gaps as remaining limitations.
 
 Record actual entrypoints, consumer-callable `public_entrypoints`, cache location,
@@ -74,7 +86,9 @@ reference validity, target/routing ownership, cache effects, production and test
 modes, covered and uncovered paths, required setup, and remaining limitations.
 Each implemented capability needs one concise, syntactically valid Go usage
 example. Message examples show enumeration, content inspection, and use of the
-returned reference, but leave the choice criteria and schedule to the test.
+returned reference, but leave the choice criteria and schedule to the test. Use
+the correct receiver, consumer-visible symbols, and no ellipsis, invented helper,
+or inaccessible field; omit an example rather than fabricate setup.
 
 Add only the smallest focused Go tests needed to exercise new behavior. Do not
 modify existing target tests, duplicate their coverage, generate broad parameter
