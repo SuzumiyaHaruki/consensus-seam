@@ -200,96 +200,35 @@ class SplitCapabilityRuntime:
     def __init__(self) -> None:
         self.transform_calls: list[list[str]] = []
 
-    def run(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        response_schema: dict[str, Any] | None = None,
-        *,
-        agent: str,
-        model: AgentModelConfig,
-        tools: ToolExecutor | None = None,
-        invocation_id: str | None = None,
-    ) -> str:
-        if agent == "analyzer":
-            report = capability_report()
-            capture = report["capabilities"]["message_capture"]
-            capture.update(
-                {
-                    "status": "PATCHABLE",
-                    "gap": "stable capture identity is missing",
-                    "existing_test_interface_complete": False,
-                    "test_support_reason": "capture needs a test-facing pending store",
-                    "suggested_changes": ["add a low-intrusion pending accessor"],
-                }
-            )
-            return json.dumps(report)
-        if agent == "transformer":
-            payload = json.loads(user_prompt)
-            selected = payload["patchable_capabilities"]
-            assert selected == ["message_capture", "message_injection"]
-            self.transform_calls.append(selected)
-            return json.dumps(
-                {
-                    "message_capture": {
-                        "implemented": True,
-                        "message_id_scope": "test_session",
-                        "implementation_approach": ["shared target-native message cache"],
-                    },
-                    "message_injection": {
-                        "implemented": True,
-                        "message_id_scope": "test_session",
-                        "implementation_approach": ["shared target-native message cache"],
-                    }
-                }
-            )
-        return json.dumps(review_report())
-
-
-class SelectiveReviewerRevisionRuntime:
-    """Reviewer 只指出消息问题时，下一轮不应重跑其他有效能力。"""
-
-    def __init__(self) -> None:
-        self.transform_calls: list[list[str]] = []
-        self.review_round = 0
-
-    def run(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        response_schema: dict[str, Any] | None = None,
-        *,
-        agent: str,
-        model: AgentModelConfig,
-        tools: ToolExecutor | None = None,
-        invocation_id: str | None = None,
-    ) -> str:
-        if agent == "analyzer":
-            report = capability_report()
-            capture = report["capabilities"]["message_capture"]
-            capture.update(
-                {
-                    "status": "PATCHABLE",
-                    "gap": "capture facade missing",
-                    "existing_test_interface_complete": False,
-                    "test_support_reason": "output is not retained",
-                    "suggested_changes": ["add a cache facade"],
-                }
-            )
-            report["capabilities"]["randomness_control"] = {
+    def analyzer_report(self) -> dict[str, Any]:
+        report = capability_report()
+        report["capabilities"]["message_capture"].update(
+            {
                 "status": "PATCHABLE",
-                "evidence": [
-                    {
-                        "symbol": "RandomSource",
-                        "reason": "random source cannot be fixed by tests",
-                    }
-                ],
-                "gap": "no deterministic random source",
+                "gap": "capture facade missing",
                 "existing_test_interface_complete": False,
-                "test_support_reason": "randomness needs a configuration hook",
-                "suggested_changes": ["add a validated test configuration"],
+                "test_support_reason": "output is not retained",
+                "suggested_changes": ["add a cache facade"],
             }
-            return json.dumps(report)
+        )
+        return report
+
+    def review_response(self) -> dict[str, Any]:
+        return review_report()
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
+    ) -> str:
+        if agent == "analyzer":
+            return json.dumps(self.analyzer_report())
         if agent == "transformer":
             selected = json.loads(user_prompt)["patchable_capabilities"]
             self.transform_calls.append(selected)
@@ -301,10 +240,7 @@ class SelectiveReviewerRevisionRuntime:
                         json.dumps(
                             {
                                 "path": f"generated_{capability}.go",
-                                "content": (
-                                    "package mini\n\n"
-                                    f"// generated seam for {capability}\n"
-                                ),
+                                "content": f"package mini\n\n// {capability}\n",
                             }
                         ),
                     )
@@ -319,7 +255,34 @@ class SelectiveReviewerRevisionRuntime:
                     for capability in selected
                 }
             )
+        return json.dumps(self.review_response())
 
+
+class SelectiveReviewerRevisionRuntime(SplitCapabilityRuntime):
+    """Reviewer 只指出消息问题时，下一轮不应重跑其他有效能力。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.review_round = 0
+
+    def analyzer_report(self) -> dict[str, Any]:
+        report = super().analyzer_report()
+        report["capabilities"]["randomness_control"] = {
+            "status": "PATCHABLE",
+            "evidence": [
+                {
+                    "symbol": "RandomSource",
+                    "reason": "random source cannot be fixed by tests",
+                }
+            ],
+            "gap": "no deterministic random source",
+            "existing_test_interface_complete": False,
+            "test_support_reason": "randomness needs a configuration hook",
+            "suggested_changes": ["add a validated test configuration"],
+        }
+        return report
+
+    def review_response(self) -> dict[str, Any]:
         self.review_round += 1
         review = review_report()
         if self.review_round == 1:
@@ -330,7 +293,7 @@ class SelectiveReviewerRevisionRuntime:
                     "reason": "capture snapshot is not isolated",
                 }
             ]
-        return json.dumps(review)
+        return review
 
 
 class ReviewerRevisionRuntime:

@@ -13,6 +13,7 @@
 - `patch`、`run` 与 `repair` 共用候选格式化、构建、补丁统计和 Reviewer 调用；
 - 普通验证与后置验证共用 capability check 转换和 fixture 物化逻辑；
 - Verifier 将“无 fixture 的构建/原测试”和“有 fixture 的能力检查”拆开复用，避免后置测试被重复执行或误判成原测试回归。
+- 工作流与工具预算测试复用已有 Fake Runtime 和响应构造器，删除重复的 Agent 调用与 Chat Completion JSON 样板。
 
 ## 刻意保留的相似代码
 

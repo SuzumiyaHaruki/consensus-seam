@@ -7,6 +7,33 @@ from consensus_seam.llm.runtime import ToolCallingAgentRuntime
 from consensus_seam.models import AgentModelConfig
 
 
+def completion(
+    content: str | None,
+    *,
+    finish_reason: str = "stop",
+    tool_calls: list[dict[str, Any]] | None = None,
+    reasoning_content: str | None = None,
+    usage: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls is not None:
+        message["tool_calls"] = tool_calls
+    if reasoning_content is not None:
+        message["reasoning_content"] = reasoning_content
+    return {
+        "usage": usage or {},
+        "choices": [{"finish_reason": finish_reason, "message": message}],
+    }
+
+
+def echo_call(call_id: str, value: str) -> dict[str, Any]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": "echo", "arguments": json.dumps({"value": value})},
+    }
+
+
 class EchoTools:
     definitions = [
         {
@@ -36,54 +63,30 @@ class ScriptedChatClient:
     def create_chat_completion(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         if len(self.calls) == 1:
-            return {
-                "usage": {
+            return completion(
+                None,
+                finish_reason="tool_calls",
+                tool_calls=[echo_call("call-1", "source")],
+                reasoning_content="I should inspect the source.",
+                usage={
                     "prompt_tokens": 10,
                     "completion_tokens": 2,
                     "total_tokens": 12,
                     "prompt_cache_hit_tokens": 4,
                     "prompt_cache_miss_tokens": 6,
                 },
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "reasoning_content": "I should inspect the source.",
-                            "tool_calls": [
-                                {
-                                    "id": "call-1",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "echo",
-                                        "arguments": '{"value":"source"}',
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                ]
-            }
-        return {
-            "usage": {
+            )
+        return completion(
+            '{"answer":"done"}',
+            reasoning_content="The evidence is sufficient.",
+            usage={
                 "prompt_tokens": 20,
                 "completion_tokens": 3,
                 "total_tokens": 23,
                 "prompt_cache_hit_tokens": 5,
                 "prompt_cache_miss_tokens": 15,
             },
-            "choices": [
-                {
-                    "finish_reason": "stop",
-                    "message": {
-                        "role": "assistant",
-                        "content": '{"answer":"done"}',
-                        "reasoning_content": "The evidence is sufficient.",
-                    },
-                }
-            ]
-        }
+        )
 
 
 class BudgetConvergenceClient:
@@ -95,41 +98,12 @@ class BudgetConvergenceClient:
     def create_chat_completion(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         if kwargs["tools"] is not None:
-            call_id = f"call-{len(self.calls)}"
-            return {
-                "usage": {},
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": call_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": "echo",
-                                        "arguments": '{"value":"more"}',
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                ],
-            }
-        return {
-            "usage": {},
-            "choices": [
-                {
-                    "finish_reason": "stop",
-                    "message": {
-                        "role": "assistant",
-                        "content": '{"answer":"converged"}',
-                    },
-                }
-            ],
-        }
+            return completion(
+                None,
+                finish_reason="tool_calls",
+                tool_calls=[echo_call(f"call-{len(self.calls)}", "more")],
+            )
+        return completion('{"answer":"converged"}')
 
 
 def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
