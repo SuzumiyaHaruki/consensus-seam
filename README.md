@@ -40,17 +40,25 @@ v0.1 明确只面向 Go 共识实现。人工只定义系统边界，不需要�
 
 Agent 3 发现违反能力合同、路径覆盖声明或接口报告的问题时，必须通过 `REVISE_AGENT1` 或 `REVISE_AGENT2` 自动反馈；只有不妨碍合同成立的剩余限制才能保留在 `PASS.risks`。Agent 2 修订发生在重新应用上一版候选的 fresh worktree 中，不需要人工提供测试或重新从空白生成。
 
-全局能力规范只描述测试行为，不规定统一 Go API。传输抽象、节点类型、节点注册表、缓存结构和函数名都由目标决定。
+能力规范固定测试方需要调用的名称、结构和语义，同时保留目标内部实现自由。
+例如消息统一使用 `MessageController`、`PendingMessage`、不透明
+`MessageHandle` 以及 `Pending`、`Drop`、`Clear`、`Inject`；时间、随机性和
+生命周期分别使用 `TimeController`、`RandomController` 和
+`LifecycleController`。节点 ID、原生消息、随机值和状态仍使用目标的具体
+导出类型，不能把类型槽名称原样生成，也不能退化成裸 `any`。
 
-Analyzer 必须区分“底层原语存在”和“测试接口完整存在”。消息捕获要求受控输出在投递前进入测试可见缓存，并提供枚举、`Take`、`Drop` 和 `Clear`；一次性输出、channel、投递后日志和普通输入函数都只是原语。实例引用要么仍命中测试方观察到的实例，要么明确报告过期，不能静默指向另一实例；不要求永久数字 ID。
+Analyzer 必须区分底层原语与完整测试接口。消息控制要求边界内请求、响应和
+单向消息在投递前进入同一个 Controller 缓存，捕获和注入逐条覆盖同一组
+端到端路径。`Pending` 返回深拷贝快照，`Inject` 使用 Controller 私有副本并
+在正常输入边界确认接受后移除消息；v0.1 不提供 `Take`、消息修改、重定向、
+复制或凭空构造。选择、调度、重试和断言仍由测试方负责。
 
-消息捕获和注入使用同一组端到端路径逐条分析，连续的发送端和接收端边界不能拆成两条，也不能用 A 路径的捕获和 B 路径的注入拼成完整支持。受控捕获点必须拥有继续传递权，不能与协议消费者竞争读取。注入可以采用分离式 `Take + ProtocolInput`，也可以采用组合式单调用；后者不默认承诺事务原子性。请求必须进入正常请求处理入口，完成响应不能代替请求注入。请求—响应或 future 路径还必须保留原有完成机制，不能让发送方、响应 channel 或 future 静默失联。选择、调度、重试和断言仍由测试方负责。
-
-Go 结构体按值复制不能自动证明快照安全，Agent 还要检查嵌套 slice、map、pointer、interface、channel、future 和可消费流。随机性控制必须在相同初始状态、控制参数和测试调度下重现每个实例的选择序列，并让测试方知道每次实际选择值；选择可以随决策变化，不要求固定常量或每实例随机源。
-
-时间控制的低侵入按语义而不是文件数量判断：没有 Tick、调用点分散或需要修改多个文件都不自动等于 `INVASIVE`。能够通过 Clock/Timer 注入保持生产默认、timer 顺序和协议转换条件时，应判为 `PATCHABLE`；只有必须重设计调度或协议语义时才拒绝修改。
-
-低侵入改造可以是复用、包装、hook、依赖注入、配置项、只读 accessor 或扩展现有测试 harness。生命周期要求 crash 时停止活动并丢弃易失运行实例，只保留目标已经持久化的状态；restart 必须从正常恢复入口构造新实例。pause/resume、优雅停止、网络断连或分区不能替代 crash/restart。Seam 不发明持久化语义，也不实现恢复后的协议追赶。外部输入只包括应用提案、读请求、事务和复制的成员变更，不把诊断、barrier、snapshot/restore、bootstrap 或领导权转移混入工作负载清单。
+时间控制通过系统级 `Advance` 手动推进所有运行节点；随机性通过 seed 重现
+可变化的选择序列并记录实际语义值。生命周期明确区分 Pause/Resume、正常
+Stop、突然 Crash 和 Restart；窄且默认关闭的核心 hook 可以低侵入实现，
+会改变协议或持久化语义的操作则公开返回 `ErrLifecycleUnsupported`。外部输入
+只做已有工作入口发现，状态观察优先复用安全的目标原生类型化接口。完整
+合同和逐项边界见 `docs/capabilities.md`。
 
 ## 目录架构
 
@@ -143,7 +151,8 @@ consensus-seam/                         # 仓库根目录
 │   └── helpers.py                     # 测试共享构造辅助
 ├── runs/                              # 实验产物
 │   ├── <run-id>/                      # 完整本地运行、日志和临时信息；Git 忽略
-│   └── latest/                        # 最近一次可审计小型产物；Git 跟踪
+│   └── latest/                        # 各目标最近一次可审计小型产物；Git 跟踪
+│       └── <project>/                 # 例如 etcd-raft、mini-raft
 ├── README.md                          # 项目入口、架构和使用说明
 ├── CODEX_SPEC.md                      # v0.1 非目标与实现边界
 ├── pyproject.toml                     # 包、依赖、CLI、wheel 资源和 pytest 配置
@@ -272,7 +281,10 @@ consensus-seam repair  --project /绝对路径/project.yaml \
 - `agent-run-stats.json`、`tool-call-audit.json`：模型和工具成本审计；
 - `unresolved.json`：未实现或被实验范围跳过的能力。
 
-完成后，适合审计的小型产物会复制到 Git 跟踪的 `runs/latest/`，覆盖上一次导出。完整 patched worktree 不会进入 Git。框架不会自动提交、推送或把补丁应用到目标仓库。
+完成后，适合审计的小型产物会复制到 Git 跟踪的
+`runs/latest/<project>/`，只覆盖同一目标的上一次导出，其他目标的 latest
+保持不变。完整 patched worktree 不会进入 Git。框架不会自动提交、推送或
+把补丁应用到目标仓库。
 
 ## 评测材料与人工 ground truth
 

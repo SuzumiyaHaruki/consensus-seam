@@ -1,0 +1,10 @@
+{
+  "lifecycle_control": {
+    "reason": "The node has no restart or recovery path: NewNode always builds fresh in-memory state, and Pause/Resume only toggle a `running` flag whose meaning is explicitly documented as a scheduler pause, not crash recovery. Persistent-looking state (term, vote, log, commit) is held in one in-memory struct with no ownership separation or durable store. Exposing lifecycle control to tests would require deciding which state survives a crash, which the implementation deliberately does not define.",
+    "status": "INVASIVE"
+  },
+  "randomness_control": {
+    "reason": "outside this run's transform_capabilities scope",
+    "status": "PATCHABLE"
+  }
+}

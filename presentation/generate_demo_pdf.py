@@ -305,7 +305,7 @@ def slide_problem(c: canvas.Canvas) -> None:
     for i, (label, accent) in enumerate(abilities):
         badge(c, 50 + i * 126, 148, label, fill=accent, width=112)
     rounded_box(c, 50, 76, 862, 48, fill=NAVY_2, stroke=None, radius=12)
-    draw_text(c, 481, 91, "规范约束的是功能：显式缓存、引用或过期检测、真实输入边界；不强制统一类型、函数名或数字 ID。", size=11.5, fill=WHITE, align="center")
+    draw_text(c, 481, 91, "统一测试接口名称与语义；节点 ID、消息和状态仍采用目标原生类型，内部实现由源码决定。", size=11.5, fill=WHITE, align="center")
     footer_source(c, "研究边界：为测试提供规范控制能力；测试策略、故障计划和正确性 oracle 仍由测试方负责")
     c.showPage()
 
@@ -325,13 +325,13 @@ CAPABILITY_DETAILS = (
             "启用或暴露捕获，并说明需要的构造器、hook 或测试环境",
             "枚举缓存：看到目标原生消息内容、当前顺序与消费者范围",
             "获得实例引用：仍命中原实例，或明确报告引用过期",
-            "精确 Take / Drop 单条消息，以及 Clear 全部消息",
+            "使用 Pending 查看、Drop 精确删除、Clear 清空",
         ),
         "complete": "所有声明支持的路径都有同一套可控缓存语义；返回快照不会反向修改内部状态。",
         "boundary": "测试方按消息内容选择并制定调度策略；系统不替测试方决定丢弃、延迟或重排哪条消息。",
     },
     {
-        "title": "消息注入：从同一缓存取出实例，进入真实协议入口",
+        "title": "消息注入：指定同一缓存实例，进入真实协议入口",
         "slug": "message_injection",
         "goal": "测试方指定一个已经捕获的合法消息实例，并将它交给记录目标的正常协议输入边界。",
         "flow": (
@@ -341,7 +341,7 @@ CAPABILITY_DETAILS = (
             ("正常输入", "通过 Step、receive 或目标原生入口投递", TEAL),
         ),
         "operations": (
-            "支持 Take + 输入分离式，或 Inject(handle) 组合式单调用",
+            "统一 Inject(handle)，由 Controller 绑定目标并调用正常输入",
             "明确注入成功时消息是否已从权威缓存移除",
             "明确同步错误、异步未确认、重试与重新入队的责任边界",
             "报告外部调用、同包测试或内部 harness 各自可用的入口",
@@ -360,7 +360,7 @@ CAPABILITY_DETAILS = (
             ("观察完成", "说明同步返回或异步协调边界", GREEN),
         ),
         "operations": (
-            "推进一次或若干逻辑时间单位；接口形状遵循目标已有抽象",
+            "通过统一 Advance(steps) 逐步推进所有运行节点",
             "多节点或多时间源存在时，可提供薄协调包装",
             "说明控制范围：单节点、节点集合或特定时钟实例",
             "拒绝非法控制值，不创建目标原本不允许的状态",
@@ -805,25 +805,25 @@ def slide_etcd_code(c: canvas.Canvas) -> None:
 
     rounded_box(c, 252, 278, 188, 96, fill="#E3F8F5", stroke=TEAL, radius=14)
     draw_text(c, 346, 340, "权威缓存", size=13, fill=TEAL_DARK, font="NotoBold", align="center")
-    draw_text(c, 346, 314, "env.Messages + msgIDs", size=9.5, fill=INK, align="center")
+    draw_text(c, 346, 314, "MessageController 缓存", size=9.5, fill=INK, align="center")
     draw_text(c, 346, 293, "每个实例一个稳定 handle", size=8.5, fill=MUTED, align="center")
 
     arrow(c, 440, 326, 482, 326, stroke=TEAL, width=2.5)
     rounded_box(c, 490, 278, 190, 96, fill=WHITE, stroke=BLUE, radius=14)
-    draw_text(c, 585, 341, "EnumerateMessages", size=10.5, fill=BLUE_DARK, font="NotoBold", align="center")
+    draw_text(c, 585, 341, "Pending", size=10.5, fill=BLUE_DARK, font="NotoBold", align="center")
     draw_text(c, 585, 315, "EnvMessage { Handle, Msg }", size=8.7, fill=INK, align="center")
     draw_text(c, 585, 292, "测试按 Msg 内容选择", size=8.5, fill=MUTED, align="center")
 
     arrow(c, 680, 326, 720, 326, stroke=BLUE, width=2.5)
     rounded_box(c, 728, 278, 184, 96, fill="#EEF6FF", stroke=BLUE, radius=14)
-    draw_text(c, 820, 342, "Take / Drop / Clear", size=10.2, fill=BLUE_DARK, font="NotoBold", align="center")
+    draw_text(c, 820, 342, "Pending / Drop / Clear", size=10.2, fill=BLUE_DARK, font="NotoBold", align="center")
     draw_text(c, 820, 316, "InjectMessage(handle)", size=9.4, fill=BLUE_DARK, font="NotoBold", align="center")
     draw_text(c, 820, 292, "env.Nodes[msg.To-1].Step", size=8, fill=MUTED, align="center")
 
     draw_text(c, 48, 221, "当前边界与待修问题", size=15, fill=NAVY, font="NotoBold")
     findings = [
         (50, "未覆盖", "直接 RawNode / Node 路径", CORAL),
-        (270, "身份冲突", "公开 Messages vs 私有 msgIDs", AMBER),
+        (270, "统一引用", "不透明稳定 MessageHandle", AMBER),
         (490, "失败语义", "Step 失败前已移除消息", PURPLE),
         (710, "第二轮", "深拷贝修复且全量测试通过", GREEN),
     ]
@@ -851,10 +851,10 @@ def slide_validation(c: canvas.Canvas) -> None:
     draw_text(c, 468, 420, "保留 / 修改 / 删除", size=17, fill=NAVY, font="NotoBold")
     decisions = [
         ("保留", "RandomizedElectionTimeout：默认路径不变，四条路径可用", GREEN),
-        ("保留", "MessageHandle + Enumerate / Take / Drop / Clear 的抽象", TEAL),
+        ("保留", "MessageController + Pending / Drop / Clear / Inject", TEAL),
         ("修改", "公开 Messages 与私有 ID 的稳定性；同步失败消费语义", AMBER),
         ("继续分析", "RawNode / Node wrapper 可行性，不能直接判 INVASIVE", BLUE),
-        ("删除", "生命周期新增代码：来自 convenience wrapper 误判", CORAL),
+        ("收紧", "生命周期区分 Pause、Stop、Crash 与 Restart", CORAL),
     ]
     for i, (decision, text, accent) in enumerate(decisions):
         y = 365 - i * 52

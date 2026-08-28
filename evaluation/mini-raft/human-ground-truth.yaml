@@ -27,15 +27,17 @@ capabilities:
         symbol: Node.Step
         reason: Step 是会检查目标的正常协议输入边界。
     rationale: >
-      正常投递路径已经存在，但实现没有稳定 MessageID、Pending Store 或精确的
-      Inject(ID) 操作。
+      正常投递路径已经存在，但实现没有稳定 MessageHandle、MessageController
+      缓存或精确的 Inject(handle) 操作。
 
   time_control:
-    expected_status: SUPPORTED
+    expected_status: PATCHABLE
     evidence:
       - file: node.go
         symbol: Node.Tick
-        reason: 每次调用都会把协议逻辑时间推进一个单位。
+        reason: 每次调用都会把单节点协议逻辑时间推进一个单位，可用于构造系统级 TimeController。
+    rationale: >
+      单节点 Tick 是实现原语，但尚未提供统一推进所有运行节点的 TimeController。
 
   randomness_control:
     expected_status: PATCHABLE
@@ -47,9 +49,11 @@ capabilities:
       随机算法位置集中，但 Config 无法注入或固定随机源以支持重放。
 
   lifecycle_control:
-    expected_status: INVASIVE
+    expected_status: PATCHABLE
     expected_obligations:
-      stop_boundary: SATISFIED
+      pause_resume_boundary: SATISFIED
+      normal_stop_boundary: MISSING
+      crash_boundary: MISSING
       restart_or_recovery_boundary: MISSING
       state_ownership_defined: MISSING
       persistent_volatile_semantics_defined: MISSING
@@ -61,7 +65,9 @@ capabilities:
         symbol: Node.Pause
         reason: Pause 和 Resume 明确表示调度控制，不是崩溃恢复。
     rationale: >
-      增加崩溃/重启接口必须先发明哪些字段能够保留，这超出 v0.1 允许的修改边界。
+      可以低侵入包装 Pause/Resume 并提供统一 LifecycleController；崩溃和恢复会
+      发明持久化语义，因此对应方法必须标记 core_semantics_required 并返回
+      ErrLifecycleUnsupported。
 
   observation:
     expected_status: SUPPORTED

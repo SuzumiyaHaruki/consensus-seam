@@ -1,0 +1,45 @@
+{
+  "passed": false,
+  "build": {
+    "command": "go test -run '^$' ./...",
+    "returncode": 0,
+    "stdout": "ok  \tgithub.com/SuzumiyaHaruki/mini-raft\t(cached) [no tests to run]\n",
+    "stderr": "",
+    "duration_seconds": 0.14411691700297524
+  },
+  "existing_tests": {
+    "command": "go test ./...",
+    "returncode": 0,
+    "stdout": "ok  \tgithub.com/SuzumiyaHaruki/mini-raft\t(cached)\n",
+    "stderr": "",
+    "duration_seconds": 0.11502719300187891
+  },
+  "capability_tests": [
+    {
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC1Capture$' -count=1",
+      "returncode": 0,
+      "stdout": "ok  \tgithub.com/SuzumiyaHaruki/mini-raft/_consensus_seam_hidden/acceptance\t0.006s\n",
+      "stderr": "",
+      "duration_seconds": 0.3916454589998466
+    },
+    {
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC2Suppression$' -count=1",
+      "returncode": 0,
+      "stdout": "ok  \tgithub.com/SuzumiyaHaruki/mini-raft/_consensus_seam_hidden/acceptance\t0.006s\n",
+      "stderr": "",
+      "duration_seconds": 0.24710813799902098
+    },
+    {
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC3ExactInjection$' -count=1",
+      "returncode": 1,
+      "stdout": "--- FAIL: TestMC3ExactInjection (0.00s)\n    message_control_test.go:104: Inject('\\x02'): mini-raft: captured message target is not registered: 3\nFAIL\nFAIL\tgithub.com/SuzumiyaHaruki/mini-raft/_consensus_seam_hidden/acceptance\t0.007s\nFAIL\n",
+      "stderr": "",
+      "duration_seconds": 0.24197131199980504
+    }
+  ],
+  "failure_code": "MESSAGE_INJECTION_FAILED",
+  "route": "AGENT2",
+  "details": [
+    "capability check failed: MC3 exact injection"
+  ]
+}

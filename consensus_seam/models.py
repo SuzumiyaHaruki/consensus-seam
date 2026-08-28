@@ -234,7 +234,6 @@ class CapabilityDefinition(StrictModel):
     """能力的通用描述、允许形式、义务和公开测试契约。"""
 
     description: str = Field(min_length=1)
-    accepted_v0_forms: list[str] = Field(default_factory=list)
     obligations: dict[str, str] = Field(default_factory=dict)
     testing_contract: dict[str, str] = Field(default_factory=dict)
 
@@ -436,24 +435,49 @@ class CapabilityReport(StrictModel):
         return self
 
     def _validate_lifecycle_obligations(self) -> None:
-        """保持 v0.1 可用性控制简单，同时记录但不发明 crash 语义。"""
+        """要求分析结果区分暂停、正常停止、崩溃和恢复边界。"""
 
         finding = self.capabilities["lifecycle_control"]
         required = {
+            "pause_resume_boundary",
+            "normal_stop_boundary",
+            "crash_boundary",
+            "restart_or_recovery_boundary",
+            "state_ownership_defined",
+            "persistent_volatile_semantics_defined",
+        }
+        legacy = {
             "stop_boundary",
             "restart_or_recovery_boundary",
             "state_ownership_defined",
             "persistent_volatile_semantics_defined",
         }
-        if set(finding.obligations) != required:
+        names = set(finding.obligations)
+        if names == legacy:
+            # 旧实验产物仍可读取；新运行由 capabilities.yaml 和 Agent Prompt
+            # 要求输出上面的六项义务。
+            if finding.status is CapabilityStatus.SUPPORTED and any(
+                finding.obligations[name].status is not ObligationStatus.SATISFIED
+                for name in {"stop_boundary", "restart_or_recovery_boundary"}
+            ):
+                raise ValueError(
+                    "SUPPORTED lifecycle_control requires unavailable and restore boundaries"
+                )
+            return
+        if names != required:
             raise ValueError("lifecycle_control must report all lifecycle obligations")
         states = {name: finding.obligations[name].status for name in required}
         if finding.status is CapabilityStatus.SUPPORTED and any(
             states[name] is not ObligationStatus.SATISFIED
-            for name in {"stop_boundary", "restart_or_recovery_boundary"}
+            for name in {
+                "pause_resume_boundary",
+                "normal_stop_boundary",
+                "crash_boundary",
+                "restart_or_recovery_boundary",
+            }
         ):
             raise ValueError(
-                "SUPPORTED lifecycle_control requires unavailable and restore boundaries"
+                "SUPPORTED lifecycle_control requires pause, stop, crash, and restart boundaries"
             )
 
     def _validate_external_input_obligations(self) -> None:
@@ -541,16 +565,10 @@ class InterfaceCapability(StrictModel):
     cache_effects: str | None = Field(
         default=None,
         description=(
-            "Cache effects of enumerate, take, drop, success, synchronous failure, "
+            "Cache effects of enumerate, drop, clear, successful injection, failure, "
             "and unconfirmed asynchronous delivery."
         ),
     )
-    message_id_scope: Literal[
-        "pending_store_instance", "test_session", "node", "global"
-    ] | None = None
-    # 兼容已有实验报告；具体目标可以声明串行控制器，但 v0.1 不再要求
-    # 所有目标都采用同一种并发模型。
-    controller_operations: Literal["serialized"] | None = None
     # Agent 2 必须说明它实际覆盖了哪些 Analyzer 发现的路径，以及哪些路径
     # 因低侵入边界而保留。二者只是审计信息，不引入逐路径工作流状态机。
     covered_paths: list[str] = Field(default_factory=list)
@@ -570,6 +588,19 @@ class InterfaceCapability(StrictModel):
         ),
     )
     notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_message_fields(cls, data: object) -> object:
+        """读取旧实验报告，但不再把旧 ID/串行字段暴露给 Agent。"""
+
+        if isinstance(data, dict) and (
+            "message_id_scope" in data or "controller_operations" in data
+        ):
+            data = dict(data)
+            data.pop("message_id_scope", None)
+            data.pop("controller_operations", None)
+        return data
 
     @model_validator(mode="after")
     def validate_outcome(self) -> "InterfaceCapability":
@@ -592,8 +623,6 @@ class InterfaceReport(StrictModel):
 
     @model_validator(mode="after")
     def require_one_capability(self) -> "InterfaceReport":
-        # 控制引用可以是 ID、handle、下标、缓存记录或目标原生形式；模型保留
-        # message_id_scope 以兼容已有结果，但不再把数字 ID 作为功能合同。
         if not self.capabilities():
             raise ValueError("interface report must describe at least one capability")
         return self

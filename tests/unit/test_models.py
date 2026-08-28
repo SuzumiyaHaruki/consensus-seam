@@ -103,7 +103,7 @@ def test_review_pass_cannot_hide_issues() -> None:
         ReviewReport.model_validate(payload)
 
 
-def test_lifecycle_supported_allows_availability_control_without_crash_claim() -> None:
+def test_lifecycle_supported_requires_all_four_runtime_boundaries() -> None:
     payload = capability_report()
     payload["capabilities"]["lifecycle_control"]["status"] = "SUPPORTED"
     payload["capabilities"]["lifecycle_control"]["evidence"] = evidence("Node.Pause")
@@ -114,22 +114,32 @@ def test_lifecycle_supported_allows_availability_control_without_crash_claim() -
         "existing_test_interface_complete"
     ] = True
     obligations = payload["capabilities"]["lifecycle_control"]["obligations"]
+    obligations["normal_stop_boundary"] = {
+        "status": "SATISFIED",
+        "evidence": evidence("Node.Stop"),
+        "reason": "normal stop is exposed",
+    }
+    obligations["crash_boundary"] = {
+        "status": "SATISFIED",
+        "evidence": evidence("Node.Crash"),
+        "reason": "abrupt runtime loss is exposed",
+    }
     obligations["restart_or_recovery_boundary"] = {
         "status": "SATISFIED",
-        "evidence": evidence("Node.Resume"),
-        "reason": "resume restores availability without claiming crash recovery",
+        "evidence": evidence("Node.Restart"),
+        "reason": "restart reconstructs the runtime",
     }
     for name in ("state_ownership_defined", "persistent_volatile_semantics_defined"):
         obligations[name] = {
             "status": "NOT_APPLICABLE",
             "evidence": [],
-            "reason": "availability-only mode makes no persistence claim",
+            "reason": "the target defines no durable state for this lifecycle",
         }
     report = CapabilityReport.model_validate(payload)
     assert report.capabilities["lifecycle_control"].status.value == "SUPPORTED"
 
 
-def test_lifecycle_supported_requires_restore_boundary() -> None:
+def test_lifecycle_supported_rejects_a_missing_runtime_boundary() -> None:
     payload = capability_report()
     payload["capabilities"]["lifecycle_control"]["status"] = "SUPPORTED"
     payload["capabilities"]["lifecycle_control"]["evidence"] = evidence("Node.Pause")
@@ -139,7 +149,7 @@ def test_lifecycle_supported_requires_restore_boundary() -> None:
     payload["capabilities"]["lifecycle_control"][
         "existing_test_interface_complete"
     ] = True
-    with pytest.raises(ValidationError, match="unavailable and restore boundaries"):
+    with pytest.raises(ValidationError, match="pause, stop, crash, and restart boundaries"):
         CapabilityReport.model_validate(payload)
 
 
@@ -155,12 +165,21 @@ def test_external_input_supported_requires_protocol_ingress_exclusion() -> None:
         CapabilityReport.model_validate(payload)
 
 
-def test_message_interface_allows_target_native_reference_without_numeric_id() -> None:
+def test_message_interface_reads_legacy_id_field_without_exposing_it_to_agents() -> None:
     report = InterfaceReport.model_validate(
-        {"message_capture": {"implemented": True}}
+        {
+            "message_capture": {
+                "implemented": True,
+                "message_id_scope": "test_session",
+            }
+        }
     )
     assert report.message_capture is not None
-    assert report.message_capture.message_id_scope is None
+    properties = InterfaceReport.model_json_schema()["$defs"]["InterfaceCapability"][
+        "properties"
+    ]
+    assert "message_id_scope" not in properties
+    assert "controller_operations" not in properties
 
 
 def test_reviewer_pass_requires_all_named_checks() -> None:

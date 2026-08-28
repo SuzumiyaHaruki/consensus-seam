@@ -130,8 +130,14 @@ def capability_report(*, patchable: str | None = "message_injection") -> dict[st
                 "existing_test_interface_complete": False,
                 "test_support_reason": "existing lifecycle control is incomplete and invasive",
                 "obligations": {
-                    "stop_boundary": obligation(
-                        "SATISFIED", "Node.Pause", "scheduler pause exists"
+                    "pause_resume_boundary": obligation(
+                        "SATISFIED", "Node.Pause", "same-runtime pause exists"
+                    ),
+                    "normal_stop_boundary": obligation(
+                        "MISSING", "Node", "normal stop is undefined"
+                    ),
+                    "crash_boundary": obligation(
+                        "MISSING", "Node", "abrupt runtime loss is undefined"
                     ),
                     "restart_or_recovery_boundary": obligation(
                         "MISSING", "Node.Resume", "resume is not recovery"

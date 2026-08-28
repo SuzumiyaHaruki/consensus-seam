@@ -7,8 +7,8 @@
 然后在目标仓库中运行：
 
 ```bash
-git apply --check /绝对路径/runs/latest/changes.patch
-git apply /绝对路径/runs/latest/changes.patch
+git apply --check /绝对路径/runs/latest/mini-raft/changes.patch
+git apply /绝对路径/runs/latest/mini-raft/changes.patch
 go test ./...
 ```
 

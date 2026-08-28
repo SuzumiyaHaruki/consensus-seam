@@ -243,11 +243,11 @@ class ArtifactStore:
                     "",
                     "## 消息控制调用顺序",
                     "",
-                    "1. 按报告所列方式启用目标原生的消息控制面。",
-                    "2. 调用缓存枚举入口，获得可检查的消息内容和与之绑定的实例引用。",
+                    "1. 调用报告列出的 NewMessageController 构造器并完成目标接线。",
+                    "2. 调用 Pending，获得可检查的消息深拷贝快照和稳定 Handle。",
                     "3. 测试代码根据目标原生消息字段选择实例；ConsensusSeam 不决定选择策略。",
-                    "4. 将枚举返回的同一实例引用交给取出、丢弃或注入入口，不要重新猜测切片位置。",
-                    "5. 根据下方记录的缓存变化与失败语义决定是否重试或保留消息。",
+                    "4. 将同一 Handle 交给 Drop 或 Inject；需要全部丢弃时调用 Clear。",
+                    "5. 根据下方记录的接受点、错误类别和缓存变化决定后续测试动作。",
                 ]
             )
 
@@ -409,7 +409,6 @@ class ArtifactStore:
                     ("缓存实例引用", generated.instance_reference),
                     ("目标绑定方式", generated.target_binding_strategy),
                     ("缓存变化与失败语义", generated.cache_effects),
-                    ("可选消息 ID 范围", generated.message_id_scope),
                     ("复制策略", generated.copy_strategy),
                 ]
                 present_details = [(label, value) for label, value in details if value]
@@ -472,14 +471,29 @@ class ArtifactStore:
         return self.write_text("AUDIT.md", "\n".join(lines).rstrip() + "\n")
 
     def publish_latest(self) -> Path:
-        """原子替换 Git 跟踪的 latest 审计导出。
+        """原子替换 Git 跟踪的项目级 latest 审计导出。
 
         patched-worktree 可能包含完整目标仓库和未审核代码，既体积大又不适合
-        上传；latest 只复制报告、最终 patch、统计和日志。先写 staging 再
+        上传；latest 只复制报告、最终 patch、统计和日志。每个项目拥有独立
+        的 ``runs/latest/<project>/``，一次运行不会覆盖其他项目的快照。
         """
 
         runs_root = self.run_directory.parent
-        latest = runs_root / "latest"
+        run_config_path = self.run_directory / "run-config.json"
+        if not run_config_path.is_file():
+            raise ValueError("cannot publish latest without run-config.json")
+        run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+        project_name = run_config.get("project")
+        if (
+            not isinstance(project_name, str)
+            or not project_name
+            or project_name in {".", ".."}
+            or Path(project_name).name != project_name
+        ):
+            raise ValueError("run-config project must be a safe directory name")
+
+        latest_root = runs_root / "latest"
+        latest = latest_root / project_name
         staging = Path(tempfile.mkdtemp(prefix=".latest-", dir=runs_root))
         try:
             for source in self.run_directory.rglob("*"):
@@ -493,21 +507,19 @@ class ArtifactStore:
                 shutil.copy2(source, destination)
 
             manifest = {
+                "project": project_name,
                 "source_run": self.run_directory.name,
                 "published_at": datetime.now(timezone.utc).isoformat(),
                 "included": "报告、补丁、统计和日志",
                 "excluded": ["patched-worktree*"],
             }
-            run_config_path = staging / "run-config.json"
-            if run_config_path.is_file():
-                run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
-                manifest["experiment"] = run_config.get("experiment")
+            manifest["experiment"] = run_config.get("experiment")
             (staging / "audit-manifest.json").write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
             (staging / "APPLY.md").write_text(
-                """# 应用最近一次已验证补丁
+                f"""# 应用最近一次已验证补丁
 
 修改目标仓库前，先阅读 `USAGE.md` 和 `AUDIT.md`，再审查
 `changes.patch`、`review-report.json` 和 `verification-report.json`，并在
@@ -516,8 +528,8 @@ class ArtifactStore:
 然后在目标仓库中运行：
 
 ```bash
-git apply --check /绝对路径/runs/latest/changes.patch
-git apply /绝对路径/runs/latest/changes.patch
+git apply --check /绝对路径/runs/latest/{project_name}/changes.patch
+git apply /绝对路径/runs/latest/{project_name}/changes.patch
 go test ./...
 ```
 
@@ -527,6 +539,7 @@ ConsensusSeam 不会自动应用或提交补丁。
 """,
                 encoding="utf-8",
             )
+            latest_root.mkdir(parents=True, exist_ok=True)
             if latest.exists():
                 shutil.rmtree(latest)
             os.replace(staging, latest)

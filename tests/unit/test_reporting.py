@@ -9,6 +9,7 @@ from tests.helpers import capability_report, review_report
 def test_publish_latest_tracks_audit_files_but_excludes_worktree(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     first = ArtifactStore.create(runs)
+    first.write_json("run-config.json", {"project": "mini-raft"})
     first.write_json("capability-report.json", {"target": "first"})
     first.write_text("changes.patch", "first patch\n")
     first.write_json("logs/build.json", {"passed": True})
@@ -21,8 +22,10 @@ def test_publish_latest_tracks_audit_files_but_excludes_worktree(tmp_path: Path)
     assert (latest / "logs/build.json").is_file()
     assert (latest / "APPLY.md").is_file()
     assert not (latest / "patched-worktree").exists()
+    assert latest == runs / "latest" / "mini-raft"
 
     second = ArtifactStore.create(runs)
+    second.write_json("run-config.json", {"project": "mini-raft"})
     second.write_json("capability-report.json", {"target": "second"})
     second.publish_latest()
     assert '"second"' in (latest / "capability-report.json").read_text()
@@ -30,6 +33,14 @@ def test_publish_latest_tracks_audit_files_but_excludes_worktree(tmp_path: Path)
     assert "应用最近一次已验证补丁" in (latest / "APPLY.md").read_text(
         encoding="utf-8"
     )
+
+    other = ArtifactStore.create(runs)
+    other.write_json("run-config.json", {"project": "etcd-raft"})
+    other.write_json("capability-report.json", {"target": "other"})
+    other_latest = other.publish_latest()
+    assert other_latest == runs / "latest" / "etcd-raft"
+    assert '"other"' in (other_latest / "capability-report.json").read_text()
+    assert '"second"' in (latest / "capability-report.json").read_text()
 
 
 def test_incomplete_run_marks_stage_reports_without_publishing(tmp_path: Path) -> None:
@@ -93,7 +104,7 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
                 "cache_effects": "成功后删除；同步失败时保留。",
                 "covered_paths": ["RawNode synchronous ingress"],
                 "uncovered_paths": ["Node asynchronous ingress：目标入口不返回处理结果"],
-                "notes": ["先创建测试控制器，再按消息 ID 调用注入入口。"],
+                "notes": ["先创建测试控制器，再按 MessageHandle 调用注入入口。"],
                 "usage_examples": [
                     "pending := controller.Pending()\n"
                     "chosen := pending[0]\n"
@@ -112,7 +123,7 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
 
     assert "快速接口矩阵" in content
     assert "消息控制调用顺序" in content
-    assert "不要重新猜测切片位置" in content
+    assert "将同一 Handle 交给 Drop 或 Inject" in content
     assert "Node.Status" in content
     assert "InjectForTest" in content
     assert "ClearPendingForTest" in content

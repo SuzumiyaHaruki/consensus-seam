@@ -3,211 +3,239 @@ version: 1
 capabilities:
   message_capture:
     description: >
-      On every claimed message-control path, controlled protocol output is
-      retained in a test-visible cache before delivery. Delivery resumes only
-      through a later test action. The target may have one or many paths; Agent 1
-      discovers them from the Go source instead of assuming an architecture.
+      In controlled mode, every in-boundary logical cross-node protocol message
+      is retained before delivery in a test-visible MessageController. Production
+      behavior is unchanged when no controller is configured.
     testing_contract:
+      fixed_surface: >
+        Provide MessageHandle, MessageKind, PendingMessage, MessageController,
+        NewMessageController(...), Pending() []PendingMessage,
+        Drop(handle MessageHandle) error, and Clear(). MessageHandle is a struct
+        backed by an unexported uint64 identity, stable while pending, and invalid
+        after Drop, Clear, or successful Inject.
+      pending_message: >
+        PendingMessage contains, in this order, Handle MessageHandle, Source using
+        the target's concrete node-ID type, Target using that type, Kind
+        MessageKind, and Message using a target-native typed carrier. Extra
+        exported fields are allowed only when typed, meaningful, and documented;
+        do not add Metadata any.
+      target_specific_types: >
+        NativeNodeID and TargetMessage describe type slots, not literal Go names.
+        Use a concrete exported target type. For Message, prefer one native common
+        message struct, then an existing common interface, then a generated typed
+        variant wrapper. Do not evade typing with bare any or byte-only public data.
       controlled_cache: >
-        The cache retains message instances until the test explicitly takes,
-        drops, clears, or injects them. A one-shot result, observable channel,
-        post-delivery log, or caller-created collection is only a primitive. In
-        controlled mode the capture point must own continuation; a second
-        consumer racing the protocol consumer is not reliable capture.
-      operations: >
-        Test code can enumerate target-native message content and order, take one
-        selected instance and obtain its message and routing information, drop one
-        selected instance, and clear the cache. Direct mutation of an exported
-        collection or a bulk all-matches operation does not replace these
-        exact-instance operations. Method names are target-defined.
-      instance_reference: >
-        A reference must either still identify the observed cache instance or be
-        rejected as stale; it must never silently retarget another instance.
-        Records, handles, pointers, tokens, or mutation-safe indexes are allowed.
-        Permanent numeric message IDs are not required.
+        The controller owns continuation: messages cannot bypass the cache or race
+        another protocol consumer. Pending preserves controller acceptance order;
+        Drop and Inject do not reorder other entries. The cache is thread-safe and
+        never silently evicts or loses entries.
+      scope: >
+        Control logical cross-node protocol requests, responses, and one-way
+        messages inside system_boundary. Exclude local ticks and timers, local
+        storage or WAL work, client workload, and out-of-boundary networking.
+        Expand broadcast into one pending instance per concrete target.
+      request_response: >
+        Cache request and response as separate instances. A response has reversed
+        Source and Target and a new MessageHandle. Wrap synchronous response
+        continuations or channels when necessary so the response also waits for a
+        later Inject; do not orphan the original caller.
+      copy_safety: >
+        Copy at both producer-to-controller and controller-to-Pending boundaries.
+        Pending returns fresh deep snapshots, while Inject uses the controller's
+        private copy. Nested slices, maps, pointers, interfaces, and streams need
+        real isolation. Independently replayable stream storage may use memory,
+        temporary files, or target storage and must be released when the entry leaves.
+      v0_exclusions: >
+        The first version does not mutate, redirect, duplicate, or fabricate
+        messages. Message selection, scheduling, retries, and assertions remain
+        tester policy.
       path_pairing: >
-        Message capture and injection use the same end-to-end path names. Each
-        path spans protocol output, exclusive cache control, selected-instance
-        operation, normal input, and completion. Do not split consecutive sender
-        and receiver boundaries of one route. Different message families or
-        handlers remain one path when transport, cache, ingress, ownership, and
-        completion are shared; evidence from one route cannot prove another.
-      path_coverage: >
-        Implement every discovered in-scope path that can be completed without
-        changing protocol semantics. One existing harness or the easiest path
-        does not cover another public path. A missing cache or wrapper on a public
-        path is the work to implement, not by itself a reason to leave it uncovered.
-      snapshot_safety: >
-        Returned snapshots must not let callers accidentally mutate cached,
-        protocol, or controller state through shared mutable data. In Go, a
-        by-value struct copy is not sufficient evidence when nested slices, maps,
-        pointers, interfaces, channels, futures, or consumable streams remain.
-        A documented non-mutation convention does not make a live alias safe.
+        Capture and injection use the same end-to-end path names. Discover paths
+        from source; do not assume a fixed architecture or path count. Every
+        relevant public route that can be completed without changing protocol
+        semantics must receive the same complete controller behavior.
 
   message_injection:
     description: >
-      Test code can deliver a concrete instance selected from the message-capture
-      cache through that path's normal protocol input boundary. The message and
-      destination are preserved, and cache effects are explicit.
-    accepted_v0_forms:
-      - separated_take_and_input
-      - combined_single_call
+      Inject(handle MessageHandle) delivers one selected MessageController entry
+      through its own normal target input boundary and updates that same cache.
     testing_contract:
-      same_path: >
-        Injection operates on the same cache instance and the same declared
-        message-control path as capture. A standalone input function or capture
-        from a different path is only a primitive, not complete injection.
-      separated_form: >
-        The cache Take operation may remove and return the selected message plus
-        enough routing information for a test that already owns the real target
-        objects to call the documented normal input entrypoint. Later retry,
-        requeue, duplication, or loss is tester policy.
-      combined_form: >
-        A combined single-call operation may locate the cached instance, bind or
-        validate its real target, invoke normal input, and update the cache. One
-        call does not imply transactional atomicity.
+      fixed_surface: >
+        MessageController provides Inject(handle MessageHandle) error. Provide
+        ErrMessageNotPending, ErrTargetUnavailable, and ErrMessageNotAccepted so
+        callers can classify errors with errors.Is.
+      normal_ingress: >
+        Resolve or validate the real captured target and use the normal protocol
+        ingress for that message direction. Identifier arithmetic or naming alone
+        is not target binding. A request must reach its request ingress; fabricating
+        or completing a response is not request injection.
+      completion: >
+        Inject succeeds when the normal input boundary confirms acceptance. It
+        does not wait for dequeue, state transition, response, commit, or quiescence.
+        Queue or channel acceptance is sufficient for an asynchronous target.
       cache_effects: >
-        State what successful delivery, synchronous failure, and unconfirmed
-        asynchronous delivery do to the selected cache entry. Different effects
-        are allowed when they are truthful and explicit.
-      completion_mechanism: >
-        Request-response or future-based paths preserve and document their
-        original completion mechanism. Capture, removal, timeout, or injection
-        must not silently orphan the sender, response channel, or future.
-      message_direction: >
-        The selected cached instance enters the normal input boundary for its
-        own direction. Completing or fabricating a response does not inject a
-        cached request; a response is injection only when that response itself
-        was the selected cached instance.
-      tester_policy: >
-        The interface supplies cache and ingress mechanics. The test chooses the
-        message, schedule, retry behavior, duplication, and assertions.
+        Invalid handle, unavailable target, or explicit non-acceptance returns an
+        error and preserves the entry. Confirmed acceptance removes it and
+        invalidates the handle. Later protocol failure does not restore it. If the
+        target cannot distinguish acceptance from timeout, report that limitation
+        and never restore in a way that may duplicate delivery.
+      same_path: >
+        Capture and injection operate on the same controller-owned instance and
+        declared end-to-end path. A standalone Step, receive method, or another
+        path's cache is only an underlying primitive.
 
   time_control:
     description: >
-      Test code can deterministically advance time observed by the protocol.
-      It must not manufacture election, timeout, or other protocol outcomes.
-    accepted_v0_forms:
-      - explicit_tick
-      - injectable_clock
+      A system-level TimeController manually advances protocol time while keeping
+      target timeout paths and production defaults intact.
     testing_contract:
-      protocol_relevance: >
-        Count time that can affect protocol state transitions, message emission,
-        or persistence. Caller-side API deadlines, metrics, logging, and purely
-        informational timestamps are not protocol-time paths unless they feed
-        back into protocol behavior.
-      direct_use_or_thin_coordination: >
-        Reuse a directly testable Tick or Clock when sufficient. Add coordination
-        only when existing time paths cannot be used deterministically as exposed.
-        A claimed path must not silently drop, coalesce, or indefinitely defer a
-        requested advance.
-      patchability: >
-        The absence of Tick, dispersed wall-clock call sites, or edits across
-        several files is not automatically invasive. Classify PATCHABLE when a
-        clock/timer dependency can cover the protocol-relevant path while keeping
-        production defaults, timer ordering, and protocol transition conditions.
-        Use INVASIVE only when control requires redesigning scheduling, event
-        ordering, or protocol semantics.
-      input_domain: >
-        New values preserve the target's legal domain or reject invalid values.
+      fixed_surface: >
+        Provide TimeController, NewTimeController(...), and
+        Advance(steps uint64) error. Constructor parameters use concrete target
+        types and wire all controlled nodes or components.
+      manual_progress: >
+        In controlled mode protocol time does not progress without Advance.
+        Pending, Inject, Drop, Clear, observation, and external input never advance
+        time implicitly.
+      step_semantics: >
+        One step advances every running node by one target-defined unit.
+        Advance(n) is equivalent to n calls of Advance(1); do not skip intermediate
+        timers. Submit each due event through the target's normal timeout path.
+      implementation_forms: >
+        A target may map each step to a native logical Tick or to one increment of
+        a shared virtual clock. Missing Tick or edits across several files are not
+        automatically invasive when clock or timer injection preserves ordering,
+        transition conditions, and production behavior.
+      completion: >
+        Return after time has advanced and due events have been submitted, not
+        after their processing, resulting messages, state transition, or commit.
+        Real Sleep without preventing autonomous time progress is incomplete.
+      v0_scope: >
+        The first version does not provide per-node time drift or separate node
+        advancement. Paused, stopped, and crashed nodes do not receive steps.
 
   randomness_control:
     description: >
-      With the same initial state, control parameters, and test schedule,
-      protocol-relevant random decisions reproduce the same sequence and the test
-      can learn each selected target-native value. Values may change at every
-      decision or reset; reproducibility does not require a constant value.
+      A deterministic pseudorandom RandomController makes hidden, non-cryptographic
+      protocol choices reproducible and observable without making them constant.
     testing_contract:
-      protocol_relevance: >
-        Count random choices that affect protocol state, message behavior,
-        persistence, or scheduling decisions. Setup identifiers, addresses,
-        logging values, and other non-protocol randomness are not capability
-        paths.
-      preserve_behavior: >
-        Reuse existing configuration or expose decisions through an explicit
-        choice, seed, injected source, hook, or test constructor. Do not replace
-        the algorithm, and keep the production default unchanged.
-      choice_visibility: >
-        The test can obtain the value selected for each protocol-relevant random
-        decision, either because it supplied the value or because the target
-        exposes or records the draw before the test must schedule dependent work.
-      scope_and_domain: >
-        Document whether control is per node, instance, or shared, and preserve or
-        explicitly validate the target's legal value domain.
-      reproducible_assignment: >
-        For the claimed scope, the same initial state, control parameters, and
-        schedule make each instance receive the same sequence of choices. A shared
-        seeded source is acceptable when that assignment is deterministic; it is
-        incomplete only when the same declared schedule can still assign draws to
-        different instances or decisions.
+      fixed_surface: >
+        Provide RandomController, RandomChoice, NewRandomController(seed int64,
+        ...), and Choices() []RandomChoice. RandomChoice contains a stable semantic
+        Name and a concrete target-typed Value; TargetRandomValue is a type slot,
+        not a literal name.
+      scope: >
+        Give each controlled node or component its own controller. Control hidden
+        non-cryptographic choices that affect protocol state or test timing.
+        Exclude cryptography, peripheral identifiers, test-data generation, and
+        choices already fully visible through another controlled interface and
+        relevant only to peripheral scheduling. Use NOT_APPLICABLE when none exist.
+      reproducibility: >
+        The same seed and random-call order produce the same sequence. Repeated
+        decisions or resets draw the next value rather than reusing one constant.
+        Keep the target's legal domain and production default behavior.
+      visibility: >
+        Choices returns a deep-copied ordered history of final semantic values such
+        as selected durations or indexes, not uninterpretable raw random bits.
+        Random selection is separate from the time at which its event fires.
+      v0_scope: >
+        The first version does not require direct per-choice override or scripted
+        trace replay; the seed controls generation and Choices records results.
 
   lifecycle_control:
     description: >
-      Test code can crash a selected logical node and restart it through the
-      target's normal recovery path. Crash stops protocol activity, discards the
-      volatile runtime instance, and retains only state the target had already
-      made persistent. Restart reconstructs a fresh runtime from that state.
+      A LifecycleController distinguishes temporary pause, normal stop, abrupt
+      crash, and recovery through the target's own lifecycle and persistence rules.
     obligations:
-      stop_boundary: Identify how protocol activity stops and the volatile runtime is discarded.
-      restart_or_recovery_boundary: Identify the normal recovery path that constructs a fresh runtime from retained state.
+      pause_resume_boundary: Identify whether one runtime can pause and resume without losing volatile state.
+      normal_stop_boundary: Identify normal shutdown and the state available for a later restart.
+      crash_boundary: Identify abrupt loss of the runtime without an extra protocol-state flush.
+      restart_or_recovery_boundary: Identify normal recovery and construction of a new runtime where required.
       state_ownership_defined: Record only state ownership defined by the target, or use NOT_APPLICABLE.
       persistent_volatile_semantics_defined: Record only persistence semantics defined by the target, or use NOT_APPLICABLE.
     testing_contract:
-      crash_restart_cycle: >
-        Both crash and restart are required, but they may be a directly usable
-        composition of existing target operations. A dedicated convenience wrapper is not required.
-      state_boundary: >
-        Preserve target-defined durable state exactly as of the crash point and
-        discard volatile protocol state. Pause/resume of the same in-memory object
-        is useful but is not crash/restart. Do not invent persistence semantics.
-      message_and_ordering_boundary: >
-        In-flight messages already owned by the test cache remain under test
-        control. Preserve any target-defined persistence-before-send ordering; the
-        seam must not make output deliverable earlier than the original path.
-      recovery_scope: >
-        Restart only restores the node through its normal recovery entrypoint.
-        Catch-up after restart is protocol behavior for the test to drive and
-        observe, not behavior implemented by the seam.
-      honest_semantics: >
-        Do not call pause, graceful stop, network isolation, message loss, or a
-        partition a crash while the old volatile runtime remains available. Do
-        not claim durable recovery when the target defines no persistence boundary.
+      fixed_surface: >
+        Provide LifecycleController, NewLifecycleController(...), and Pause(node),
+        Resume(node), Stop(node), Crash(node), Restart(node), each returning error.
+        Use the target's concrete node-ID type. Provide ErrLifecycleUnsupported,
+        classifiable with errors.Is, for an operation that cannot be implemented
+        without core semantic changes.
+      pause_resume: >
+        Pause retains the same runtime and volatile state but prevents message
+        handling, node time progress, and protocol output. Resume continues that
+        instance. Network isolation alone is not Pause.
+      stop: >
+        Stop uses normal shutdown and permits target-defined cleanup and persistence.
+        Restart after Stop uses the target's normal post-stop state and may create
+        a fresh runtime when required by the target.
+      crash: >
+        Crash stops activity without an extra protocol-state flush, discards the
+        runtime and volatile state, and retains only state already durable under
+        target semantics. Pause, graceful stop, isolation, and whole-memory
+        preservation are not Crash.
+      restart: >
+        Record whether the node was stopped or crashed. Restart with the same
+        identity and configuration through normal recovery: post-stop state after
+        Stop, and pre-crash durable state with a fresh runtime after Crash. The seam
+        does not implement protocol catch-up.
+      controller_interaction: >
+        Messages already pending in MessageController survive lifecycle changes.
+        Inject to an unavailable node fails and preserves the entry. Internal
+        unprocessed queues are volatile on Crash. Paused, stopped, and crashed
+        nodes do not receive TimeController steps.
+      change_scope: >
+        Attempt all five operations. Label each implementation facade_only when it
+        only wraps existing public behavior, core_hook when a narrow no-op-by-default
+        seam touches core files without changing protocol semantics, or
+        core_semantics_required when it would alter protocol, persistence, state
+        transitions, or ordering. Core hooks are allowed and must be disclosed;
+        core_semantics_required operations return ErrLifecycleUnsupported.
 
   observation:
     description: >
-      Expose the minimum target-native node or global state needed by later tests;
-      v0.1 does not require a universal state schema.
+      Discover and reuse safe target-native state views; add one narrow typed
+      snapshot accessor only when existing public views are insufficient.
     testing_contract:
-      minimum_complete_interface: >
-        Each runtime path needs one complete snapshot-safe interface for the
-        minimum state claimed. Do not add every related accessor or caller-owned
-        store to the positive claim; weaker optional primitives belong in
-        limitations.
-      direct_use_or_accessor: >
-        Reuse an existing status interface when sufficient. Otherwise a read-only
-        accessor may aggregate existing state without creating protocol state.
-      snapshot_safety: >
-        Observation results must not expose mutable aliases into internal state.
-        A Go struct copied by value still needs inspection of nested reference and
-        stream fields before it can be called a safe snapshot. Documentation that
-        tells callers not to mutate an aliased result is not snapshot isolation.
+      existing_surface: >
+        Prefer existing Status, State, or typed getters. For each usable interface
+        document its scope, symbol, result type, useful contents, snapshot safety,
+        consistency, completion meaning, and a minimal example. Do not require a
+        universal controller or state schema.
+      generated_surface: >
+        If a low-intrusion accessor is needed, prefer Observe() TargetState, where
+        TargetState is a concrete target-specific type slot rather than a literal
+        generated placeholder.
+      safety: >
+        Observation is thread-safe, side-effect-free, does not advance time, and
+        returns a deep snapshot without mutable aliases or indefinite waiting.
+        Prefer typed data over diagnostic strings.
+      consistency: >
+        A per-node snapshot is sufficient. Do not promise a simultaneous global freeze;
+        disclose temporal inconsistency across nodes or separately read getters.
 
   external_input:
     description: >
-      Discover existing application workload entrypoints such as proposals,
-      requests, transactions, or membership changes. v0.1 does not create them.
-    testing_contract:
-      workload_scope: >
-        Include application-originated proposals, reads, transactions, and
-        requests to replicate membership changes. Applying an already committed
-        protocol result is not new external workload ingress. Exclude diagnostics,
-        barriers, snapshots, restore, bootstrap, leadership transfer, lifecycle,
-        and other maintenance or administrative operations unless the target
-        explicitly defines them as application workload.
+      Discover and document existing ordinary application workload entrypoints;
+      this capability does not generate a controller or rename target APIs.
     obligations:
       workload_entrypoint: Identify application work originating outside the protocol.
       protocol_ingress_excluded: Exclude peer-to-peer protocol message ingress.
       timer_and_internal_events_excluded: Exclude Tick, timers, callbacks, and internal events.
+    testing_contract:
+      workload_scope: >
+        Include commands, replicated logs, transactions, ordinary reads, and
+        requests to replicate membership changes. Exclude protocol messages,
+        lifecycle, time, observation, applying committed results, bootstrap,
+        restore, diagnostics, and administration unless the target explicitly
+        defines them as normal workload.
+      documentation: >
+        For every public entrypoint list category, symbol, concrete input type,
+        preconditions, acceptance or completion semantics, result mechanism, a
+        minimal Go example, and the recommended in-process route when several exist.
+      transform_scope: >
+        An existing usable entrypoint is SUPPORTED and needs no target change.
+        If only internal entrypoints exist, report the limitation; do not invent a
+        business API merely to satisfy this discovery-only capability.
 
 prerequisites:
   target_language:

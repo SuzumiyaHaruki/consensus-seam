@@ -1,0 +1,73 @@
+{
+  "capability_checks": [
+    {
+      "capability": "message_capture",
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC1Capture$' -count=1",
+      "failure_code": "MESSAGE_CAPTURE_FAILED",
+      "name": "MC1 capture"
+    },
+    {
+      "capability": "message_capture",
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC2Suppression$' -count=1",
+      "failure_code": "MESSAGE_SUPPRESSION_FAILED",
+      "name": "MC2 suppression"
+    },
+    {
+      "capability": "message_injection",
+      "command": "go test ./_consensus_seam_hidden/acceptance -run '^TestMC3ExactInjection$' -count=1",
+      "failure_code": "MESSAGE_INJECTION_FAILED",
+      "name": "MC3 exact injection"
+    }
+  ],
+  "experiment": {
+    "kind": "blind_capability",
+    "oracle_visible_to_agents": false,
+    "research_claim": "Oracle-blind, contract-aware capability classification and low-intrusion message-control transformation"
+  },
+  "model_profile": "manifest",
+  "project": "mini-raft",
+  "resolved_models": {
+    "analyzer": {
+      "max_tokens": 32768,
+      "model": "deepseek-v4-flash",
+      "reasoning_effort": "max",
+      "thinking": "enabled"
+    },
+    "reviewer": {
+      "max_tokens": 32768,
+      "model": "deepseek-v4-pro",
+      "reasoning_effort": "high",
+      "thinking": "enabled"
+    },
+    "transformer": {
+      "max_tokens": 32768,
+      "model": "deepseek-v4-flash",
+      "reasoning_effort": "max",
+      "thinking": "enabled"
+    }
+  },
+  "source_revisions": {
+    "controller": {
+      "dirty": false,
+      "revision": "cd67695e05dd7fcae22ab5e8d3620bb166f0a4b9"
+    },
+    "target": {
+      "dirty": false,
+      "revision": "591faf0ce73a607c369b1b0f5f5e9d38222d3917"
+    }
+  },
+  "system_boundary": {
+    "description": "Analyze the Mini Raft protocol core. Real networking, durable storage, and application process behavior are outside the boundary.\n",
+    "kind": "protocol_library"
+  },
+  "transform_capabilities": [
+    "message_capture",
+    "message_injection"
+  ],
+  "verification_fixtures": [
+    {
+      "destination": "_consensus_seam_hidden/acceptance/message_control_test.go",
+      "source": "hidden-acceptance/message_control_test.go"
+    }
+  ]
+}

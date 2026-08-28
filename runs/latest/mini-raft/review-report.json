@@ -1,0 +1,210 @@
+{
+  "overall": "PASS",
+  "checks": [
+    {
+      "name": "exact_target_preserved",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 140,
+          "reason": "target := controller.lookupNode(captured.msg.To) selects the node solely from the message's recorded destination."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 144,
+          "reason": "target.Step(captured.msg) delivers the stored snapshot without rewriting From, To, or content."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Step",
+          "line": 135,
+          "reason": "Step returns ErrWrongTarget unless message.To == node.id, guaranteeing delivery to the exact recorded target."
+        }
+      ],
+      "reason": "Inject resolves the delivery node exclusively from the captured message's recorded To field and hands that unchanged snapshot to the target's Node.Step; Node.Step independently rejects any message whose To does not equal the node id, so the original target is preserved exactly."
+    },
+    {
+      "name": "original_send_suppressed",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Send",
+          "line": 83,
+          "reason": "Send captures the message and returns nil; controller.transport.Send is never invoked for a captured message."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.emit",
+          "line": 335,
+          "reason": "The sole outbound protocol call site is node.transport.Send; with the controller installed as the node's Transport, all outbound traffic reaches MessageController.Send and is suppressed."
+        },
+        {
+          "file": "transport.go",
+          "symbol": "MemoryTransport.Send",
+          "line": 33,
+          "reason": "The original synchronous, uncontrollable delivery path (target.Step at line 44) is bypassed because MessageController.Send never forwards to it."
+        }
+      ],
+      "reason": "MessageController.Send snapshots the message and returns nil without ever calling the wrapped Transport.Send, and node.emit is the only outbound protocol path; installing the controller as Config.Transport therefore stops every outbound message before the original uncontrollable MemoryTransport.Send path."
+    },
+    {
+      "name": "message_snapshot_stable",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Send",
+          "line": 95,
+          "reason": "msg: message.Clone() stores a stable deep copy at capture time."
+        },
+        {
+          "file": "message.go",
+          "symbol": "Message.Clone",
+          "line": 38,
+          "reason": "Clone deep-copies Entries and each Entry.Data, so the stored snapshot shares no mutable payload with the caller."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.ListPending",
+          "line": 104,
+          "reason": "Returns PendingMessage value copies whose fields are all value types, so metadata is stable across calls."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Step",
+          "line": 143,
+          "reason": "Step clones the incoming message before stepLocked, leaving the controller's stored snapshot unmodified during injection."
+        }
+      ],
+      "reason": "Send stores a deep clone of the message; ListPending returns value-copy metadata with no shared slices; and Node.Step re-clones the injected message before processing, so the pending snapshot is never mutated by later delivery or by caller-side changes."
+    },
+    {
+      "name": "failed_injection_preserves_pending",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 141,
+          "reason": "A nil target returns ErrUnknownNode without deleting the pending entry."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 144,
+          "reason": "Any error from target.Step is returned immediately, before the delete at line 149."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 148,
+          "reason": "delete(controller.pending, id) executes only after target.Step returns nil."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Step",
+          "line": 139,
+          "reason": "Step returns ErrPaused for a paused target, exercising the failed-delivery path that must retain the pending message."
+        }
+      ],
+      "reason": "The pending entry is deleted only after target.Step returns nil; an unknown target, ErrPaused, ErrWrongTarget, or any other Step error returns without deleting, keeping the message pending."
+    },
+    {
+      "name": "protocol_logic_unchanged",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "node.go",
+          "symbol": "Node.emit",
+          "line": null,
+          "reason": "Unchanged from the original; still the single outbound path through node.transport.Send."
+        },
+        {
+          "file": "transport.go",
+          "symbol": "MemoryTransport.Send",
+          "line": null,
+          "reason": "Unchanged from the original; the existing production delivery behavior is intact."
+        },
+        {
+          "file": "message.go",
+          "symbol": "Message.Clone",
+          "line": null,
+          "reason": "Unchanged from the original; the existing clone semantics used by the new controller were already present."
+        }
+      ],
+      "reason": "The diff adds only message_controller.go and message_controller_test.go; node.go, transport.go, message.go, and node_test.go are byte-identical to the original. No protocol state machine, emit path, or Transport semantics are modified."
+    },
+    {
+      "name": "existing_tests_unchanged",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "node_test.go",
+          "symbol": "TestElectionAndProposalReplication",
+          "line": null,
+          "reason": "Existing test file is unchanged and uses the original MemoryTransport path, unaffected by the new additive file."
+        },
+        {
+          "file": "message_controller_test.go",
+          "symbol": "newControllerCluster",
+          "line": null,
+          "reason": "New test file introduces only distinct names (newControllerCluster, TestMessageController*) with no collision against node_test.go helpers."
+        }
+      ],
+      "reason": "No existing production or test files were modified; the patch is purely additive, so existing tests compile and run against unchanged protocol code and no test-name or helper collisions exist."
+    },
+    {
+      "name": "testing_contract_conformance",
+      "result": "PASS",
+      "evidence": [
+        {
+          "file": "message_controller.go",
+          "symbol": "NewMessageController",
+          "line": 60,
+          "reason": "Constructor takes Transport and returns a controller that captures/suppresses immediately; there is no mode toggle that weakens post-construction behavior."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Send",
+          "line": 83,
+          "reason": "Immediate capture and suppression is implemented unconditionally in Send."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "PendingMessage",
+          "line": 16,
+          "reason": "ListPending metadata exposes ID, From, To, Type, and CaptureSequence as required."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.ClearPending",
+          "line": 117,
+          "reason": "ClearPending resets pending and order, removing all pending messages."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 129,
+          "reason": "Inject(messageID) delivers the selected pending message through the recorded target's Node.Step."
+        },
+        {
+          "file": "message_controller.go",
+          "symbol": "MessageController",
+          "line": 46,
+          "reason": "Comment declares the required message-ID scope as pending_store_instance."
+        }
+      ],
+      "reason": "NewMessageController(Transport) is active immediately with no enable/disable toggle, Send captures and suppresses on every outbound call, ListPending returns the required metadata fields, ClearPending empties the store, Inject delivers through Node.Step, and the message-ID scope is declared as pending_store_instance."
+    }
+  ],
+  "issues": [],
+  "risks": [
+    "MessageController.lookupNode reaches into MemoryTransport's unexported fields (memory.mu and memory.nodes) directly, creating tight coupling to that concrete transport; generic transports require explicit Register or a nodeProvider implementation.",
+    "Inject classifies any non-nil Step error as a failed delivery and retains the pending message, even though Step may have already applied the message before a downstream emit error; in a non-controller transport setup this could lead to a duplicate application on retry.",
+    "The controller's order slice retains consumed message IDs and IDs share one per-instance counter with CaptureSequence, causing monotonic growth; this is documented and does not affect correctness."
+  ]
+}

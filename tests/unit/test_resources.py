@@ -12,23 +12,24 @@ def test_source_resource_root_contains_target_independent_go_contract() -> None:
     reviewer = (root / "prompts" / "agent3.md").read_text(encoding="utf-8")
     contract = capabilities + analyzer + transformer + reviewer
 
-    assert spec["capabilities"]["message_injection"]["accepted_v0_forms"] == [
-        "separated_take_and_input",
-        "combined_single_call",
-    ]
     assert "path_pairing" in spec["capabilities"]["message_capture"]["testing_contract"]
 
     for required in (
-        "rejected as stale",
-        "Do not combine capture evidence from path A",
-        "`Take` belongs to the capture cache",
+        "NewMessageController",
+        "Inject(handle MessageHandle) error",
+        "ErrMessageNotPending",
+        "NewTimeController",
+        "NewRandomController",
+        "NewLifecycleController",
+        "ErrLifecycleUnsupported",
         "smallest focused Go tests",
         "message_cache_injection_coherence",
-        "convenience wrapper is not required",
+        "core_semantics_required",
     ):
         assert required in contract
 
     assert spec["prerequisites"]["target_language"]["supported"] == ["go"]
-    assert "atomic injection" not in contract.lower()
+    assert "separated_take_and_input" not in contract
+    assert "fixed api name" not in contract.lower()
     for target_specific_term in ("RawNode", "InteractionEnv", "Ready.Messages"):
         assert target_specific_term not in contract

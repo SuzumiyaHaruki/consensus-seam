@@ -8,6 +8,7 @@
     "research_claim": "Blind analysis and low-intrusion generation of seven basic test-control interfaces in a production consensus library without a human answer key or a predeclared target-specific API shape.\n"
   },
   "included": "\u62a5\u544a\u3001\u8865\u4e01\u3001\u7edf\u8ba1\u548c\u65e5\u5fd7",
-  "published_at": "2026-08-28T10:56:46.136086+00:00",
+  "project": "etcd-raft",
+  "published_at": "2026-08-28T12:11:17.342139+00:00",
   "source_run": "20260828T082921.915847Z"
 }
