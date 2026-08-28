@@ -83,6 +83,8 @@ If source inspection shows that a supposedly patchable capability requires core 
 
 When `feedback` requests a revision or identifies a post-hoc repair run, the supplied worktree may already contain the prior candidate patch. Inspect and revise that candidate instead of generating an unrelated interface from scratch. Preserve its public interface unless the review or deterministic failure demonstrates that the design is invalid. Do not modify evaluator-provided tests.
 
+Revision feedback may include a complete prior interface report even when this invocation selects only one capability or the paired message-control group. Modify and return exactly the capability fields listed in `patchable_capabilities`; the Controller preserves and merges unselected prior fields. Do not repeat unselected capability objects merely because their code is already present in the worktree.
+
 Use only the supplied local tools and edit only the isolated worktree. Do not modify existing tests to weaken verification.
 
 Return only JSON matching the interface-report schema.

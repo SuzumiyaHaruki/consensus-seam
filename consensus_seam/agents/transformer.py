@@ -62,16 +62,23 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
             "modification_policy": project.modification_policy.model_dump(mode="json"),
             "feedback": feedback,
         }
+        def validate_selected(result: InterfaceReport) -> None:
+            # 把精确能力集合校验放进 StructuredAgent 的重试边界。修订轮中
+            # worktree 和 feedback 会包含完整旧候选，模型可能只是在 JSON
+            # 中重复描述未选择能力；这种格式错误应获得一次仅修正 JSON 的
+            # 机会，而不是在所有工具工作完成后直接终止整个实验。
+            reported = set(result.capabilities())
+            if reported != patchable:
+                raise ValueError(
+                    "interface report must cover exactly the selected PATCHABLE "
+                    f"capabilities; expected {sorted(patchable)}, "
+                    f"got {sorted(reported)}"
+                )
+
         result = self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
             tools=transformer_tools(worktree, self.backend),
+            post_validate=validate_selected,
             invocation_id=invocation_id,
         )
-        # 漏报会让 patch 无法审计，多报意味着 Agent 越权修改了未选择能力。
-        reported = set(result.capabilities())
-        if reported != patchable:
-            raise ValueError(
-                "interface report must cover exactly the selected PATCHABLE capabilities; "
-                f"expected {sorted(patchable)}, got {sorted(reported)}"
-            )
         return result

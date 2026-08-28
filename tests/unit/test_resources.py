@@ -14,6 +14,7 @@ def test_source_resource_root_contains_prompts_and_specs() -> None:
     assert "Selection and reference are separate" in capabilities
     assert "bare mutable-list position is not a stable reference" in capabilities
     assert "caller-supplied target object matches" in capabilities
+    assert "lifecycle facade or convenience command is not required" in capabilities
     assert "NewMessageController(Transport)" not in capabilities
     analyzer_prompt = (root / "prompts" / "agent1.md").read_text(encoding="utf-8")
     transformer_prompt = (root / "prompts" / "agent2.md").read_text(encoding="utf-8")

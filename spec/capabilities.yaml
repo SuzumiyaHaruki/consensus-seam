@@ -176,7 +176,13 @@ capabilities:
         The v0.1 minimum is unavailable-and-restore control with its mechanism
         stated honestly. Test support may compose existing pause, stop, create,
         resume, or restart APIs, but it must not equate pause with a production
-        crash or invent state ownership and persistence semantics.
+        crash or invent state ownership and persistence semantics. A dedicated
+        lifecycle facade or convenience command is not required for every harness:
+        caller-controlled suspension and resumption of scheduling, or public
+        reconstruction from target-owned state, satisfies the minimum when it is
+        directly usable and documented. Classify PATCHABLE only when a discovered
+        path cannot actually be made unavailable and available again, not merely
+        because the composition is manual.
 
   observation:
     description: >

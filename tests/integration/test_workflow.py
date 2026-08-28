@@ -246,6 +246,93 @@ class SplitCapabilityRuntime:
         return json.dumps(review_report())
 
 
+class SelectiveReviewerRevisionRuntime:
+    """Reviewer 只指出消息问题时，下一轮不应重跑其他有效能力。"""
+
+    def __init__(self) -> None:
+        self.transform_calls: list[list[str]] = []
+        self.review_round = 0
+
+    def run(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: dict[str, Any] | None = None,
+        *,
+        agent: str,
+        model: AgentModelConfig,
+        tools: ToolExecutor | None = None,
+        invocation_id: str | None = None,
+    ) -> str:
+        if agent == "analyzer":
+            report = capability_report()
+            capture = report["capabilities"]["message_capture"]
+            capture.update(
+                {
+                    "status": "PATCHABLE",
+                    "gap": "capture facade missing",
+                    "existing_test_interface_complete": False,
+                    "test_support_reason": "output is not retained",
+                    "suggested_changes": ["add a cache facade"],
+                }
+            )
+            report["capabilities"]["randomness_control"] = {
+                "status": "PATCHABLE",
+                "evidence": [
+                    {
+                        "symbol": "RandomSource",
+                        "reason": "random source cannot be fixed by tests",
+                    }
+                ],
+                "gap": "no deterministic random source",
+                "existing_test_interface_complete": False,
+                "test_support_reason": "randomness needs a configuration hook",
+                "suggested_changes": ["add a validated test configuration"],
+            }
+            return json.dumps(report)
+        if agent == "transformer":
+            selected = json.loads(user_prompt)["patchable_capabilities"]
+            self.transform_calls.append(selected)
+            assert tools is not None
+            for capability in selected:
+                result = json.loads(
+                    tools.execute(
+                        "write_file",
+                        json.dumps(
+                            {
+                                "path": f"generated_{capability}.go",
+                                "content": (
+                                    "package mini\n\n"
+                                    f"// generated seam for {capability}\n"
+                                ),
+                            }
+                        ),
+                    )
+                )
+                assert result["ok"] is True
+            return json.dumps(
+                {
+                    capability: {
+                        "implemented": True,
+                        "implementation_approach": ["target-native seam"],
+                    }
+                    for capability in selected
+                }
+            )
+
+        self.review_round += 1
+        review = review_report()
+        if self.review_round == 1:
+            review["overall"] = "REVISE_AGENT2"
+            review["issues"] = [
+                {
+                    "capability": "message_capture",
+                    "reason": "capture snapshot is not isolated",
+                }
+            ]
+        return json.dumps(review)
+
+
 class ReviewerRevisionRuntime:
     """Reviewer 阻塞问题应在下一 fresh worktree 中修订既有候选。"""
 
@@ -603,6 +690,31 @@ def test_patch_groups_capture_and_injection_into_one_transform_call(
     )
     assert interface["message_capture"]["implemented"] is True
     assert interface["message_injection"]["implemented"] is True
+
+
+def test_reviewer_revision_only_reruns_implicated_capability_group(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
+    runtime = SelectiveReviewerRevisionRuntime()
+
+    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(
+        load_project(manifest)
+    )
+
+    assert result.outcome is WorkflowOutcome.PASS
+    assert runtime.transform_calls == [
+        ["message_capture", "message_injection"],
+        ["randomness_control"],
+        ["message_capture", "message_injection"],
+    ]
+    interface = json.loads(
+        (result.run_directory / "interface-report.json").read_text(encoding="utf-8")
+    )
+    assert interface["randomness_control"]["implemented"] is True
 
 
 def test_reviewer_revision_continues_from_prior_candidate_in_fresh_worktree(

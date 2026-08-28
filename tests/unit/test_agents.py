@@ -87,30 +87,43 @@ def test_analyzer_retries_target_name_mismatch(tmp_path: Path) -> None:
     assert "does not match project" in client.calls[1]["user_prompt"]
 
 
-def test_transformer_must_cover_exact_patchable_set(tmp_path: Path) -> None:
+def test_transformer_retries_overreported_capabilities_as_json_correction(
+    tmp_path: Path,
+) -> None:
     project = loaded_project(tmp_path)
     report = CapabilityAnalyzer(
         FakeLLMClient([json.dumps(capability_report())]),
         model=AgentModelConfig(model="fake-analyzer"),
         backend=GoBackend(),
     ).analyze(project)
-    transformer = LowIntrusionTransformer(
-        FakeLLMClient(
-            [
-                json.dumps(
-                    {
-                        "message_capture": {
-                            "implemented": True,
-                            "message_id_scope": "test_session",
-                            "controller_operations": "serialized",
-                            "capture_boundary": {"symbol": "Transport.Send"},
-                        }
+    client = FakeLLMClient(
+        [
+            json.dumps(
+                {
+                    "message_capture": {
+                        "implemented": True,
+                        "capture_boundary": {"symbol": "ProtocolOutput"},
+                    },
+                    "message_injection": {"implemented": True},
+                }
+            ),
+            json.dumps(
+                {
+                    "message_injection": {
+                        "implemented": True,
+                        "entrypoint": {"symbol": "InjectCached"},
                     }
-                )
-            ]
-        ),
+                }
+            ),
+        ]
+    )
+    transformer = LowIntrusionTransformer(
+        client,
         model=AgentModelConfig(model="fake-transformer"),
         backend=GoBackend(),
     )
-    with pytest.raises(ValueError, match="cover exactly"):
-        transformer.transform(project, report, tmp_path / "worktree")
+    result = transformer.transform(project, report, tmp_path / "worktree")
+
+    assert result.message_injection is not None
+    assert len(client.calls) == 2
+    assert "cover exactly" in client.calls[1]["user_prompt"]

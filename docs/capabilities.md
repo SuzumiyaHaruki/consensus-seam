@@ -74,6 +74,8 @@ v0.1 接受显式 Tick 或可注入 Clock，不增加直接制造选举或超时
 
 第一版允许 pause/resume、graceful stop/restart、从已有 Storage 重建或外部进程控制，但必须如实说明实际机制。Pause 可以模拟节点暂时不可用，不能被描述成完整生产 crash。
 
+对于由调用方直接驱动的同步对象，停止调度并在之后恢复调用也可以满足 availability-only 的最低要求；如果目标已经公开了重建所需的状态和构造入口，手工组合重建同样成立。第一版不要求每个测试环境都再增加专门的 pause/restart 命令，不能仅因缺少 convenience wrapper 就标为 `PATCHABLE`。
+
 只有目标明确提供持久状态所有权和恢复边界时，Agent 才能声明 crash/recovery fidelity；可用性模拟不涉及持久化时，相关义务应标为 `NOT_APPLICABLE`，不能自行决定哪些状态在崩溃后保留。
 
 ## 6. 状态观察

@@ -556,6 +556,8 @@ class ConsensusWorkflow:
             # clean HEAD 创建 worktree，但先重放上一版候选。这样保留已审查
             # 的接口设计，同时不继承原工作目录中的非 Git 残留状态。
             prior_candidate_patch: str | None = None
+            prior_interface_report: InterfaceReport | None = None
+            selected_capabilities = self._selected_patchable(project, report)
             for patch_round in range(1, limits.agent2_patch_rounds + 1):
                 # 每个 patch round 都从目标 HEAD 创建全新 worktree，失败候选
                 # 的残留文件不会进入下一轮。
@@ -570,14 +572,22 @@ class ConsensusWorkflow:
                 )
                 if prior_candidate_patch is not None:
                     worktree.apply_patch(prior_candidate_patch)
-                interface_report = self._transform_selected_capabilities(
+                revised_interface = self._transform_selected_capabilities(
                     project,
                     report,
                     worktree,
                     transformer,
-                    selected_capabilities=self._selected_patchable(project, report),
+                    selected_capabilities=selected_capabilities,
                     feedback=agent2_feedback,
                     invocation_prefix=f"transformer-a{analysis_round}-p{patch_round}",
+                )
+                interface_report = (
+                    revised_interface
+                    if prior_interface_report is None
+                    else self._merge_interface_reports(
+                        prior_interface_report,
+                        revised_interface,
+                    )
                 )
                 artifacts.write_model("interface-report.json", interface_report)
                 artifacts.write_usage(report, interface_report)
@@ -592,6 +602,7 @@ class ConsensusWorkflow:
                     # 合并回报告，再从 HEAD 处理剩余 PATCHABLE 能力。
                     report.apply_rediscovered(rediscovered)
                     prior_candidate_patch = None
+                    prior_interface_report = None
                     artifacts.write_model("capability-report.json", report)
                     artifacts.write_usage(report, interface_report)
                     artifacts.write_json(
@@ -618,6 +629,7 @@ class ConsensusWorkflow:
                             "worktree and modify only remaining PATCHABLE capabilities."
                         ),
                     }
+                    selected_capabilities = self._selected_patchable(project, report)
                     continue
 
                 protected_tests = worktree.modified_existing_go_tests()
@@ -633,6 +645,7 @@ class ConsensusWorkflow:
                         },
                     )
                     prior_candidate_patch = None
+                    prior_interface_report = None
                     agent2_feedback = {
                         "failure": "EXISTING_TEST_MODIFIED",
                         "files": protected_tests,
@@ -641,6 +654,7 @@ class ConsensusWorkflow:
                             "immutable; create new capability tests instead."
                         ),
                     }
+                    selected_capabilities = self._selected_patchable(project, report)
                     continue
 
                 label = f"a{analysis_round}-p{patch_round}"
@@ -652,6 +666,7 @@ class ConsensusWorkflow:
                 )
                 if not format_result.passed:
                     prior_candidate_patch = worktree.diff()
+                    prior_interface_report = interface_report
                     agent2_feedback = {
                         "failure": "FORMAT_FAILED",
                         "execution": format_result.model_dump(mode="json"),
@@ -667,6 +682,7 @@ class ConsensusWorkflow:
 
                 if build_result is None or not build_result.passed:
                     prior_candidate_patch = worktree.diff()
+                    prior_interface_report = interface_report
                     agent2_feedback = {
                         "failure": "BUILD_FAILED",
                         "execution": (
@@ -703,6 +719,11 @@ class ConsensusWorkflow:
                     break
                 if review.overall is ReviewOverall.REVISE_AGENT2:
                     # 实现问题在下一 fresh worktree 中基于当前候选修订。
+                    prior_interface_report = interface_report
+                    selected_capabilities = self._review_revision_capabilities(
+                        review,
+                        available=self._selected_patchable(project, report),
+                    )
                     agent2_feedback = {
                         "failure": "REVIEW_REVISE_AGENT2",
                         "review": review.model_dump(mode="json"),
@@ -758,6 +779,7 @@ class ConsensusWorkflow:
                     )
                 if verification.route is FailureRoute.AGENT2:
                     # 传回的是确定性命令、退出码和失败类型，而不是隐藏源码。
+                    prior_interface_report = interface_report
                     agent2_feedback = {
                         "failure": "DETERMINISTIC_VERIFICATION_FAILED",
                         "verification": verification.model_dump(mode="json"),
@@ -902,6 +924,28 @@ class ConsensusWorkflow:
         for name, capability in repaired.capabilities().items():
             setattr(merged, name, capability)
         return merged
+
+    @staticmethod
+    def _review_revision_capabilities(
+        review: ReviewReport,
+        *,
+        available: set[str],
+    ) -> set[str]:
+        """只重跑 Reviewer 阻塞问题涉及的能力，并保持消息控制成组。"""
+
+        selected = {
+            issue.capability
+            for issue in review.issues
+            if issue.capability is not None and issue.capability in available
+        }
+        if not selected:
+            # Reviewer 可能只能定位到文件而不能可靠归属能力；此时保守地
+            # 修订全部可用能力，不能擅自忽略阻塞问题。
+            return set(available)
+        message_control = {"message_capture", "message_injection"}
+        if selected & message_control:
+            selected |= available & message_control
+        return selected
 
     def _transform_selected_capabilities(
         self,
