@@ -9,6 +9,12 @@ Check that the candidate reuses target primitives, stays inside the low-intrusio
 boundary, preserves protocol behavior and existing tests, exposes callable APIs
 for the declared consumer, and accounts for every path Agent 1 discovered.
 Compilation and Transformer claims alone do not justify `PASS`.
+For an external declared consumer, reject a primary interface that exists only
+through same-package access, `_test.go` symbols, or the project's private test
+runner. A project-owned test package is acceptable as the main surface only when
+it is documented for external use or is demonstrably the lowest-intrusion
+complete path; convenience alone is insufficient. Do not demand core protocol
+changes when a separate public test-facing layer is sufficient.
 
 For message control, use Agent 1's shared path partition. For every path claimed
 in `covered_paths`, verify its own output boundary, cache, instance operation,
@@ -22,6 +28,9 @@ primitives, and excluded mechanisms belong in evidence or limitations; return
 `REVISE_AGENT1` when they are presented as execution paths. Message families or
 handlers sharing the same transport, cache, ingress, ownership, and completion
 model remain one path.
+Reject route partitions that merge different public object ownership or
+completion models merely because they share internal state, or that create a new
+route solely for another observation accessor or store.
 
 For each covered message path verify that:
 
@@ -33,14 +42,20 @@ For each covered message path verify that:
 - Take returns and removes one instance, Drop removes one, and Clear empties it;
 - a reference still identifies the observed instance or is rejected as stale,
   never silently retargeting after mutation;
+- direct mutation of an exported collection or a bulk all-matches operation is
+  not substituted for exact-instance enumeration, Take, and Drop;
 - returned snapshots do not expose mutable aliases into internal state; a Go
   outer-struct copy is insufficient without checking nested reference and stream
-  fields;
+  fields, and a documented non-mutation convention does not make a live alias a
+  safe snapshot;
 - capture and injection operate on the same cache instance and declared path;
 - injection uses either separated Take-plus-input or a combined single call and
   reaches the documented normal protocol input without changing the message;
 - the declared consumer really owns or can obtain the target mapping for the
   separated form, or the combined facade binds or validates the real target;
+- identifier arithmetic or naming is not accepted as target binding unless the
+  target owns and validates that relationship, with explicit unresolved-target
+  behavior;
 - success, synchronous failure, and unconfirmed asynchronous delivery have the
   cache effects stated in the interface report.
 - request-response or future-based paths preserve their original completion
@@ -66,6 +81,9 @@ IDs, and other non-protocol time/randomness unless they affect protocol behavior
 Do not call time control invasive merely because Tick is absent or clock
 injection spans several files; judge whether production defaults, timer ordering,
 and protocol conditions can remain unchanged without redesigning scheduling.
+Do not accept a time path as deterministic when requested advances can be
+silently dropped, coalesced, or indefinitely deferred; another exact path does
+not repair that claim.
 
 Reject a `SUPPORTED` classification when a stated limitation contradicts a
 path, entrypoint, snapshot-safety claim, or `existing_test_interface_complete`.
@@ -80,6 +98,8 @@ declared unused variables. Assumed variables must be named with Go types in a
 leading `// Requires:` comment so the snippet is type-check-ready.
 `public_entrypoints` must contain only operations callable by the declared
 consumer. Internal stores and hooks are not public API.
+For external input, count submission of application work, not application of an
+already committed protocol result such as a membership update.
 
 For Analyzer claims, existing `entrypoints` must resolve to the unmodified source;
 proposed APIs belong only in `suggested_changes`. Applicable PATCHABLE, PARTIAL,

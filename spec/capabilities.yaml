@@ -17,7 +17,9 @@ capabilities:
       operations: >
         Test code can enumerate target-native message content and order, take one
         selected instance and obtain its message and routing information, drop one
-        selected instance, and clear the cache. Method names are target-defined.
+        selected instance, and clear the cache. Direct mutation of an exported
+        collection or a bulk all-matches operation does not replace these
+        exact-instance operations. Method names are target-defined.
       instance_reference: >
         A reference must either still identify the observed cache instance or be
         rejected as stale; it must never silently retarget another instance.
@@ -35,6 +37,7 @@ capabilities:
         protocol, or controller state through shared mutable data. In Go, a
         by-value struct copy is not sufficient evidence when nested slices, maps,
         pointers, interfaces, channels, futures, or consumable streams remain.
+        A documented non-mutation convention does not make a live alias safe.
 
   message_injection:
     description: >
@@ -91,6 +94,8 @@ capabilities:
       direct_use_or_thin_coordination: >
         Reuse a directly testable Tick or Clock when sufficient. Add coordination
         only when existing time paths cannot be used deterministically as exposed.
+        A claimed path must not silently drop, coalesce, or indefinitely defer a
+        requested advance.
       patchability: >
         The absence of Tick, dispersed wall-clock call sites, or edits across
         several files is not automatically invasive. Classify PATCHABLE when a
@@ -162,7 +167,8 @@ capabilities:
       snapshot_safety: >
         Observation results must not expose mutable aliases into internal state.
         A Go struct copied by value still needs inspection of nested reference and
-        stream fields before it can be called a safe snapshot.
+        stream fields before it can be called a safe snapshot. Documentation that
+        tells callers not to mutate an aliased result is not snapshot isolation.
 
   external_input:
     description: >
@@ -171,10 +177,11 @@ capabilities:
     testing_contract:
       workload_scope: >
         Include application-originated proposals, reads, transactions, and
-        replicated membership changes. Exclude diagnostics, barriers, snapshots,
-        restore, bootstrap, leadership transfer, lifecycle, and other maintenance
-        or administrative operations unless the target explicitly defines them as
-        application workload.
+        requests to replicate membership changes. Applying an already committed
+        protocol result is not new external workload ingress. Exclude diagnostics,
+        barriers, snapshots, restore, bootstrap, leadership transfer, lifecycle,
+        and other maintenance or administrative operations unless the target
+        explicitly defines them as application workload.
     obligations:
       workload_entrypoint: Identify application work originating outside the protocol.
       protocol_ingress_excluded: Exclude peer-to-peer protocol message ingress.

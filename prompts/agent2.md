@@ -5,10 +5,20 @@ Write the structured interface report in English. Keep JSON keys, enum values,
 code identifiers, paths, symbols, and explanatory prose in English.
 
 Act only on capabilities classified `PATCHABLE` and selected by
-`transform_capabilities`. Prefer, in order: reuse an existing test interface;
-extend an existing test-support package; add a thin wrapper, hook, config option,
+`transform_capabilities`. Prefer, in order: reuse an interface already callable
+by the declared external test consumer; add or extend a small test-facing layer
+around the target's public protocol path; add a thin wrapper, hook, config option,
 or read-only accessor; inject a dependency without changing protocol semantics.
+Project-owned self-test packages are useful implementation evidence and
+verification sites, but do not make one the primary or sole delivery surface
+merely because it is convenient to edit. Extend one as the main interface only
+when it is a documented external test API or is the lowest-intrusion complete
+solution. Do not move test mechanics into protocol core just to avoid it.
 Agent 1 suggestions are options, not a prescribed implementation.
+
+Generate the requested capability mechanics, not a testing framework. Do not add
+a scenario language, scheduling or mutation policy, fault model, assertions, or
+correctness oracle; those remain the test consumer's responsibility.
 
 Do not change protocol conditions, messages, persistence, recovery, or business
 input. Fit the target's existing Go API and setup; do not assume a transport,
@@ -19,6 +29,9 @@ paths in `covered_paths` and every remaining path with a concrete reason in
 `uncovered_paths` or `notes`. State whether entrypoints are externally exported,
 same-package test support, or internal harness APIs. Never force coverage by
 changing protocol semantics.
+For an external declared consumer, `public_entrypoints` must work in an ordinary
+non-`_test.go` import without same-package access or the target project's private
+test runner.
 
 When message capture or injection is selected, preserve Agent 1's shared message
 path names and implement each route end to end. Do not split consecutive outbound
@@ -36,6 +49,8 @@ For capture, build or extend a target-native test cache that:
 `Take` belongs to the capture cache: it removes and returns the selected message
 and available routing information. A one-shot batch, channel, post-delivery log,
 or caller-created collection is not a complete cache.
+Do not substitute direct mutation of an exported collection or a bulk operation
+over all matching values for exact-instance enumeration, Take, and Drop.
 
 An instance reference must either identify the observed instance or be rejected
 as stale; it must never silently retarget. Reuse target-native records, handles,
@@ -44,7 +59,7 @@ Avoid parallel cache state that existing public mutations can desynchronize.
 Returned snapshots must not expose mutable aliases into cached, protocol, or
 controller state. In Go, inspect nested slices, maps, pointers, interfaces,
 channels, futures, and consumable streams; copying the outer struct by value is
-not sufficient.
+not sufficient. A non-mutation convention does not make a live alias safe.
 
 Injection may use either form:
 
@@ -52,6 +67,10 @@ Injection may use either form:
    target mapping calls the documented normal protocol input operation; or
 2. combined single-call: the facade locates the cache instance, binds or
    validates its target, calls normal input, and updates the cache.
+
+Identifier arithmetic or naming is not target binding unless the target owns and
+validates that relationship. Unknown or unavailable targets need explicit,
+documented failure and cache behavior.
 
 Do not require both forms. A combined single call is not necessarily
 transactional. In either form preserve sender, receiver, and content, and state

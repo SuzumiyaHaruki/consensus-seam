@@ -15,6 +15,14 @@ All decisions are relative to the supplied `system_boundary`. Record relevant
 out-of-boundary network, storage, application, or deployment behavior as a
 limitation, but do not require the current target to modify it.
 
+Judge usability from the declared test consumer's scope. Distinguish ordinary
+public protocol APIs, documented public test-support APIs, same-package support,
+`_test.go`-only symbols, and project-owned internal harnesses. A package being
+technically importable does not by itself make it a supported external testing
+surface. Inspect internal test facilities for evidence and reusable patterns,
+but do not mark a capability `SUPPORTED` for an external consumer solely because
+the project's own tests can reach it.
+
 The human defines the boundary, not the target's internal paths. Discover every
 materially distinct public path in that boundary. A path is distinct when the
 test consumer uses a different public node API, protocol input/output boundary,
@@ -26,6 +34,14 @@ Multiple accessors on one runtime object are entrypoints, not paths, unless
 ownership, input/output boundaries, or completion semantics change. Different
 message methods, families, or handlers remain one path when they share the same
 transport, cache, ingress, ownership, and completion model.
+Do not let a project test facade hide a directly usable public route when its
+cache ownership, continuation, or completion model differs; conversely, do not
+duplicate a facade and its underlying primitive as paths when those properties
+are identical.
+Apply the runtime-route partition consistently across capabilities when it is
+applicable. Do not merge routes with different public object ownership or
+completion semantics merely because they share internal state, and do not create
+a route solely because observation comes from another accessor or store.
 
 Record only applicable end-to-end routes in `execution_paths`. Put internal
 branches, rejected states, adjacent primitives, and mechanisms excluded from the
@@ -62,6 +78,10 @@ not separate outbound and inbound halves. For every path identify:
   where that direction normally enters the protocol;
 - whether injection is separated Take-plus-input or a combined single call.
 
+Do not infer a real target object from identifier arithmetic or naming convention
+unless the target constructs, owns, and validates that relationship for the
+claimed path. Unresolved targets need explicit failure behavior.
+
 Do not combine capture evidence from path A with injection evidence from path B.
 One complete harness path does not cover another public path.
 
@@ -74,6 +94,10 @@ rejected as stale; it must never silently retarget another instance. Do not
 require permanent numeric IDs or a particular cache type. A proposed capture
 point must own continuation in controlled mode; a second consumer racing the
 protocol consumer is not a reliable suppression point.
+An exported mutable collection, direct slice splicing, or a bulk filter that
+handles every matching value does not by itself provide exact-instance
+enumeration and Take/Drop operations; do not credit work the consumer must
+hand-write as an existing interface.
 
 `Take` is a cache operation owned by message capture: it removes and returns the
 selected message and available routing information. Complete injection may be:
@@ -98,12 +122,18 @@ In Go, a struct copied by value is not proof of snapshot safety. Inspect nested
 slices, maps, pointers, interfaces, channels, futures, and consumable streams
 before claiming that observation or cached-message snapshots cannot mutate or
 consume internal state.
+A documented "do not mutate" rule or caller-ownership convention is not a safe
+snapshot when the result still aliases live mutable storage.
 
 The absence of Tick, dispersed wall-clock use, or edits across several files is
 not automatically invasive. Use `PATCHABLE` when protocol time can be routed
 through an injected clock/timer while preserving production defaults, timer
 ordering, and transition conditions. Use `INVASIVE` only when control requires
 redesigning scheduling, event ordering, or protocol semantics.
+For every claimed path, verify that a requested time advance is accepted and
+applied deterministically. A nonblocking or asynchronous surface that can drop,
+coalesce, or silently defer time events is not complete merely because another
+path has an exact Tick.
 
 Lifecycle control requires both making a logical node unavailable and making it
 participate again. Existing pause/resume,
@@ -139,6 +169,9 @@ proposals, reads, membership changes, and equivalent operations. Exclude peer
 protocol messages, Tick, timers, internal callbacks, diagnostics, barriers,
 snapshot/restore, bootstrap, leadership transfer, lifecycle, and maintenance
 operations unless the target explicitly defines them as application workload.
+Distinguish submitting a membership-change request from applying an already
+committed membership result; application of protocol output is not new external
+workload ingress.
 
 Before returning, confirm that paths are end-to-end and capability-applicable,
 entrypoints are consumer-callable, no `SUPPORTED` limitation contradicts the
