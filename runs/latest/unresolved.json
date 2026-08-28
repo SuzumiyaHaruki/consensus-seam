@@ -1,6 +1,6 @@
 {
   "time_control": {
-    "reason": "The protocol observes time exclusively through dispersed wall-clock calls: randomTimeout returns time.After(minVal+extra) (util.go:39), follower/candidate/leader loops use time.After/time.Now (raft.go:163, 217, 310, 677, 728, 749), replication uses time.After backoff and time.Now (replication.go:131, 213, 230, 343, 411), snapshot and log-store metric loops use time.After (snapshot.go:75, log.go:180), and saturation/metrics use time.Now (saturation.go:47). There is no explicit Tick method and no injectable Clock type anywhere in the package (no Clock symbol exists). Per the v0.1 rule, dispersed wall-clock use without explicit Tick or injectable Clock is INVASIVE: deterministic advancement cannot be provided without restructuring time usage throughout the main loops.",
+    "reason": "Wall-clock time is dispersed throughout the protocol: timers are created via time.After inside randomTimeout and the user APIs, and expiry/contact decisions use time.Now/time.Since directly. There is no explicit Tick and no injectable Clock; shrinking Config durations only accelerates real time. Deterministic advancement would require threading an injectable clock or tick through the main loop, replication, snapshotting, and API timeouts \u2014 an invasive change, not a low-intrusion patch.",
     "status": "INVASIVE"
   }
 }

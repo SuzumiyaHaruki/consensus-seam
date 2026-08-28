@@ -1,18 +1,18 @@
 [
   {
     "agent": "analyzer",
-    "api_calls": 33,
-    "api_wall_clock_seconds": 336.12741199199627,
-    "cache_hit_input_tokens": 1977984,
-    "cache_miss_input_tokens": 88194,
+    "api_calls": 28,
+    "api_wall_clock_seconds": 262.02745724800116,
+    "cache_hit_input_tokens": 1276160,
+    "cache_miss_input_tokens": 64355,
     "error_type": null,
-    "input_tokens": 2066178,
+    "input_tokens": 1340515,
     "invocation_id": "analyzer-a1-attempt1",
     "model": "deepseek-v4-flash",
-    "output_tokens": 35754,
+    "output_tokens": 27950,
     "status": "COMPLETED",
-    "tool_calls": 52,
-    "total_tokens": 2101932,
-    "wall_clock_seconds": 336.5044543139993
+    "tool_calls": 47,
+    "total_tokens": 1368465,
+    "wall_clock_seconds": 263.22436813700006
   }
 ]

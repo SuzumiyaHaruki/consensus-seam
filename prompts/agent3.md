@@ -16,7 +16,10 @@ and normal input boundary. Capture on path A and injection on path B cannot be
 combined to claim a complete path. Every other discovered path must appear in
 `uncovered_paths` with a concrete reason. Multiple accessors on the same runtime
 object are not separate paths unless ownership, boundaries, or completion
-semantics differ.
+semantics differ. Consecutive sender and receiver boundaries of one delivery
+route are not separate paths. Internal branches, rejected states, adjacent
+primitives, and excluded mechanisms belong in evidence or limitations; return
+`REVISE_AGENT1` when they are presented as execution paths.
 
 For each covered message path verify that:
 
@@ -56,12 +59,20 @@ choices for the claimed instance or scope, not only a shared sequence whose
 concurrent assignment can vary. Reject lifecycle changes that invent crash,
 persistence, or recovery semantics, treat network isolation as a stopped node,
 or add convenience wrappers despite directly composable unavailable and restore
-actions.
+actions. Exclude caller-side deadlines, metrics, informational timestamps, setup
+IDs, and other non-protocol time/randomness unless they affect protocol behavior.
+
+Reject a `SUPPORTED` classification when a stated limitation contradicts a
+path, entrypoint, snapshot-safety claim, or `existing_test_interface_complete`.
+An optional defective primitive may instead be excluded from the positive claim
+and recorded only as a limitation.
 
 Usage examples must be syntactically valid Go, use real exported or otherwise
 scope-correct symbols, and demonstrate mechanics without choosing a fault policy,
 schedule, assertion, or correctness oracle. Reject package-qualified instance
-methods, ellipsis placeholders, invented helpers, and inaccessible fields.
+methods, ellipsis placeholders, invented helpers, inaccessible fields, and newly
+declared unused variables. Assumed variables must be named with Go types in a
+leading `// Requires:` comment so the snippet is type-check-ready.
 `public_entrypoints` must contain only operations callable by the declared
 consumer. Internal stores and hooks are not public API.
 

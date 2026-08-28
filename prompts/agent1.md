@@ -20,12 +20,16 @@ materially distinct public path in that boundary. A path is distinct when the
 test consumer uses a different public node API, protocol input/output boundary,
 cache or target ownership model, control mechanism, or synchronous/asynchronous
 surface. Different message types, helper functions, files, and internal branches
-that reach the same control surface are not separate paths. Multiple accessors on
-the same runtime object are entrypoints, not separate paths, unless they change
-ownership, input/output boundaries, or completion semantics.
+that reach the same control surface are not separate paths. A path is an
+end-to-end runtime route, not each consecutive producer/consumer boundary.
+Multiple accessors on one runtime object are entrypoints, not paths, unless
+ownership, input/output boundaries, or completion semantics change.
 
-Record paths in `execution_paths`, and explain entrypoints, consumer scope, and
-uncovered modes in the existing report fields. Use `SUPPORTED` only when every
+Record only applicable end-to-end routes in `execution_paths`. Put internal
+branches, rejected states, adjacent primitives, and mechanisms excluded from the
+capability in evidence or `limitations`, not paths. `entrypoints` contains only
+interfaces callable by the declared consumer; internal call sites belong in
+evidence. Use `SUPPORTED` only when every
 materially relevant in-scope path supports the capability. Use `PATCHABLE` when
 at least one missing path can be completed with a low-intrusion change, and
 `PARTIAL` when some paths work but no remaining gap is safely patchable. Never
@@ -36,9 +40,13 @@ Distinguish an underlying primitive from a complete test interface. Populate
 `suggested_changes`. Reuse, wrapper, hook, dependency injection, configuration,
 accessor, and test-harness extension are possible changes, not mandatory modes.
 A complete existing interface needs no new target code and has no gap.
+Do not return `SUPPORTED` when a limitation contradicts
+`existing_test_interface_complete` or a path/entrypoint used to justify support;
+exclude the defective optional primitive from the positive claim or downgrade.
 
 For message control, use one shared path partition and the same path names in
-both `message_capture` and `message_injection`. For every path identify:
+both `message_capture` and `message_injection`. Each path is one end-to-end route,
+not separate outbound and inbound halves. For every path identify:
 
 - protocol output and whether it automatically continues;
 - the test-visible cache and its owner;
@@ -98,14 +106,19 @@ continues.
 For randomness, `SUPPORTED` requires reproducible choices for the claimed node,
 instance, or shared scope. A fixed global random sequence is insufficient when
 concurrent call order can assign its values to different instances or protocol
-decisions.
+decisions. Count only time and randomness that can affect protocol behavior;
+caller-side deadlines, metrics, logging, informational timestamps, setup IDs,
+and non-protocol addresses belong in limitations unless they feed back into the
+protocol.
 
 For directly usable interfaces, add a short syntactically valid Go snippet to
 `usage_examples` when source evidence establishes the setup. Show mechanics, not
 selection policy, fault scheduling, assertions, or a correctness oracle. Use a
 real receiver of the correct type, symbols visible to the declared consumer, and
-no ellipsis, invented helper, or inaccessible field. Omit the example and state
-the missing setup when a trustworthy snippet cannot be derived from source.
+no ellipsis, invented helper, inaccessible field, or newly declared unused
+variable. A snippet may assume variables only when a leading `// Requires:`
+comment names their Go types. Omit the example when it cannot be type-check-ready
+after ordinary imports and those declared prerequisites.
 
 For every capability with `obligations`, assess every named obligation as
 `SATISFIED`, `PARTIAL`, `MISSING`, `UNKNOWN`, or `NOT_APPLICABLE`. Every
@@ -116,5 +129,10 @@ proposals, reads, membership changes, and equivalent operations. Exclude peer
 protocol messages, Tick, timers, internal callbacks, diagnostics, barriers,
 snapshot/restore, bootstrap, leadership transfer, lifecycle, and maintenance
 operations unless the target explicitly defines them as application workload.
+
+Before returning, confirm that paths are end-to-end and capability-applicable,
+entrypoints are consumer-callable, no `SUPPORTED` limitation contradicts the
+claim, and every retained usage example is type-check-ready under its declared
+`// Requires:` variables.
 
 Return only JSON matching the capability-report schema.

@@ -24,10 +24,11 @@ capabilities:
         Records, handles, pointers, tokens, or mutation-safe indexes are allowed.
         Permanent numeric message IDs are not required.
       path_pairing: >
-        Message capture and injection use the same discovered path partition and
-        path names. For each path, report its output boundary, cache owner, normal
-        input boundary, and consumer scope. Evidence from one path cannot prove
-        support on another path.
+        Message capture and injection use the same end-to-end path names. Each
+        path spans protocol output, exclusive cache control, selected-instance
+        operation, normal input, and completion. Do not split consecutive sender
+        and receiver boundaries of one route; evidence from one route cannot prove
+        support on another.
       snapshot_safety: >
         Returned snapshots must not let callers accidentally mutate cached,
         protocol, or controller state through shared mutable data. In Go, a
@@ -81,6 +82,11 @@ capabilities:
       - explicit_tick
       - injectable_clock
     testing_contract:
+      protocol_relevance: >
+        Count time that can affect protocol state transitions, message emission,
+        or persistence. Caller-side API deadlines, metrics, logging, and purely
+        informational timestamps are not protocol-time paths unless they feed
+        back into protocol behavior.
       direct_use_or_thin_coordination: >
         Reuse a directly testable Tick or Clock when sufficient. Add coordination
         only when existing time paths cannot be used deterministically as exposed.
@@ -92,6 +98,11 @@ capabilities:
       Protocol-relevant randomness can be fixed or injected so the same initial
       state and control parameters reproduce the same random choices.
     testing_contract:
+      protocol_relevance: >
+        Count random choices that affect protocol state, message behavior,
+        persistence, or scheduling decisions. Setup identifiers, addresses,
+        logging values, and other non-protocol randomness are not capability
+        paths.
       preserve_behavior: >
         Reuse existing configuration or expose the existing random choice through
         a config option, injected source, hook, or test constructor. Do not replace
@@ -132,6 +143,11 @@ capabilities:
       Expose the minimum target-native node or global state needed by later tests;
       v0.1 does not require a universal state schema.
     testing_contract:
+      minimum_complete_interface: >
+        Each runtime path needs one complete snapshot-safe interface for the
+        minimum state claimed. Do not add every related accessor or caller-owned
+        store to the positive claim; weaker optional primitives belong in
+        limitations.
       direct_use_or_accessor: >
         Reuse an existing status interface when sufficient. Otherwise a read-only
         accessor may aggregate existing state without creating protocol state.

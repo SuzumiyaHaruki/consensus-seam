@@ -21,9 +21,9 @@ same-package test support, or internal harness APIs. Never force coverage by
 changing protocol semantics.
 
 When message capture or injection is selected, preserve Agent 1's shared message
-path names and analyze both sides of each path together. Do not implement capture
-on path A and use injection on path B to claim either path has an end-to-end
-message-control seam.
+path names and implement each route end to end. Do not split consecutive outbound
+and inbound halves into separate interfaces, or implement capture on path A and
+use injection on path B to claim a complete seam.
 
 For capture, build or extend a target-native test cache that:
 
@@ -84,11 +84,14 @@ Apply these common rules:
 Record actual entrypoints, consumer-callable `public_entrypoints`, cache location,
 reference validity, target/routing ownership, cache effects, production and test
 modes, covered and uncovered paths, required setup, and remaining limitations.
+Internal implementation call sites are evidence, not public entrypoints.
 Each implemented capability needs one concise, syntactically valid Go usage
 example. Message examples show enumeration, content inspection, and use of the
 returned reference, but leave the choice criteria and schedule to the test. Use
 the correct receiver, consumer-visible symbols, and no ellipsis, invented helper,
-or inaccessible field; omit an example rather than fabricate setup.
+inaccessible field, or newly declared unused variable. A leading `// Requires:`
+comment may declare assumed variables and their Go types; omit an example rather
+than fabricate setup that would not type-check.
 
 Add only the smallest focused Go tests needed to exercise new behavior. Do not
 modify existing target tests, duplicate their coverage, generate broad parameter
