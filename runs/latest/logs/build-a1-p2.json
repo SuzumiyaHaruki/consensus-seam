@@ -1,0 +1,7 @@
+{
+  "command": "go test -run '^$' ./...",
+  "returncode": 0,
+  "stdout": "ok  \tgo.etcd.io/raft/v3\t(cached) [no tests to run]\nok  \tgo.etcd.io/raft/v3/confchange\t(cached) [no tests to run]\nok  \tgo.etcd.io/raft/v3/quorum\t(cached) [no tests to run]\nok  \tgo.etcd.io/raft/v3/raftpb\t(cached) [no tests to run]\nok  \tgo.etcd.io/raft/v3/rafttest\t(cached) [no tests to run]\nok  \tgo.etcd.io/raft/v3/tracker\t(cached) [no tests to run]\n",
+  "stderr": "",
+  "duration_seconds": 0.5423145329987165
+}

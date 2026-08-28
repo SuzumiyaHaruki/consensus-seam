@@ -1,0 +1,7 @@
+{
+  "command": "gofmt -w election_timeout_rand_test.go node.go node_tick_lossless_test.go raft.go rafttest/driver.go rafttest/interaction_env_cache.go rafttest/message_cache.go rafttest/message_cache_test.go rawnode.go",
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "duration_seconds": 0.046566179997171275
+}

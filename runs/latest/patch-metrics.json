@@ -1,0 +1,28 @@
+{
+  "existing_production_files_modified": [
+    "node.go",
+    "raft.go",
+    "rawnode.go"
+  ],
+  "new_production_files": [
+    "rafttest/driver.go",
+    "rafttest/interaction_env_cache.go",
+    "rafttest/message_cache.go"
+  ],
+  "existing_test_files_modified": [],
+  "new_test_files": [
+    "election_timeout_rand_test.go",
+    "node_tick_lossless_test.go",
+    "rafttest/message_cache_test.go"
+  ],
+  "other_files_changed": [],
+  "production_lines_added": 408,
+  "production_lines_deleted": 3,
+  "test_lines_added": 568,
+  "test_lines_deleted": 0,
+  "protocol_core_files_modified": [
+    "node.go",
+    "raft.go",
+    "rawnode.go"
+  ]
+}

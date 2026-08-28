@@ -1,0 +1,310 @@
+{
+  "message_capture": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": {
+      "file": "rafttest/interaction_env_handler_process_ready.go",
+      "symbol": "InteractionEnv.ProcessReady",
+      "meaning": "Controlled output is retained before delivery on every path: RawNode.Ready moves rd.Messages out of the state machine (acceptReady), Node.Ready hands the Ready to the single consumer, and ProcessReady moves non-local messages into env.Messages; nothing is delivered automatically."
+    },
+    "pending_store": {
+      "file": "rafttest/message_cache.go",
+      "symbol": "MessageCache",
+      "meaning": "MessageCache.msgs for the direct RawNode/Node driver paths; InteractionEnv.Messages remains the single authoritative in-flight cache for the rafttest path (no parallel cache state)."
+    },
+    "entrypoint": {
+      "file": "rafttest/message_cache.go",
+      "symbol": "MessageCache",
+      "meaning": "Exact-instance capture cache added to the rafttest package: Add/Len/Messages/Take/Drop/DropAll/Clear over retained raftpb.Message values, with selection left to caller predicates."
+    },
+    "public_entrypoints": [
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.Add",
+        "meaning": "Appends captured messages preserving order."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.Len",
+        "meaning": "Number of retained messages."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.Messages",
+        "meaning": "Deep-copied ordered snapshot of retained messages."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.Take",
+        "meaning": "Removes and returns the first predicate match with its routing fields."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.Drop",
+        "meaning": "Removes and discards the first predicate match."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.DropAll",
+        "meaning": "Removes all predicate matches, preserving remainder order."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.Clear",
+        "meaning": "Empties the cache."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "RawNodeDriver",
+        "meaning": "Thin test-facing driver for the RawNode direct-drive path: Next() takes Ready and moves outbound messages into its cache, Advance(rd) completes the cycle; RawNode()/Cache()/HasReady() expose the wrapped node and cache."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "NodeDriver",
+        "meaning": "Thin test-facing driver for the Node channel path: Capture() consumes the node's Ready channel and moves outbound messages into its cache; Advance() completes the cycle; Node()/Cache() expose the wrapped node and cache."
+      },
+      {
+        "file": "rafttest/interaction_env_cache.go",
+        "symbol": "InteractionEnv.TakeMsg",
+        "meaning": "Exact-instance take from env.Messages."
+      },
+      {
+        "file": "rafttest/interaction_env_cache.go",
+        "symbol": "InteractionEnv.DropMsg",
+        "meaning": "Exact-instance drop from env.Messages."
+      },
+      {
+        "file": "rafttest/interaction_env_cache.go",
+        "symbol": "InteractionEnv.DropMsgs",
+        "meaning": "Bulk drop over env.Messages preserving remainder order."
+      },
+      {
+        "file": "rafttest/interaction_env_cache.go",
+        "symbol": "InteractionEnv.ClearMessages",
+        "meaning": "Empties env.Messages."
+      }
+    ],
+    "copy_strategy": "Every value returned by Messages/Take/TakeMsg is a full deep copy of raftpb.Message via Marshal/Unmarshal (cloneMessage), covering nested Entries, Context, Snapshot, and Responses; snapshots share no mutable memory with the cache or with protocol state, and mutating them cannot corrupt retained or node state.",
+    "production_mode": "Production default unchanged: the go.etcd.io/raft/v3 core is untouched; all additions are additive exported test-facing APIs in the rafttest package, and existing Ready/Advance/DeliverMsgs/Stabilize behavior is preserved.",
+    "test_mode": "rafttest APIs are exported from go.etcd.io/raft/v3/rafttest and work in an ordinary non-_test.go import without same-package access; the drivers wrap the public RawNode/Node protocol paths without changing their semantics.",
+    "instance_reference": "A cached instance is identified by its content (the exact raftpb.Message value retained, in cache order) with first-match selection under the tester's predicate; Take/TakeMsg remove the instance and return a deep copy carrying From/To/Type routing, so a later combined-delivery attempt with an already-removed message fails explicitly (stale references are rejected, never silently retargeted).",
+    "target_binding_strategy": null,
+    "cache_effects": "Add appends in order at capture; Take removes exactly the first predicate match and returns a deep copy; Drop removes one match; DropAll removes all matches preserving remainder order; Clear empties the cache; Messages returns an isolated ordered snapshot. Nothing is delivered automatically: delivery resumes only through a later test action (DeliverMsg, DeliverMsgs, or the test's own Step calls), and continuation (Advance) stays with the single driving test.",
+    "message_id_scope": "pending_store_instance",
+    "controller_operations": "serialized",
+    "covered_paths": [
+      "RawNode direct drive: RawNodeDriver.Next() calls rn.Ready(), moves rd.Messages into MessageCache before any delivery, and the caller persists/applies the non-message Ready parts and calls driver.Advance(rd); exact-instance Take/Drop/DropAll/Clear and ordered snapshot enumeration operate on the cache; continuation is owned by the single driving test.",
+      "Node channel drive: NodeDriver.Capture() receives from the node's Ready channel (the node's own completion mechanism), moves rd.Messages into MessageCache; the caller persists/applies and calls driver.Advance(); no second consumer races the Ready channel.",
+      "rafttest InteractionEnv: ProcessReady retains non-local messages in env.Messages; new TakeMsg/DropMsg/DropMsgs/ClearMessages provide exact-instance cache operations on the same cache used by DeliverMsgs/Stabilize; existing behavior is unchanged."
+    ],
+    "uncovered_paths": [
+      "AsyncStorageWrites local-thread messages (MsgStorageAppend/MsgStorageApply) remain retained in Node.AppendWork/Node.ApplyWork with existing bulk semantics; exact-instance Take/Drop/Clear were not added to those two retention lists within this round (same ProcessReady capture route, separate per-node work queues)."
+    ],
+    "implementation_approach": [
+      "add_test_only_wrapper",
+      "add_pending_store"
+    ],
+    "usage_examples": [
+      "// Requires: rn *raft.RawNode, st *raft.MemoryStorage, d *rafttest.RawNodeDriver\nif d.HasReady() {\n    rd := d.Next()\n    _ = st.Append(rd.Entries)\n    d.Advance(rd)\n}\n_ = d.Cache().Messages()",
+      "// Requires: env *rafttest.InteractionEnv\nif err := env.ProcessReady(0); err != nil {\n    panic(err)\n}\nm, ok := env.TakeMsg(func(m raftpb.Message) bool { return m.Type == raftpb.MsgVote })\n_ = ok\n_ = m"
+    ],
+    "notes": [
+      "No protocol conditions, messages, persistence, recovery, or business input were changed; the raft package was not modified.",
+      "MessageCache stores captured values as received (same aliasing posture as env.Messages today); all returned values are deep copies, so snapshot_safety holds for every consumer-visible result.",
+      "The caller remains responsible for persisting/applying the non-message Ready parts (HardState, Entries, Snapshot, CommittedEntries) before Advance, per the Ready contract; the seam does not deliver earlier than the original path.",
+      "NodeDriver.Capture blocks until the node produces a Ready and must be used while the node is running; NodeDriver.Advance must not be called with AsyncStorageWrites enabled (see raft.Node.Advance).",
+      "MessageCache is not safe for concurrent use; all operations are synchronous and ordered."
+    ]
+  },
+  "message_injection": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": {
+      "file": "rafttest/message_cache.go",
+      "symbol": "MessageCache",
+      "meaning": "Injection operates on the same capture cache as capture on every path: MessageCache for the RawNode/Node driver paths and env.Messages for the InteractionEnv path."
+    },
+    "pending_store": {
+      "file": "rafttest/message_cache.go",
+      "symbol": "MessageCache",
+      "meaning": "Same pending store as message_capture; env.DeliverMsg operates on the authoritative env.Messages slice and driver paths operate on the driver's MessageCache."
+    },
+    "entrypoint": {
+      "file": "rafttest/interaction_env_cache.go",
+      "symbol": "InteractionEnv.DeliverMsg",
+      "meaning": "Combined single-call injection on the rafttest path: locates the first cached instance selected by the caller's predicate (same first-match rule as TakeMsg), validates its To destination against env.Nodes, removes the retained instance, and steps it into env.Nodes[msg.To-1] via the normal protocol input boundary."
+    },
+    "public_entrypoints": [
+      {
+        "file": "rafttest/interaction_env_cache.go",
+        "symbol": "InteractionEnv.DeliverMsg",
+        "meaning": "Combined single-call form: predicate-selected cached instance, target validated against env.Nodes, removed before Step, stepped into the target node."
+      },
+      {
+        "file": "rafttest/interaction_env_cache.go",
+        "symbol": "InteractionEnv.TakeMsg",
+        "meaning": "Separated-form half on the same cache: TakeMsg plus env.Nodes[msg.To-1].Step(msg) on the test-owned node mapping."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "MessageCache.Take",
+        "meaning": "Separated-form half for the direct paths: Take plus rn.Step(m) or n.Step(ctx, m) on test-owned node objects."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "RawNodeDriver.RawNode",
+        "meaning": "Exposes the wrapped RawNode for the normal protocol input call (Step) after Take."
+      },
+      {
+        "file": "rafttest/message_cache.go",
+        "symbol": "NodeDriver.Node",
+        "meaning": "Exposes the wrapped Node for the normal protocol input call (Step) after Take."
+      }
+    ],
+    "copy_strategy": "The retained instance itself is removed and stepped (content preserved); predicate selection never fabricates messages, and the removed value is the true captured instance.",
+    "production_mode": "Production default unchanged: injection goes through the existing normal protocol input boundaries (RawNode.Step, Node.Step); no message content or destination is altered and no protocol semantics changed.",
+    "test_mode": "Exported rafttest APIs usable from an ordinary non-_test.go import; direct-path injection is the separated form (Take plus the documented Step input) with target ownership retained by the test, as permitted by the testing contract.",
+    "instance_reference": "The selected instance is the first retained message matching the tester's predicate, evaluated over the cache in order (identical rule for TakeMsg/Take and DeliverMsg), so the test can predict exactly which instance is delivered; a message whose instance is no longer retained fails delivery explicitly with the cache unchanged.",
+    "target_binding_strategy": "env.DeliverMsg binds the selected message's To to the env-owned mapping env.Nodes[msg.To-1], validated before removal (unknown destination fails with the cache unchanged); on the direct paths the test owns the target objects and routing comes from the taken message's To/From fields, so identifier arithmetic is never used as binding.",
+    "cache_effects": "Successful delivery: the retained instance is removed before Step runs and the message (sender, receiver, content intact) enters the target's normal protocol input. Synchronous Step error: the error is returned to the caller and the instance is not restored (matching the documented DeliverMsgs cache effect). No-match predicate or unknown destination (msg.To not present in env.Nodes): error returned and the cache is unchanged. There is no asynchronous/unconfirmed delivery mode in the library: Step completes before DeliverMsg returns, and responses re-enter the same cache through the target's next Ready.",
+    "message_id_scope": "pending_store_instance",
+    "controller_operations": "serialized",
+    "covered_paths": [
+      "RawNode direct drive (separated form): MessageCache.Take removes the selected cached instance with routing fields, and the test, which owns the peer RawNode objects, calls the documented normal input rn.Step(m); request/response completion flows back through the target's next Ready and is captured on the same cache.",
+      "Node channel drive (separated form): MessageCache.Take plus n.Step(ctx, m) on the test-owned Node objects; completion returns through the target's Ready channel.",
+      "rafttest InteractionEnv (combined single-call): DeliverMsg(pred) locates the selected instance in env.Messages, validates msg.To against env.Nodes, removes the retained instance, and steps the cached instance into env.Nodes[msg.To-1]; the separated form (TakeMsg + env.Nodes[msg.To-1].Step) is also available on the same cache."
+    ],
+    "uncovered_paths": [
+      "AsyncStorageWrites local storage-thread injection keeps the existing ProcessAppendThread/ProcessApplyThread route for MsgStorageAppend/MsgStorageApply responses; exact-instance DeliverMsg-style selection was not added for those per-node work queues (same ProcessReady route, separate retention lists)."
+    ],
+    "implementation_approach": [
+      "add_test_only_wrapper",
+      "add_pending_store"
+    ],
+    "usage_examples": [
+      "// Requires: env *rafttest.InteractionEnv\nif err := env.ProcessReady(0); err != nil {\n    panic(err)\n}\nif err := env.DeliverMsg(func(m raftpb.Message) bool {\n    return m.Type == raftpb.MsgVote && m.To == 2\n}); err != nil {\n    panic(err)\n}",
+      "// Requires: d *rafttest.RawNodeDriver, peer *raft.RawNode\nm, ok := d.Cache().Take(func(m raftpb.Message) bool { return m.Type == raftpb.MsgVote })\nif ok {\n    if err := peer.Step(m); err != nil {\n        panic(err)\n    }\n}"
+    ],
+    "notes": [
+      "Injecting a fabricated response instead of the selected cached instance is not provided and is not a substitute; only the captured instance itself enters Step, and message direction is preserved (a cached request enters the request input; a cached response enters through the same input with its own direction).",
+      "Completion mechanism preserved: request/response and vote flows complete through the target's normal Ready cycle on the same capture cache; capture, removal, or injection never orphans a sender or future.",
+      "Retry, requeue, duplication, loss, ordering, and assertions remain tester policy; the seam supplies only cache and ingress mechanics.",
+      "The full module compiles (go test -run '^$' ./...) and the focused new tests (TestMessageCache, TestRawNodeDriverCaptureAndInject, TestNodeDriverCaptureAndInject, TestInteractionEnvTakeDropClearDeliver) pass."
+    ]
+  },
+  "time_control": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": null,
+    "pending_store": null,
+    "entrypoint": {
+      "file": "node.go",
+      "symbol": "node.Tick",
+      "meaning": "Concrete implementation of raft.Node.Tick on the channel-driven Node path; the default drop branch was removed so a requested tick is never silently lost."
+    },
+    "public_entrypoints": [
+      {
+        "file": "node.go",
+        "symbol": "raft.Node.Tick",
+        "meaning": "Channel-driven Node path; now lossless: blocks until the tick is accepted into the run loop's 128-slot buffer (or the node has stopped), so every requested advance is retained and applied in call order."
+      },
+      {
+        "file": "rawnode.go",
+        "symbol": "raft.RawNode.Tick",
+        "meaning": "Direct-drive path; synchronous exact single-tick advance (rn.raft.tick()); unchanged, already deterministic."
+      },
+      {
+        "file": "rafttest/interaction_env_handler_tick.go",
+        "symbol": "rafttest.InteractionEnv.Tick",
+        "meaning": "Harness path; calls the env node's embedded RawNode.Tick num times; exact and synchronous; unchanged."
+      }
+    ],
+    "copy_strategy": null,
+    "production_mode": "Node.Tick blocks until the tick is accepted into the run loop's 128-slot buffer or the node has stopped; ticks are applied in FIFO order by the run loop via rn.Tick(), preserving timer ordering and transition conditions. The previous overflow behavior (drop with warning) is removed so every requested advance is applied exactly once.",
+    "test_mode": "Same code path as production; no test-only branch, hook, or configuration was added. RawNode.Tick and rafttest InteractionEnv.Tick remain direct synchronous advances and were left unchanged.",
+    "instance_reference": null,
+    "target_binding_strategy": null,
+    "cache_effects": null,
+    "message_id_scope": null,
+    "controller_operations": null,
+    "covered_paths": [
+      "RawNode direct drive: rn.Tick() applies one tick synchronously via rn.raft.tick(); exact and deterministic; unchanged.",
+      "Node channel drive: n.Tick() no longer drops ticks when the 128-slot tickc buffer is full; each requested advance is retained in FIFO order and applied by the run loop (case <-n.tickc: n.rn.Tick()), or the call returns when the node has stopped.",
+      "rafttest InteractionEnv: env.Tick(idx, num) delegates to the env node's RawNode.Tick num times; exact and deterministic; unchanged."
+    ],
+    "uncovered_paths": [],
+    "implementation_approach": [
+      "Removed the default drop branch of node.Tick (node.go:463-475) so the channel-driven Node path never loses a requested advance; the select now blocks on the buffered tickc channel or returns when the node is stopped, preserving the 128-slot buffering, FIFO tick ordering, and each tick applying rn.Tick() with identical transition conditions.",
+      "Reused the already-exact Tick surfaces for the other two discovered paths (RawNode.Tick and rafttest InteractionEnv.Tick) without modification; no protocol, timer, or transition logic was changed.",
+      "Added one focused same-package test (TestNodeTickLossless in node_test.go) that requests 300 ticks (> cap(tickc) = 128) on a live run loop and asserts all 300 are applied via electionElapsed, following the existing TestNodeTick read-after-Stop pattern to avoid concurrent access."
+    ],
+    "usage_examples": [
+      "// Requires: n raft.Node\nn.Tick() // every requested advance is applied in order; none is silently dropped",
+      "// Requires: env *rafttest.InteractionEnv\n_ = env.Tick(0, 3) // exact: advances the embedded RawNode by exactly 3 ticks"
+    ],
+    "notes": [
+      "Production mode: Node.Tick previously dropped a tick (with the warning 'A tick missed to fire') when the 128-slot buffer was full. It now blocks until the run loop accepts the tick or the node stops. The 128-slot buffering and FIFO application order are unchanged, and each applied tick runs the same rn.Tick() with the same transition conditions (tickElection/tickHeartbeat), so production timer ordering and protocol transitions are preserved; the only removed behavior is silent loss at buffer overflow. The Node interface doc (Tick increments the internal logical clock by a single tick) is now actually guaranteed.",
+      "Back-pressure note: a caller that floods Tick calls while never consuming Ready may block in Tick because the run loop can be busy delivering a Ready; the module's own consumers (doc.go ready loop, rafttest/node.go) consume Ready in the same loop, and the full test suite passes unchanged.",
+      "The unexported same-package network harness (rafttest/node.go) drives nodes from a real 5ms time.Ticker; it is not a protocol-time path and is not part of the claim.",
+      "The RawNode and rafttest InteractionEnv paths already satisfied the contract and required no change; the worktree also retains the prior candidate's Config.ElectionTimeoutDraw randomness seam, which was not touched by this round.",
+      "Test evidence: TestNodeTickLossless (node_test.go) requests 300 ticks (> cap(tickc)), drains the buffer, stops the node, and asserts r.electionElapsed == 300; full suite `go test ./...` passes."
+    ]
+  },
+  "randomness_control": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": null,
+    "pending_store": null,
+    "entrypoint": {
+      "file": "rawnode.go",
+      "symbol": "RawNode.SetRandomizedElectionTimeout",
+      "meaning": "Exported per-node setter for the randomized election timeout; externally callable by any consumer of the module and promoted through rafttest.Node.RawNode."
+    },
+    "public_entrypoints": [
+      {
+        "file": "rawnode.go",
+        "symbol": "RawNode.SetRandomizedElectionTimeout",
+        "meaning": "Sets the current randomized election timeout of the owning RawNode to the given value; used directly by external tests and as the rafttest fallback when InteractionOpts.SetRandomizedElectionTimeout is nil."
+      },
+      {
+        "file": "raft.go",
+        "symbol": "Config.ElectionTimeoutDraw",
+        "meaning": "New exported Config hook consulted by resetRandomizedElectionTimeout on every draw (construction and each follower/candidate transition); nil keeps the production crypto/rand-backed globalRand default."
+      }
+    ],
+    "copy_strategy": null,
+    "production_mode": "ElectionTimeoutDraw nil: randomizedElectionTimeout = electionTimeout + globalRand.Intn(electionTimeout) exactly as before, drawn from a shared crypto/rand-backed source into [ElectionTick, 2*ElectionTick-1].",
+    "test_mode": "Set Config.ElectionTimeoutDraw to a constant, a sequence from a seeded source, or a shared seeded source to make every draw deterministic per node; or call RawNode.SetRandomizedElectionTimeout(v) to fix the current per-node value (directly or via env.Nodes[i] in rafttest). The rafttest set-randomized-election-timeout command works without InteractionOpts plumbing.",
+    "instance_reference": "Per-node: randomizedElectionTimeout is a field of the owning raft runtime; RawNode.SetRandomizedElectionTimeout mutates that node's value and it stays in effect until the next reset draws a new value. In rafttest, env.Nodes[i] embeds *raft.RawNode, so the setter is promoted and identifies the same node instance.",
+    "target_binding_strategy": null,
+    "cache_effects": null,
+    "message_id_scope": null,
+    "controller_operations": null,
+    "covered_paths": [
+      "RawNode direct drive: Config.ElectionTimeoutDraw is consulted by resetRandomizedElectionTimeout at construction (via becomeFollower->reset) and on every follower/candidate transition; RawNode.SetRandomizedElectionTimeout(v) additionally fixes the current per-node value.",
+      "Node channel drive: Node.StartNode/RestartNode construct the raft runtime through the same Config, so ElectionTimeoutDraw controls every draw on this path; resetRandomizedElectionTimeout is shared by the Node and RawNode runtimes.",
+      "rafttest InteractionEnv drive: AddNodes builds each env node from the Config stub (OnConfig can set ElectionTimeoutDraw), and the set-randomized-election-timeout command now works with NewInteractionEnv(nil) by calling the promoted RawNode.SetRandomizedElectionTimeout; the existing InteractionOpts hook remains honored when non-nil."
+    ],
+    "uncovered_paths": [],
+    "implementation_approach": [
+      "Dependency injection via new Config.ElectionTimeoutDraw func(electionTick int) int hook; nil default preserves globalRand behavior exactly",
+      "Exported per-node setter RawNode.SetRandomizedElectionTimeout(v int) (rawnode.go), mirroring the semantics of the previous test-file-only raft.SetRandomizedElectionTimeout",
+      "Harness extension in rafttest: the set-randomized-election-timeout handler now falls back to RawNode.SetRandomizedElectionTimeout when InteractionOpts.SetRandomizedElectionTimeout is nil, so the published rafttest harness no longer depends on the raft package's _test.go-only function"
+    ],
+    "usage_examples": [
+      "// Requires: cfg *raft.Config\ncfg.ElectionTimeoutDraw = func(electionTick int) int { return electionTick }",
+      "// Requires: rn *raft.RawNode\nrn.SetRandomizedElectionTimeout(5)",
+      "// Requires: env *rafttest.InteractionEnv\nenv.Nodes[0].SetRandomizedElectionTimeout(5)"
+    ],
+    "notes": [
+      "Production default unchanged: with ElectionTimeoutDraw nil, resetRandomizedElectionTimeout still computes electionTimeout + globalRand.Intn(electionTimeout), keeping the same crypto/rand-backed behavior and value range [ElectionTick, 2*ElectionTick-1].",
+      "Choice visibility: a test that supplies ElectionTimeoutDraw or calls SetRandomizedElectionTimeout knows each selected value before scheduling dependent work; values are per-node and may vary per reset when the hook returns varying values.",
+      "Scope and domain: control is per node (the randomizedElectionTimeout field of the owning raft runtime); Config.ElectionTimeoutDraw documents the legal domain [ElectionTick, 2*ElectionTick-1], and values returned or set are used as-is (no invented validation), matching the previous test-only setter semantics which also accepted arbitrary values.",
+      "A shared seeded source is acceptable: resetRandomizedElectionTimeout invokes the hook in program order, so the same initial state, control parameters, and transition schedule assign the same draw sequence to each instance.",
+      "The test-file-only raft.SetRandomizedElectionTimeout in raft_test.go was left untouched; it is no longer the sole implementation usable by rafttest because the handler now falls back to the exported RawNode method.",
+      "Verification: go test -run '^$' ./... passes; focused tests TestElectionTimeoutDrawHook, TestRawNodeSetRandomizedElectionTimeout, TestDefaultRandomizedElectionTimeoutRange (raft package) and TestSetRandomizedElectionTimeoutDefault (rafttest) pass; full rafttest package and the datadriven TestInteraction suite pass. The initial rafttest test version failed because its add-nodes snapshot carried no voters, so no election could start; it was corrected to bootstrap with ConfState voters {1} and index 2."
+    ]
+  },
+  "lifecycle_control": null,
+  "observation": null
+}

@@ -5,129 +5,123 @@
       "status": "SUPPORTED",
       "evidence": [
         {
-          "file": "node.go",
-          "symbol": "(*node).Propose",
-          "line": 474,
-          "reason": "Node.Propose wraps data into a MsgProp message and stepWait delivers it to the run loop, which invokes raft.Step (node.go:391-398); the result channel reports acceptance/drop."
-        },
-        {
-          "file": "node.go",
-          "symbol": "(*node).ProposeConfChange",
-          "line": 495,
-          "reason": "ProposeConfChange marshals a ConfChangeI into a MsgProp entry and steps it, defining the replicated membership-change workload path."
-        },
-        {
-          "file": "node.go",
-          "symbol": "(*node).ReadIndex",
-          "line": 613,
-          "reason": "ReadIndex steps a MsgReadIndex carrying the application's rctx, the application-originated read workload."
-        },
-        {
           "file": "rawnode.go",
-          "symbol": "(*RawNode).Propose",
+          "symbol": "RawNode.Propose",
           "line": 90,
-          "reason": "RawNode.Propose calls raft.Step with MsgProp and From set to the node ID, the synchronous counterpart of the Node path; ProposeConfChange (rawnode.go:101) and ReadIndex (rawnode.go:561) use the same surface."
+          "reason": "Proposes data by stepping a local MsgProp carrying an entry; direct application workload ingress on the RawNode API."
         },
         {
           "file": "rawnode.go",
-          "symbol": "(*RawNode).ApplyConfChange",
-          "line": 112,
-          "reason": "ApplyConfChange invokes raft.applyConfChange and returns the new ConfState; Node.ApplyConfChange (node.go:561-572) is the channel-based equivalent."
+          "symbol": "RawNode.ProposeConfChange",
+          "line": 101,
+          "reason": "MarshalConfChange + Step MsgProp entry; membership-change workload ingress on the RawNode API."
+        },
+        {
+          "file": "rawnode.go",
+          "symbol": "RawNode.ReadIndex",
+          "line": 561,
+          "reason": "Application-originated read request stepped as MsgReadIndex; read workload ingress."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Propose",
+          "line": 474,
+          "reason": "Channel-based Node API forwards proposals into the raft run loop via propc and stepWait."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.ProposeConfChange",
+          "line": 495,
+          "reason": "Membership-change workload entrypoint on the Node interface."
         },
         {
           "file": "rafttest/interaction_env_handler_propose.go",
-          "symbol": "(*InteractionEnv).Propose",
+          "symbol": "InteractionEnv.Propose",
           "line": 32,
-          "reason": "env.Propose forwards to env.Nodes[idx].Propose (RawNode), proving rafttest reuse of the same ingress rather than a separate path."
+          "reason": "Exported rafttest handler calling env.Nodes[idx].Propose; harness-level workload ingress."
+        },
+        {
+          "file": "rafttest/interaction_env_handler_propose_conf_change.go",
+          "symbol": "InteractionEnv.ProposeConfChange",
+          "line": 81,
+          "reason": "Exported rafttest handler for proposing configuration changes through the harness."
         }
       ],
-      "boundary": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.",
+      "boundary": null,
       "gap": null,
-      "reason": "Application-originated work enters the protocol through exported proposal, read, and membership-application APIs on both the asynchronous Node surface and the synchronous RawNode surface; rafttest wraps the RawNode surface. Maintenance operations (Campaign, TransferLeadership, ForgetLeader, Compact, ReportUnreachable/ReportSnapshot) are excluded as leadership/maintenance/diagnostic controls, and peer protocol messages entering Step are excluded as protocol ingress.",
+      "reason": "Application workload entrypoints exist on both public node APIs (RawNode and Node) and in the rafttest harness: Propose, ProposeConfChange, and ReadIndex inject work via MsgProp/MsgReadIndex, which are local messages distinct from peer protocol ingress. v0.1 does not create new entrypoints; it discovers the existing ones.",
       "limitations": [
-        "Proposals may be dropped silently or rejected (ErrProposalDropped when limits are exceeded), so the API is best-effort; retry is tester policy.",
-        "Campaign, TransferLeadership, ForgetLeader, Compact, ReportUnreachable/ReportSnapshot and snapshot send are leadership/maintenance/diagnostic operations and are not counted as application workload.",
-        "RawNode.ProposeConfChange applies no wait-for-acceptance; only Node.Propose waits on a result channel."
+        "Peer protocol messages (MsgApp, MsgVote, MsgHeartbeat, MsgSnap and their responses) entering via Step are protocol ingress, not application workload; excluded per obligation.",
+        "Campaign, TransferLeadership, ForgetLeader, Compact, SendSnapshot, ReportUnreachable and ReportSnapshot are leadership/maintenance/diagnostic operations and are excluded from the workload claim.",
+        "Proposals may be dropped (ErrProposalDropped) or lost without notice; retry is tester policy as documented in Node.Propose.",
+        "Real networking and application state-machine ingestion are outside the system boundary."
       ],
       "suggested_direction": null,
       "entrypoints": [
-        "Node.Propose",
-        "Node.ProposeConfChange",
-        "Node.ReadIndex",
-        "Node.ApplyConfChange",
-        "RawNode.Propose",
-        "RawNode.ProposeConfChange",
-        "RawNode.ReadIndex",
-        "RawNode.ApplyConfChange",
+        "raft.RawNode.Propose",
+        "raft.RawNode.ProposeConfChange",
+        "raft.RawNode.ReadIndex",
+        "raft.Node.Propose",
+        "raft.Node.ProposeConfChange",
+        "raft.Node.ReadIndex",
         "rafttest.InteractionEnv.Propose",
         "rafttest.InteractionEnv.ProposeConfChange"
       ],
       "usage_examples": [
-        "// Requires: rn *raft.RawNode\nerr := rn.Propose([]byte(\"cmd\"))\n_ = err",
-        "// Requires: rn *raft.RawNode\ncc := raftpb.ConfChangeV2{Changes: []raftpb.ConfChangeSingle{{Type: raftpb.ConfChangeAddNode, NodeID: 2}}}\n_ = rn.ProposeConfChange(cc)"
+        "// Requires: rn *raft.RawNode\n_ = rn.Propose([]byte(\"write-a\"))",
+        "// Requires: n raft.Node, ctx context.Context\n_ = n.ProposeConfChange(ctx, raftpb.ConfChangeV2{Changes: []raftpb.ConfChangeSingle{{Type: raftpb.ConfChangeAddNode, NodeID: 4}}})",
+        "// Requires: env *rafttest.InteractionEnv\n_ = env.Propose(0, []byte(\"x\"))"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "Exported Propose/ProposeConfChange/ReadIndex/ApplyConfChange on both Node and RawNode, plus rafttest wrappers, already provide the complete application-workload ingress with no missing target code.",
+      "test_support_reason": "Propose/ProposeConfChange/ReadIndex are documented public methods on both Node and RawNode, and rafttest exposes exported Propose/ProposeConfChange handlers; no new target code is required for the declared consumer to submit application work.",
       "suggested_changes": [],
       "execution_paths": [
-        "Node async application ingress: Node.Propose (MsgProp via propc with result-wait), Node.ProposeConfChange (MsgProp without wait), Node.ReadIndex (MsgReadIndex via recvc) — application workload is stepped by the node run loop (node.run) into raft.Step; completion returns through ctx/result channel.",
-        "RawNode synchronous application ingress: RawNode.Propose, RawNode.ProposeConfChange, RawNode.ReadIndex — direct raft.Step calls with synchronous errors; rafttest env.Propose/env.ProposeConfChange reuse this exact surface (env.Nodes[i] embeds *raft.RawNode).",
-        "Membership-change application: Node.ApplyConfChange / RawNode.ApplyConfChange — application applies committed ConfChange entries to the local tracker and receives the resulting ConfState (application workload originating outside the protocol)."
+        "RawNode direct drive: test calls rn.Propose/rn.ProposeConfChange/rn.ReadIndex; proposal becomes a local MsgProp/MsgReadIndex stepped into r.raft.Step and appears in Ready output.",
+        "Node channel drive: test calls n.Propose/n.ProposeConfChange/n.ReadIndex; run loop forwards via propc/recvc and steps into the same raft state machine.",
+        "rafttest InteractionEnv: test calls env.Propose(idx,data)/env.ProposeConfChange(idx,cc); delegates to the embedded RawNode of the env-owned node."
       ],
       "obligations": {
         "protocol_ingress_excluded": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "node.go",
-              "symbol": "(*node).Step",
-              "line": 478,
-              "reason": "Step filters local-message misuse and routes peer messages via recvc; proposals are distinguished from peer ingress by message type (MsgProp vs MsgVote/MsgApp/...)."
-            },
-            {
-              "file": "raftpb/raft.proto",
-              "symbol": "MessageType",
-              "line": 41,
-              "reason": "MessageType enum shows peer families (MsgVote, MsgApp, MsgHeartbeat, MsgSnap, responses) distinct from local application messages (MsgProp, MsgReadIndex)."
+              "file": "rawnode.go",
+              "symbol": "RawNode.Step",
+              "line": 118,
+              "reason": "RawNode.Step rejects unexpected local messages from network sources and response messages from unknown peers, separating peer protocol ingress from local workload messages."
             }
           ],
-          "reason": "Peer messages (MsgVote/MsgApp/MsgHeartbeat/MsgSnap and responses) enter through Step but are protocol ingress and excluded; only MsgProp proposals, MsgReadIndex reads, and ApplyConfChange are counted as application workload."
+          "reason": "Workload entrypoints (Propose/ProposeConfChange/ReadIndex) inject local MsgProp/MsgReadIndex messages, while peer-to-peer messages (MsgApp, MsgVote, MsgHeartbeat, MsgSnap, responses) arrive through Step and are treated as protocol ingress, guarded by RawNode.Step's IsLocalMsg/IsResponseMsg checks."
         },
         "timer_and_internal_events_excluded": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "raft.go",
-              "symbol": "(*raft).tickElection",
+              "symbol": "tickElection",
               "line": 850,
-              "reason": "tickElection increments electionElapsed and only then steps an internal MsgHup; tickHeartbeat (line 862) similarly generates MsgBeat/MsgCheckQuorum internally."
+              "reason": "The tick handler synthesizes internal MsgHup (and tickHeartbeat synthesizes MsgBeat/MsgCheckQuorum), demonstrating timer events are internal protocol events."
             }
           ],
-          "reason": "Tick only advances elapsed counters; internal MsgHup/MsgBeat/MsgCheckQuorum are generated inside tick handlers and are internal events, not application workload."
+          "reason": "Tick-driven events (MsgHup from tickElection, MsgBeat from tickHeartbeat, MsgCheckQuorum) are internal events generated by the logical clock, not external workload; none are claimed as workload entrypoints."
         },
         "workload_entrypoint": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "node.go",
-              "symbol": "(*node).Propose",
-              "line": 474,
-              "reason": "MsgProp with user data is the proposal workload entrypoint."
+              "file": "rawnode.go",
+              "symbol": "RawNode.Propose",
+              "line": 90,
+              "reason": "Public method converting application data into a local MsgProp entry stepped into the state machine."
             },
             {
               "file": "rawnode.go",
-              "symbol": "(*RawNode).ProposeConfChange",
+              "symbol": "RawNode.ProposeConfChange",
               "line": 101,
-              "reason": "ConfChangeI is marshaled into a MsgProp entry, defining the replicated membership-change workload."
-            },
-            {
-              "file": "rawnode.go",
-              "symbol": "(*RawNode).ReadIndex",
-              "line": 561,
-              "reason": "Application reads are issued through MsgReadIndex and completed via Ready.ReadStates."
+              "reason": "Public method converting a ConfChangeI into a local MsgProp entry for membership changes."
             }
           ],
-          "reason": "Propose appends application data entries, ProposeConfChange appends membership-change entries, ReadIndex issues application reads, and ApplyConfChange applies committed membership changes to the tracker — all application work originating outside the protocol."
+          "reason": "Application-originated proposals, membership changes, and reads are identified: RawNode.Propose/ProposeConfChange/ReadIndex (rawnode.go), Node.Propose/ProposeConfChange/ReadIndex (node.go), and rafttest Propose/ProposeConfChange handlers."
         }
       }
     },
@@ -136,118 +130,140 @@
       "evidence": [
         {
           "file": "node.go",
-          "symbol": "(*node).Stop",
-          "line": 336,
-          "reason": "Stop signals the run loop; node.run (node.go:454-456) closes done and returns, terminating all protocol activity; subsequent Node calls return ErrStopped."
-        },
-        {
-          "file": "node.go",
           "symbol": "RestartNode",
           "line": 286,
-          "reason": "RestartNode builds a new Node from Config.Storage via NewRawNode and starts run(), the documented recovery boundary for the same logical node."
+          "reason": "Documents the normal recovery path: constructs a fresh Node runtime from the existing Storage without a peers list, restoring membership from Storage."
         },
         {
           "file": "rawnode.go",
-          "symbol": "(*RawNode)",
-          "line": 31,
-          "reason": "RawNode is a thread-unsafe struct with no background goroutine; all protocol advancement is driven by caller invocations, so caller-controlled scheduling is a directly usable availability mechanism."
+          "symbol": "NewRawNode",
+          "line": 51,
+          "reason": "Builds a fresh RawNode runtime; newRaft reads Storage.InitialState() to restore HardState/ConfState (raft.go:442) and loadState (raft.go:480)."
+        },
+        {
+          "file": "storage.go",
+          "symbol": "Storage",
+          "line": 46,
+          "reason": "Defines the target persistence boundary: InitialState/Entries/Term/LastIndex/FirstIndex/Snapshot, with MemoryStorage as the module-provided implementation holding hardState, ents, and snapshot."
+        },
+        {
+          "file": "node.go",
+          "symbol": "Node.Stop",
+          "line": 336,
+          "reason": "Stops the node goroutine and closes done; the volatile runtime (run loop + raft state) is terminated while Storage remains."
         },
         {
           "file": "rafttest/node.go",
-          "symbol": "(*node).pause",
-          "line": 151,
-          "reason": "Module-internal harness provides pause()/resume() (buffering received messages) and stop()/restart() (rafttest/node.go:122-146) with stable MemoryStorage preserved across restart; used by rafttest/node_test.go but unexported."
-        },
-        {
-          "file": "node_test.go",
-          "symbol": "TestNodeRestart",
-          "line": 565,
-          "reason": "Test evidence that RestartNode with a MemoryStorage preloaded with HardState/entries resumes with the persisted state, proving the stop/reconstruction lifecycle within the module."
+          "symbol": "node.start",
+          "line": 95,
+          "reason": "Internal harness demonstrates crash semantics: on stopc the node calls Stop and sets n.Node = nil, with the comment 'All in memory state of node is discarded' while the MemoryStorage is retained."
         }
       ],
-      "boundary": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.",
+      "boundary": null,
       "gap": null,
-      "reason": "The module supports both stop/reconstruction (Node.Stop then RestartNode on the same Config.Storage) and caller-controlled scheduling (RawNode has no background goroutine, so halting Tick/Step/Ready calls stops all protocol activity and resuming them restores participation). A pause/resume+stop/restart harness exists in rafttest/node.go but is package-private.",
+      "reason": "Crash and restart compose directly from existing public APIs on every discovered path: the volatile runtime is the raft/RawNode/Node object, the persistent boundary is the Storage interface (module-provided MemoryStorage retains HardState, log entries, and snapshot), and the normal recovery path is NewRawNode/RestartNode, which reconstruct a fresh runtime from c.Storage.InitialState(). No wrapper is required by the testing contract.",
       "limitations": [
-        "Node.Stop is permanent for the instance; resumption requires constructing a new Node (RestartNode), not resuming the same object.",
-        "Network disconnect/partition alone (rafttest/network.go disconnect/connect) is not lifecycle unavailability because the node continues local protocol activity.",
-        "The pause/resume and stop/restart harness in rafttest/node.go is unexported (package-private), usable only by in-module tests.",
-        "MemoryStorage is volatile; crash-recovery semantics beyond in-process restart are not defined by the module."
+        "There is no dedicated crash/restart helper in rafttest; rafttest/interaction_env_handler_process_ready.go:46 has a 'TODO(tbg): Allow simulating crashes here', so the env path is a manual composition using exported fields.",
+        "MemoryStorage is in-memory only; real WAL/disk durability is outside the system boundary, so durability is whatever the target Storage implementation provides.",
+        "Catch-up after restart (re-replicating committed entries, responding to MsgApp) is protocol behavior the test drives and observes, not behavior implemented by the seam.",
+        "Pause/resume, disconnect, and message-loss primitives exist only in the unexported internal network harness (rafttest/node.go, rafttest/network.go) for same-package tests; they are not exported crash facilities."
       ],
       "suggested_direction": null,
       "entrypoints": [
-        "Node.Stop",
-        "StartNode",
-        "RestartNode",
-        "RawNode.Tick",
-        "RawNode.Step",
-        "RawNode.Ready",
-        "RawNode.Advance"
+        "raft.NewRawNode",
+        "raft.RestartNode",
+        "raft.StartNode",
+        "raft.Node.Stop",
+        "raft.MemoryStorage",
+        "rafttest.Node.RawNode",
+        "rafttest.Node.Storage",
+        "rafttest.Node.Config",
+        "rafttest.InteractionEnv.AddNodes"
       ],
       "usage_examples": [
-        "// Requires: n raft.Node, st *raft.MemoryStorage\nn.Stop()\nrn := raft.RestartNode(&raft.Config{ID: 1, ElectionTick: 10, HeartbeatTick: 1, Storage: st, MaxSizePerMsg: 1024 * 1024, MaxInflightMsgs: 256})\n_ = rn"
+        "// Requires: st *raft.MemoryStorage, cfg *raft.Config\ncfg.Storage = st\nrn, err := raft.NewRawNode(cfg)\nif err != nil {\n    panic(err)\n}\n_ = rn",
+        "// Requires: c *raft.Config\nn := raft.RestartNode(c)\n_ = n"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "Stop+RestartNode on the shared Storage and RawNode caller-driven scheduling are directly usable public compositions; no target code is needed for the availability cycle.",
+      "test_support_reason": "Both crash (discard the volatile runtime object, retain only what was written to the Storage implementation) and restart (NewRawNode/RestartNode on the same Storage) are directly usable compositions of existing public operations on all three paths; the testing contract explicitly does not require a convenience wrapper.",
       "suggested_changes": [],
       "execution_paths": [
-        "Node stop/reconstruction: Node.Stop() terminates the run loop (protocol activity ceases; later calls return ErrStopped); RestartNode(c) with the same Storage (e.g. MemoryStorage holding HardState+entries) reconstructs the same logical node, which resumes Ready/Advance and message processing.",
-        "RawNode caller-driven scheduling: the RawNode is purely call-driven (no goroutine); the test stops driving Tick/Step/Ready/Advance to make it unavailable and resumes driving the same instance to make it participate again."
+        "RawNode direct drive: crash = drop the RawNode reference keeping the *MemoryStorage; restart = NewRawNode(cfg with same cfg.Storage), fresh runtime restored from InitialState().",
+        "Node channel drive: crash = n.Stop() and discard the Node; restart = RestartNode(c) with the same MemoryStorage, spawning a fresh run loop.",
+        "rafttest InteractionEnv: crash = discard env.Nodes[i].RawNode while keeping the exported Node.Storage; restart = NewRawNode(&cfg) with the same storage assigned back to env.Nodes[i].RawNode (all fields exported)."
       ],
       "obligations": {
-        "stop_boundary": {
-          "status": "SATISFIED",
-          "evidence": [
-            {
-              "file": "node.go",
-              "symbol": "(*node).run",
-              "line": 454,
-              "reason": "The stop case closes done and returns, ending the select loop that services propc/recvc/tickc/readyc."
-            }
-          ],
-          "reason": "Node.Stop terminates the run loop and all channel servicing; for RawNode, protocol activity only exists when the caller drives it, so ceasing Tick/Step/Ready calls makes the node unavailable without network isolation."
-        },
-        "restart_or_recovery_boundary": {
-          "status": "SATISFIED",
-          "evidence": [
-            {
-              "file": "node.go",
-              "symbol": "RestartNode",
-              "line": 286,
-              "reason": "RestartNode calls NewRawNode(c) which loads InitialState from Config.Storage (raft.go:442-485) and starts the run loop."
-            }
-          ],
-          "reason": "The same logical node becomes available again by constructing a new Node/RawNode from the same application-owned Storage (RestartNode), which reloads HardState and ConfState via Storage.InitialState."
-        },
         "persistent_volatile_semantics_defined": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "storage.go",
-              "symbol": "MemoryStorage",
-              "line": 96,
-              "reason": "MemoryStorage holds hardState, snapshot, and entries in RAM; NewMemoryStorage (line 113) documents the in-memory nature."
+              "symbol": "Storage",
+              "line": 46,
+              "reason": "Interface documents that InitialState/Entries/Term/LastIndex/FirstIndex/Snapshot are the persisted state consulted on startup."
+            },
+            {
+              "file": "log_unstable.go",
+              "symbol": "unstable",
+              "line": 19,
+              "reason": "Documents that unstable log entries and snapshot are exactly the state not yet written to Storage, i.e. volatile until persisted."
             }
           ],
-          "reason": "The module defines one concrete Storage implementation, MemoryStorage, which is explicitly in-memory/volatile (survives node stop/restart within the process but not process exit); durable persistence is application-provided and out of boundary."
+          "reason": "The target defines persistence through the Storage interface (what must be retained) and the Ready contract (HardState/Entries/Snapshot must be saved to stable storage); the volatile runtime is the raft struct plus raftLog.unstable, and MemoryStorage concretely implements the persistent boundary."
+        },
+        "restart_or_recovery_boundary": {
+          "status": "SATISFIED",
+          "evidence": [
+            {
+              "file": "raft.go",
+              "symbol": "newRaft",
+              "line": 442,
+              "reason": "newRaft reads hs, cs from c.Storage.InitialState(), then r.loadState(hs) and confchange.Restore(cs), i.e. restart reconstruction from Storage."
+            },
+            {
+              "file": "node.go",
+              "symbol": "RestartNode",
+              "line": 286,
+              "reason": "Public recovery path that builds a new Node runtime from the caller's Config (including Storage) and starts a fresh run loop."
+            }
+          ],
+          "reason": "NewRawNode and RestartNode are the normal recovery entrypoints: newRaft calls c.Storage.InitialState(), restores HardState via loadState, and restores membership via confchange.Restore, constructing a fresh runtime from retained state."
         },
         "state_ownership_defined": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "node.go",
-              "symbol": "Ready",
-              "line": 49,
-              "reason": "Ready documents that Entries/HardState/Snapshot are written to stable storage by the application, defining application ownership of persisted state."
+              "file": "raft.go",
+              "symbol": "Config",
+              "line": 124,
+              "reason": "Config.Storage is the application-provided Storage; comment states raft reads persisted entries/states out of Storage when restarting."
             },
             {
-              "file": "raft.go",
-              "symbol": "Config.Storage",
-              "line": 140,
-              "reason": "Config.Storage is the application-supplied storage the raft instance reads from, establishing ownership at the boundary."
+              "file": "storage.go",
+              "symbol": "MemoryStorage",
+              "line": 96,
+              "reason": "Module-provided implementation that owns hardState, snapshot, and ents behind a mutex, i.e. the retained-state owner."
             }
           ],
-          "reason": "Config.Storage is owned by the application; raft reads state from it and returns writes to the application through Ready (HardState/Entries/Snapshot), which the application persists back via Storage.Append/SetHardState."
+          "reason": "The target defines that the application owns and provides the Storage (Config.Storage) and writes Ready-derived state into it (Append/SetHardState/ApplySnapshot), while raft owns only volatile state (raft struct fields, unstable log)."
+        },
+        "stop_boundary": {
+          "status": "SATISFIED",
+          "evidence": [
+            {
+              "file": "node.go",
+              "symbol": "node.run",
+              "line": 454,
+              "reason": "On n.stop the run loop closes n.done and returns, terminating protocol activity of that runtime instance."
+            },
+            {
+              "file": "rafttest/node.go",
+              "symbol": "node.start",
+              "line": 95,
+              "reason": "Internal harness stop path calls n.Stop(), sets n.Node = nil, and discards in-memory state while retaining storage."
+            }
+          ],
+          "reason": "Protocol activity stops by terminating the runtime object: Node.Stop closes done and exits run(), discarding the goroutine and volatile raft state; discarding a RawNode stops all activity since it only advances when driven; the internal harness additionally documents that all in-memory node state is discarded on stop."
         }
       }
     },
@@ -255,74 +271,71 @@
       "status": "PATCHABLE",
       "evidence": [
         {
+          "file": "rawnode.go",
+          "symbol": "RawNode.Ready",
+          "line": 133,
+          "reason": "Ready() returns Ready whose Messages field carries outbound pb.Message instances; acceptReady sets raft.msgs = nil, transferring exclusive ownership to the caller and making the caller's slice the only retention point."
+        },
+        {
+          "file": "rawnode.go",
+          "symbol": "readyWithoutAccept",
+          "line": 147,
+          "reason": "rd.Messages = r.msgs moves the outbound message slice out of the raft state machine before delivery; nothing delivers automatically, so delivery resumes only on a later test action."
+        },
+        {
           "file": "rafttest/interaction_env.go",
-          "symbol": "InteractionEnv.Messages",
-          "line": 52,
-          "reason": "env.Messages []pb.Message is the exported in-flight message cache; it is test-visible and holds target-native pb.Message instances with routing info (To/From)."
+          "symbol": "InteractionEnv",
+          "line": 49,
+          "reason": "InteractionEnv owns the in-flight message cache as the exported field Messages []pb.Message and Nodes []Node, i.e. an env-owned capture cache around public RawNode objects."
         },
         {
           "file": "rafttest/interaction_env_handler_process_ready.go",
-          "symbol": "(*InteractionEnv).ProcessReady",
+          "symbol": "InteractionEnv.ProcessReady",
           "line": 45,
-          "reason": "ProcessReady takes Ready, writes storage (processAppend/processApply), appends outbound messages to env.Messages (line 74), and only then calls Advance — the capture point owns continuation, so no second consumer races delivery."
+          "reason": "ProcessReady drains a node's Ready, appends non-local Messages to env.Messages (and local MsgStorageAppend/Apply to AppendWork/ApplyWork), and calls Advance, i.e. the harness-side capture step."
         },
         {
           "file": "rafttest/interaction_env_handler_deliver_msgs.go",
-          "symbol": "(*InteractionEnv).DeliverMsgs",
+          "symbol": "InteractionEnv.DeliverMsgs",
           "line": 81,
-          "reason": "DeliverMsgs removes handled messages from env.Messages (splitMsgs, line 85) and delivers or drops them; a handled message is removed whether delivered, dropped, or failed — the cache-effect semantics of the controlled delivery action."
-        },
-        {
-          "file": "rafttest/interaction_env_handler_stabilize.go",
-          "symbol": "splitMsgs",
-          "line": 117,
-          "reason": "splitMsgs selects messages by recipient and type without reordering, enabling enumeration/selection over the cache; it is unexported, so public Take is only reachable through DeliverMsgs or manual field manipulation."
-        },
-        {
-          "file": "log_unstable.go",
-          "symbol": "(*unstable).nextEntries",
-          "line": 96,
-          "reason": "nextEntries returns a sub-slice of u.entries sharing the backing array; the slice comment (log_unstable.go:220-234) and TODO state these slices 'may bubble up all the way to the application code through Ready struct', proving cached message/Ready content aliases unstable protocol state (snapshot-safety gap)."
-        },
-        {
-          "file": "node.go",
-          "symbol": "(*node).Ready",
-          "line": 552,
-          "reason": "Node.Ready exposes an observable channel of Ready values; without an additional harness this is only a primitive (one-shot/observable-channel), not a module-owned retention cache."
+          "reason": "DeliverMsgs removes from env.Messages all messages matching recipient+type and delivers or drops them; it is a bulk filter over matching values, not an exact-instance Take/Drop API."
         }
       ],
-      "boundary": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.",
-      "gap": "Captured pb.Message values share nested slices (Entries, Context, Responses, Snapshot.Data) with the sender's unstable log/snapshot; mutating a cached message can corrupt protocol state because no deep copy is made at capture (ProcessReady appends the message by value only). The async Node path has no module-provided capture cache at all.",
-      "reason": "The rafttest InteractionEnv path is a genuine controlled cache: ProcessReady captures Ready.Messages into env.Messages before any delivery, and delivery resumes only via the test action DeliverMsgs/Stabilize; enumeration, drop, clear, and instance references (pb.Message values) are available. However the cached messages are not snapshot-safe (their Entries/Context/Responses/Snapshot slices alias the sender's unstable log/snapshot, as the module itself documents in log_unstable.go), and the async Node path has no module-provided retention cache (only the Ready-channel primitive; rafttest/node.go sends immediately). Both gaps are closable with low-intrusion changes.",
+      "boundary": null,
+      "gap": "No path provides a complete capture cache. Direct paths: Ready.Messages/Ready-channel hand the message instances to the test, but the retaining collection is caller-created and all Take/Drop/Clear logic must be hand-written. rafttest path: env.Messages is an env-owned cache with enumeration and bulk DeliverMsgs/Drop by recipient+type, but exact-instance Take, exact-instance Drop, and Clear are missing.",
+      "reason": "All three discovered paths retain controlled protocol output before delivery (Ready.Messages is moved out of the raft state machine; rafttest moves it into env.Messages), but none exposes a complete capture cache: the direct RawNode/Node paths hand messages to a caller-created slice (an explicit primitive), and rafttest's env.Messages is only manipulated through bulk recipient/type DeliverMsgs without exact-instance Take/Drop/Clear operations. The missing cache operations are low-intrusion additions that do not change protocol semantics.",
       "limitations": [
-        "splitMsgs is unexported; a separated public Take (remove+return selected message) must be hand-rolled on the exported env.Messages field.",
-        "Node-path capture requires a caller-built harness; the in-module rafttest node harness sends Ready.Messages immediately (rafttest/node.go:85-91), so it is not a capture point.",
-        "AsyncStorageWrites mode routes local MsgStorageAppend/MsgStorageApply into per-node AppendWork/ApplyWork queues rather than env.Messages; those local queues are drained by ProcessAppendThread/ProcessApplyThread.",
-        "Ready.Entries/CommittedEntries themselves also alias the unstable log (documented in log_unstable.go), so observation through Ready shares the same caveat."
+        "Ready.Entries and Ready.CommittedEntries alias the unstable log's backing array until stableTo/applyCommittedEntries; the documented read-only rule on Ready fields is not a safe snapshot for mutation, so capture claims cover Ready.Messages only.",
+        "pb.Message values contain slice fields (Entries, Context, Responses); when a cached message is later stepped into another node, raft log entries alias the message's entry data (append copies struct values but not Data payloads).",
+        "In AsyncStorageWrites mode the local-thread messages (MsgStorageAppend/MsgStorageApply) are captured separately in AppendWork/ApplyWork and their Responses re-enter env.Messages; this remains part of the same rafttest route."
       ],
-      "suggested_direction": "Add mutation-safe capture (deep copy) to rafttest.ProcessReady and export the selection/take helpers; optionally expose a Node-path harness.",
+      "suggested_direction": "Extend rafttest with a small cache facade (Take/Drop/Clear over env.Messages) and add an equivalent thin wrapper for direct RawNode/Node driving; both are additive and do not alter protocol behavior.",
       "entrypoints": [
+        "raft.RawNode.Ready",
+        "raft.RawNode.Advance",
+        "raft.Node.Ready",
+        "raft.Node.Advance",
+        "rafttest.InteractionEnv.ProcessReady",
         "rafttest.InteractionEnv.Messages",
-        "rafttest.ProcessReady",
-        "rafttest.DeliverMsgs",
-        "rafttest.Stabilize",
-        "rafttest.SendSnapshot",
-        "Node.Ready",
-        "RawNode.Ready"
+        "rafttest.InteractionEnv.DeliverMsgs",
+        "rafttest.InteractionEnv.ProcessAppendThread",
+        "rafttest.InteractionEnv.ProcessApplyThread"
       ],
       "usage_examples": [
-        "// Requires: env *rafttest.InteractionEnv\n_ = env.ProcessReady(0)\nmsgs := env.Messages\nenv.Messages = nil // clear the cache\n_ = msgs"
+        "// Requires: rn *raft.RawNode, st *raft.MemoryStorage, peers map[uint64]*raft.RawNode\nif rn.HasReady() {\n    rd := rn.Ready()\n    st.Append(rd.Entries)\n    for _, m := range rd.Messages {\n        peers[m.To].Step(m)\n    }\n    rn.Advance(rd)\n}",
+        "// Requires: env *rafttest.InteractionEnv\nif err := env.ProcessReady(0); err != nil {\n    panic(err)\n}\nenv.DeliverMsgs(-1, rafttest.Recipient{ID: 2})"
       ],
       "existing_test_interface_complete": false,
-      "test_support_reason": "The InteractionEnv path already provides the controlled pre-delivery cache, enumeration, drop/clear, instance references, and injection pairing, but it does not satisfy the snapshot-safety contract (shared nested slices alias the sender's unstable log), and the Node path exposes only the Ready-channel primitive.",
+      "test_support_reason": "The capture mechanics (output retained before delivery, single consumer, no racing) are already correct on all paths, but the cache operations are not: the direct paths expose a raw output collection (caller-created slice, explicitly a primitive per the contract), and rafttest exposes only bulk recipient/type selection plus an exported slice that the consumer would have to hand-edit for exact-instance Take/Drop/Clear.",
       "suggested_changes": [
-        "Deep-copy captured messages when ProcessReady appends them to env.Messages (e.g., Marshal/Unmarshal or explicit slice copies of Entries/Context/Responses/Snapshot), preserving capture semantics while making cached instances mutation-safe.",
-        "Export a Take helper in rafttest (e.g., TakeMsgs(recipient, typ) returning removed messages plus routing info) so the separated form is public.",
-        "Add an exported capture-and-deliver wrapper for the Node path (or export a Ready-sink harness in rafttest) so the async path has a module-owned cache."
+        "Add exported exact-instance cache operations to rafttest over env.Messages, e.g. TakeMsg(pred func(raftpb.Message) bool) (raftpb.Message, bool) removing and returning one selected message with its routing fields, DropMsgs(pred), and ClearMessages(), keeping DeliverMsgs as the combined delivery call.",
+        "Add a thin exported capture wrapper for the direct paths (e.g. in rafttest: a Driver type wrapping *raft.RawNode that owns a message cache populated from Ready().Messages with Take/Drop/Clear and Advance), so the RawNode and Node direct routes gain a complete capture interface without changing protocol semantics.",
+        "Optionally export an exact-instance helper that preserves message order and reports the target node index/id for each taken message so the test can map to its own runtime objects."
       ],
       "execution_paths": [
-        "rafttest InteractionEnv message bus (RawNode-based): Ready.Messages (peer messages; local MsgStorageAppend/Apply routed to AppendWork/ApplyWork) are appended to env.Messages by ProcessReady before Advance; messages stay in the cache until DeliverMsgs (deliver or drop) or Stabilize; injection back through env.Nodes[i].Step on the same cache.",
-        "Node async Ready/Step path: outbound protocol output arrives on the Ready() channel in Ready.Messages; the test consumer is the delivery agent and there is no module-owned retention cache (caller-created collection is a primitive); the module's own rafttest node harness sends messages immediately with random delay."
+        "RawNode direct drive: output = rn.Ready().Messages (ownership transferred, r.msgs cleared); no automatic delivery; continuation via rn.Advance(rd). Cache = caller-held slice (primitive; enumerate by index, Take/Drop/Clear hand-written). Input boundary = rn.Step; target = test-owned RawNode instances; routing via m.To/m.From.",
+        "Node channel drive: output = Ready delivered on readyc; messages handed to the caller; continuation via n.Advance(). Cache = caller-held slice (primitive). Input boundary = n.Step(ctx,m); targets mapped by m.To.",
+        "rafttest InteractionEnv: output = ProcessReady(idx) moves non-local messages into env.Messages (env-owned cache; with AsyncStorageWrites, MsgStorageAppend/Apply go to AppendWork/ApplyWork and their responses re-enter env.Messages via ProcessAppendThread/ProcessApplyThread). Delivery only via DeliverMsgs/Stabilize; enumerate via exported field; no exact-instance Take/Drop; no Clear."
       ],
       "obligations": {}
     },
@@ -330,66 +343,60 @@
       "status": "PATCHABLE",
       "evidence": [
         {
-          "file": "rafttest/interaction_env_handler_deliver_msgs.go",
-          "symbol": "(*InteractionEnv).DeliverMsgs",
-          "line": 81,
-          "reason": "Combined single-call injection: removes selected messages from env.Messages, validates the recipient mapping (toIdx := int(msg.To-1)), invokes the normal input env.Nodes[toIdx].Step(msg), and reports errors; Drop recipients skip Step. Cache effects are explicit: handled messages are removed on delivery, drop, or failure."
-        },
-        {
-          "file": "rafttest/interaction_env_handler_stabilize.go",
-          "symbol": "splitMsgs",
-          "line": 117,
-          "reason": "Selection of cached messages by recipient/type that preserves order and content, enabling separated Take-plus-input injection (combined with Nodes[i].Step); refuses to drop local messages."
-        },
-        {
-          "file": "rafttest/interaction_env_handler_send_snapshot.go",
-          "symbol": "(*InteractionEnv).SendSnapshot",
-          "line": 34,
-          "reason": "Injects a MsgSnap (the selected cached instance itself) into env.Messages for later delivery through the same DeliverMsgs path, demonstrating response/request direction preservation for snapshot exchange."
-        },
-        {
           "file": "rawnode.go",
-          "symbol": "(*RawNode).Step",
+          "symbol": "RawNode.Step",
           "line": 118,
-          "reason": "RawNode.Step is the normal protocol input boundary used by DeliverMsgs; it enforces local-message and unknown-peer filtering before raft.Step."
+          "reason": "RawNode.Step is the documented normal protocol input boundary for inbound messages of any direction (append, vote, heartbeat, snapshot, responses), validating local/response routing before stepping into the state machine."
         },
         {
           "file": "node.go",
-          "symbol": "(*node).Step",
+          "symbol": "Node.Step",
           "line": 478,
-          "reason": "Node.Step routes non-proposal messages via recvc to the run loop — the async-path input boundary; it is a standalone input function without a module-owned paired capture cache."
+          "reason": "Channel-based Node API delivers inbound pb.Message to the run loop, the documented input boundary of the Node path."
+        },
+        {
+          "file": "rafttest/interaction_env_handler_deliver_msgs.go",
+          "symbol": "InteractionEnv.DeliverMsgs",
+          "line": 81,
+          "reason": "Combined single-call injection: removes matching messages from env.Messages and steps them into env.Nodes[To-1] (or drops them); message content and To destination are preserved, and the cache entry is removed before Step runs, with Step errors reported to output."
+        },
+        {
+          "file": "rafttest/interaction_env_handler_stabilize.go",
+          "symbol": "InteractionEnv.Stabilize",
+          "line": 49,
+          "reason": "Repeatedly runs ProcessReady and DeliverMsgs to a fixed point; the harness-level delivery loop for all message families on the same cache."
         }
       ],
-      "boundary": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.",
-      "gap": "The Node async path has no module-owned cache to pair with its Step input, and the selection helper splitMsgs is unexported, so the separated injection form on the env path must be hand-rolled against the exported env.Messages field.",
-      "reason": "On the InteractionEnv path, injection is complete in both accepted forms: combined single-call DeliverMsgs (locates cached instances by recipient/type, removes them from env.Messages, binds the real target via msg.To, invokes the normal input RawNode.Step, and drops when requested) and separated form (remove a message from the exported env.Messages field, then call env.Nodes[i].Step). Message direction is preserved (requests and responses both enter their normal Step handler), and the completion mechanism is preserved because responses flow back through the same env.Messages cache. The async Node path only offers the standalone Node.Step input without a module-owned paired cache, and splitMsgs (selection helper) is unexported.",
+      "boundary": null,
+      "gap": "No complete injection interface: separated form (Take + Step) lacks a cache Take operation on all paths (the test hand-writes slice removal), and the combined single-call form (DeliverMsgs) selects messages in bulk by recipient/type rather than by exact instance.",
+      "reason": "Injection into the normal protocol input boundary (Step) exists on every path and preserves message content and destination, but the Take half is hand-written on the direct paths (separated form without a cache Take operation) and rafttest's combined DeliverMsgs is bulk by recipient/type rather than exact-instance selection. Completing exact-instance Take plus the documented input call is a low-intrusion additive change.",
       "limitations": [
-        "DeliverMsgs assumes node IDs equal index+1 (toIdx := int(msg.To-1)); messages to not-yet-instantiated recipients can only be dropped.",
-        "Local messages (From==To or local targets) cannot be dropped by DeliverMsgs (isLocalMsg guard) — reliable delivery is enforced.",
-        "In AsyncStorageWrites mode, storage responses (MsgStorageAppendResp/ApplyResp) are generated by ProcessAppendThread/ProcessApplyThread and appended to env.Messages; the test must process the local AppendWork/ApplyWork queues to complete exchanges.",
-        "Injection on the Node path relies on the test's own cache (caller-created collection = primitive)."
+        "DeliverMsgs removes the selected cache entries before calling Step; a synchronous Step error does not restore the entry to env.Messages (error is reported to the output buffer instead).",
+        "There is no asynchronous/unconfirmed delivery mode in the library; request/response completion is preserved because responses re-enter the same path through the target's Ready and are delivered via the same cache.",
+        "Injecting a fabricated response instead of the captured instance is not provided for and is not a substitute; the cached instance itself must enter Step."
       ],
-      "suggested_direction": "Publicize the Take operation and pair the Node path with a module-owned cache; the env path already satisfies combined and separated injection.",
+      "suggested_direction": "Complete both accepted forms on every path: exact-instance Take on the shared capture cache plus the documented Step input, and an exact-instance combined DeliverMsg on the rafttest cache.",
       "entrypoints": [
-        "rafttest.DeliverMsgs",
-        "rafttest.SendSnapshot",
-        "rafttest.InteractionEnv.Nodes",
-        "RawNode.Step",
-        "Node.Step"
+        "raft.RawNode.Step",
+        "raft.Node.Step",
+        "rafttest.InteractionEnv.DeliverMsgs",
+        "rafttest.InteractionEnv.Stabilize"
       ],
       "usage_examples": [
-        "// Requires: env *rafttest.InteractionEnv\nn := env.DeliverMsgs(-1, rafttest.Recipient{ID: 2})\n_ = n"
+        "// Requires: env *rafttest.InteractionEnv\nenv.DeliverMsgs(-1, rafttest.Recipient{ID: 2, Drop: true})",
+        "// Requires: rn *raft.RawNode\n_ = rn.Step(raftpb.Message{Type: raftpb.MsgHeartbeat, From: 2, To: 1, Term: 3})"
       ],
       "existing_test_interface_complete": false,
-      "test_support_reason": "DeliverMsgs is a complete combined single-call injection on the env path (cache removal, target binding, normal input, drop), and separated injection is achievable through the exported env.Messages field plus Step; the Node path and the public separated-Take helper are missing.",
+      "test_support_reason": "The input mechanics are the genuine protocol boundaries (Step) and rafttest's DeliverMsgs is a real combined call that preserves direction and updates the cache, but exact-instance selection is missing everywhere: on the direct paths Take is hand-written slice surgery, and DeliverMsgs operates on all messages matching a recipient/type pair.",
       "suggested_changes": [
-        "Export splitMsgs (or add TakeMsgs) in rafttest so the separated Take-plus-input form is a public cache operation.",
-        "Add a module-owned capture/deliver harness for the Node path (export a wrapper over rafttest/node.go's node or a Ready-sink with delivery control).",
-        "Document or harden DeliverMsgs target binding so messages are validated before Step (e.g., return an error instead of panicking on out-of-range recipients)."
+        "Add an exported TakeMsg (exact-instance remove-and-return with routing) to rafttest so the separated form (TakeMsg + node.Step) is complete on the same cache as capture.",
+        "Extend DeliverMsgs (or add DeliverMsg) to accept an exact instance/predicate so the combined single-call form can bind one selected message to its To target, preserving the documented cache effect (removal before Step, error reporting).",
+        "For the direct RawNode/Node paths, add the thin wrapper from the capture suggestion with a Deliver method that performs Take-plus-Step on the same cache, preserving content, destination, and completion."
       ],
       "execution_paths": [
-        "rafttest InteractionEnv message bus (RawNode-based): cached messages selected from env.Messages are delivered to their recipient via env.Nodes[msg.To-1].Step (combined DeliverMsgs) or removed manually and stepped (separated form); responses generated by the receiver re-enter the same cache; drop supported via Recipient.Drop.",
-        "Node async Ready/Step path: Node.Step is the normal input boundary, but there is no module-owned cache paired with capture on this path; injection here is a standalone input function (primitive)."
+        "RawNode direct drive: separated form only — the test removes a message from its caller-owned slice and calls the target's rn.Step(m); targets are the test's RawNode instances, routing from m.To; request/response completion flows back through the target's next Ready.",
+        "Node channel drive: separated form — test takes from its caller-owned slice and calls n.Step(ctx, m); completion via the target's readyc/Advance cycle.",
+        "rafttest InteractionEnv: combined single-call form — DeliverMsgs(typ, Recipient{ID:to}) removes matching messages from env.Messages and steps them into env.Nodes[to-1].Step; Drop variant removes without delivering; cache effects: the entry is removed before Step, and Step errors are written to env.Output."
       ],
       "obligations": {}
     },
@@ -398,77 +405,66 @@
       "evidence": [
         {
           "file": "status.go",
-          "symbol": "getStatus",
-          "line": 68,
-          "reason": "Status aggregates BasicStatus (ID, HardState term/vote/commit, SoftState role/lead, Applied, LeadTransferee), cloned Config, and a freshly allocated Progress map."
+          "symbol": "getProgressCopy",
+          "line": 44,
+          "reason": "Copies each tracker.Progress and clones Inflights, so leader Progress observation does not alias live tracker state."
         },
         {
           "file": "status.go",
-          "symbol": "getProgressCopy",
-          "line": 44,
-          "reason": "Progress values are copied and Inflights is cloned (p.Inflights = pr.Inflights.Clone()), making the returned progress snapshot mutation-safe."
+          "symbol": "getStatus",
+          "line": 68,
+          "reason": "getStatus builds Status from BasicStatus (ID, HardState term/vote/commit, SoftState lead/role, applied) plus a cloned tracker.Config, giving role/term/commit/applied/lead observation."
         },
         {
           "file": "rawnode.go",
-          "symbol": "(*RawNode).BasicStatus",
-          "line": 505,
-          "reason": "BasicStatus returns the allocation-free value-typed snapshot (role, term, commit, applied) without internal pointers."
+          "symbol": "RawNode.Status",
+          "line": 498,
+          "reason": "Public accessor returning a deep-copied Status snapshot on the RawNode path; BasicStatus (rawnode.go:505) and WithProgress (rawnode.go:521) are allocation-lean alternatives."
         },
         {
-          "file": "rawnode.go",
-          "symbol": "(*RawNode).WithProgress",
-          "line": 521,
-          "reason": "WithProgress hands the visitor a copy of each Progress with Inflights nil'ed (rawnode.go:528), avoiding exposure of the live inflight structure."
+          "file": "rafttest/interaction_env_handler_raft_log.go",
+          "symbol": "InteractionEnv.RaftLog",
+          "line": 33,
+          "reason": "Exported rafttest handler reading FirstIndex/LastIndex/Entries from the node's Storage to print the log range, i.e. log-range observation on the harness path."
         },
         {
           "file": "storage.go",
-          "symbol": "(*MemoryStorage).Entries",
+          "symbol": "MemoryStorage.Entries",
           "line": 135,
-          "reason": "Entries returns a full-slice-expression capped slice (line 155) and the Storage interface documents that returned entries must not be mutated and that the caller owns the slice — a snapshot-safe log-range interface."
-        },
-        {
-          "file": "rafttest/interaction_env_handler_raftstate.go",
-          "symbol": "handleRaftState",
-          "line": 36,
-          "reason": "raft-state prints role/term/lead per node from n.Status(), and status/raft-log handlers (interaction_env_handler_status.go:33, interaction_env_handler_raft_log.go:33) expose progress and the storage log range."
-        },
-        {
-          "file": "node.go",
-          "symbol": "(*node).Status",
-          "line": 574,
-          "reason": "Node.Status returns the same Status snapshot through the status channel, providing the async-path observation entrypoint."
+          "reason": "Returns a capped slice with full slice expression so appends cannot corrupt storage; element mutation still aliases (see limitation), reads of term/index/data are valid observations."
         }
       ],
-      "boundary": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.",
+      "boundary": null,
       "gap": null,
-      "reason": "Status/BasicStatus expose role (SoftState.RaftState), term, vote, commit (HardState), applied index, lead, and lead transferee on both Node and RawNode; WithProgress exposes per-peer progress; the log range is available through the Storage interface (module-provided MemoryStorage.FirstIndex/LastIndex/Entries) and rafttest RaftLog/raft-state/status handlers. Snapshot safety holds: the Progress map is freshly allocated with Inflights cloned, Config is cloned, BasicStatus is value-typed, and MemoryStorage.Entries returns a capped slice with a documented non-mutation contract.",
+      "reason": "Every runtime path has a complete snapshot-safe observation interface: Status()/BasicStatus() on RawNode and Node return role (SoftState.RaftState), term, vote, commit, applied, lead, lead-transferee, and (on leaders) Progress, with Progress copies and Inflights/Config deep-cloned; rafttest wraps the same via Status/RaftState handlers. Log-range reads via Storage.Entries are available but carry an element-aliasing caveat recorded as a limitation, not part of the positive claim.",
       "limitations": [
-        "Status.Progress is only populated on leaders (status.go:71-73); non-leader progress observation requires rafttest handlers or Storage.",
-        "The unstable (unpersisted) tail of the log is not part of Status; it is visible through Ready and rafttest RaftLog (storage-backed).",
-        "Storage.Entries callers must honor the documented non-mutation contract for returned entries.",
-        "Node.Status returns an empty Status if the node is stopped (node.go:579-581)."
+        "MemoryStorage.Entries (and hence rafttest RaftLog) returns slices whose element fields (e.g. Data) still alias the storage's entries; the documented 'must not mutate' rule is not element-level snapshot isolation. Log-range observation is therefore a weaker primitive than Status and is excluded from the positive snapshot-safety claim.",
+        "Randomized election timeout and pending-conf-change internals are not exposed by Status; they are not part of the claimed observation set.",
+        "The Progress map is only populated on the leader (getStatus), matching the documented Status contract."
       ],
       "suggested_direction": null,
       "entrypoints": [
-        "Node.Status",
-        "RawNode.Status",
-        "RawNode.BasicStatus",
-        "RawNode.WithProgress",
-        "rafttest.Status",
-        "rafttest.RaftLog",
-        "MemoryStorage.FirstIndex",
-        "MemoryStorage.LastIndex",
-        "MemoryStorage.Entries"
+        "raft.RawNode.Status",
+        "raft.RawNode.BasicStatus",
+        "raft.RawNode.WithProgress",
+        "raft.Node.Status",
+        "rafttest.InteractionEnv.Status",
+        "rafttest.InteractionEnv.RaftLog",
+        "raft.MemoryStorage.Entries",
+        "raft.MemoryStorage.FirstIndex",
+        "raft.MemoryStorage.LastIndex"
       ],
       "usage_examples": [
-        "// Requires: rn *raft.RawNode\nst := rn.Status()\nfmt.Println(st.RaftState, st.Term, st.Commit, st.Applied)"
+        "// Requires: rn *raft.RawNode\nst := rn.Status()\nfmt.Println(st.RaftState, st.Term, st.Commit, st.Applied)",
+        "// Requires: rn *raft.RawNode\nbs := rn.BasicStatus()\n_ = bs.Lead"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "Status/BasicStatus/WithProgress are complete snapshot-safe interfaces for role, term, vote, commit, applied, lead, and progress; log range is covered by the module-provided MemoryStorage and rafttest handlers with documented ownership semantics.",
+      "test_support_reason": "Status/BasicStatus are documented public accessors that deep-copy the claimed minimum state (role, term, commit, applied, lead, progress, config), so no new target code is needed for observation on any path; rafttest handlers are thin wrappers over the same snapshot-safe data.",
       "suggested_changes": [],
       "execution_paths": [
-        "Node/RawNode status observation: Status(), BasicStatus(), WithProgress() produce point-in-time snapshots of role, term, vote, commit, applied, lead, and per-peer progress; rafttest handlers (raft-state, status, raft-log) are accessors over the same Status/Storage state.",
-        "Log-range observation via Storage: MemoryStorage (and the rafttest Storage interface) exposes FirstIndex/LastIndex/Entries for the persisted log; the unstable tail is observable through Ready/rafttest ProcessReady."
+        "RawNode direct drive: rn.Status()/rn.BasicStatus()/rn.WithProgress() expose role, term, commit, applied, lead, and leader progress as snapshot-safe values.",
+        "Node channel drive: n.Status() routes to getStatus on the raft goroutine and returns the same deep-copied Status.",
+        "rafttest InteractionEnv: env.Status(idx) and handleRaftState print Status-derived state; env.RaftLog(idx) reads the retained Storage for log-range observation."
       ],
       "obligations": {}
     },
@@ -479,129 +475,110 @@
           "file": "raft.go",
           "symbol": "resetRandomizedElectionTimeout",
           "line": 2049,
-          "reason": "randomizedElectionTimeout = electionTimeout + globalRand.Intn(electionTimeout); this is the only protocol-relevant random choice."
+          "reason": "Draws randomizedElectionTimeout = electionTimeout + globalRand.Intn(electionTimeout); the value gates election start (pastElectionTimeout) and is reset on follower/candidate transitions."
         },
         {
           "file": "raft.go",
           "symbol": "lockedRand",
           "line": 91,
-          "reason": "globalRand draws from crypto/rand (rand.Int(rand.Reader, ...)) under a mutex; it is a shared, unseedable source, so a fixed global sequence is not reproducible."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "(*raft).reset",
-          "line": 784,
-          "reason": "reset() calls resetRandomizedElectionTimeout on every state transition (becomeFollower/becomeCandidate/becomeLeader), re-randomizing any pinned value."
+          "reason": "globalRand is a shared crypto/rand source (rand.Reader) with no seeding or injection point from Config."
         },
         {
           "file": "raft_test.go",
           "symbol": "SetRandomizedElectionTimeout",
           "line": 4098,
-          "reason": "The only setter is exported from a _test.go file (package raft tests), so it exists only in module test builds and is unavailable to external consumers of the library."
+          "reason": "The only setter is exported but defined in a _test.go file (package raft); it is compiled only for the module's own tests and is not callable by external consumers of the module."
         },
         {
-          "file": "rafttest/interaction_env_handler_set_randomized_election_timeout.go",
-          "symbol": "handleSetRandomizedElectionTimeout",
-          "line": 24,
-          "reason": "The rafttest handler invokes env.Options.SetRandomizedElectionTimeout(RawNode, timeout); interaction_test.go:32 wires it to raft.SetRandomizedElectionTimeout, so the harness works only when the module's own test build supplies the function."
-        },
-        {
-          "file": "testdata/prevote_checkquorum.txt",
-          "symbol": "set-randomized-election-timeout",
-          "line": 53,
-          "reason": "In-module interaction tests pin per-node randomized election timeouts, demonstrating the (transient) per-node control path."
+          "file": "rafttest/interaction_env.go",
+          "symbol": "InteractionOpts.SetRandomizedElectionTimeout",
+          "line": 31,
+          "reason": "rafttest exposes a hook for setting the timeout, but an external consumer cannot implement it because it requires access to unexported raft state; the module's own test plumbs it with the test-file-only function (interaction_test.go:32)."
         }
       ],
-      "boundary": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.",
-      "gap": "No reproducible protocol randomness exists for external consumers: the shared crypto/rand source cannot be seeded, the only per-node setter is a test-only export, and reset() re-randomizes on every state transition, so the same initial state and control parameters do not reliably reproduce the same election-timeout choices.",
-      "reason": "The only protocol-relevant randomness is randomizedElectionTimeout, drawn from a global, unseedable crypto/rand-backed lockedRand on every reset(). Per-node control exists only through a test-only export (raft.SetRandomizedElectionTimeout in raft_test.go) wired into rafttest's InteractionOpts hook, and it is transient because reset() re-randomizes on every state transition. No exported library API or Config option provides reproducible randomness for external consumers; adding a Config-level override or injectable source is low-intrusion and preserves the production default.",
+      "boundary": null,
+      "gap": "Election-timeout draws come from globalRand (crypto/rand, raft.go:2050) with no exported setter or seed for consumers; the drawn value is not exposed by Status or Ready; rafttest's InteractionOpts.SetRandomizedElectionTimeout hook has no externally implementable implementation (raft.SetRandomizedElectionTimeout is test-file-only).",
+      "reason": "The only protocol-relevant randomness is the randomized election timeout drawn from a shared crypto/rand-backed global source (resetRandomizedElectionTimeout), which cannot be seeded, set, or observed by an external consumer: the only setter (raft.SetRandomizedElectionTimeout) lives in raft_test.go and is unavailable to module consumers, and the rafttest InteractionOpts hook cannot be implemented from outside the package. Exposing the draw as a public setter/hook is a low-intrusion change that preserves the production default.",
       "limitations": [
-        "Concurrent multi-node tests cannot control which instance receives which random timeout because the global lockedRand is shared and unseedable.",
-        "A pinned timeout survives only until the next reset(); tests must re-pin after state transitions.",
-        "Harness-level randomness (rafttest/network.go rand.New(rand.NewSource(1)) for message drop/delay and rafttest/node.go send jitter) does not affect protocol decisions and is separately seeded.",
-        "The value domain is [ElectionTick, 2*ElectionTick-1]; the test-only setter does not validate the domain."
+        "Non-protocol randomness (network drop/delay in the unexported rafttest/network.go harness, send-delay sleeps in rafttest/node.go) is out of the protocol boundary or setup-only and is not counted.",
+        "The draw value is not exposed by Status/BasicStatus/Ready, so without a setter the test cannot learn the selected value before scheduling dependent work.",
+        "Randomization is reset on every follower/candidate transition; reproducible control must cover each reset."
       ],
-      "suggested_direction": "Add a Config-level per-node election-timeout override (or injectable random source) so the same initial state and control parameters reproduce the same choices while preserving the default.",
+      "suggested_direction": "Expose the existing test-only setter as a production RawNode method (or a Config hook) so external consumers can supply deterministic election-timeout draws; keep globalRand as the default source.",
       "entrypoints": [
-        "raft.SetRandomizedElectionTimeout (test-only export, raft package test builds only)",
-        "rafttest.InteractionOpts.SetRandomizedElectionTimeout",
-        "rafttest.Handle (set-randomized-election-timeout command)"
+        "rafttest.InteractionOpts.SetRandomizedElectionTimeout"
       ],
       "usage_examples": [],
       "existing_test_interface_complete": false,
-      "test_support_reason": "The working control path exists only inside the module's own test builds and is transient across state transitions; the exported library has no reproducible randomness mechanism for the declared consumer.",
+      "test_support_reason": "The election-timeout draw is protocol-relevant (gates elections), but no externally callable interface exists: the rafttest hook cannot be implemented without internal access, the production source is shared crypto/rand, and the drawn value is not observable, so the test can neither supply nor learn each draw.",
       "suggested_changes": [
-        "Add a Config option (e.g., RandomizedElectionTimeout int, 0 = current random behavior) honored in resetRandomizedElectionTimeout, preserving the production default and giving per-node reproducible choices.",
-        "Alternatively, promote an exported SetRandomizedElectionTimeout on RawNode into the library (non-test build) with domain validation.",
-        "Or add an injectable rand source to Config used only for election-timeout draws, keeping the global crypto/rand default."
+        "Move SetRandomizedElectionTimeout from raft_test.go into production as an exported method on RawNode (rawnode.go), preserving the exact semantics; this makes the rafttest InteractionOpts hook implementable by external consumers and lets the test supply (and therefore know) each draw.",
+        "Alternatively, add a Config-level injection point for the election-timeout draw (e.g. a func(electionTick int) int field or a seedable source) that defaults to the current globalRand behavior, keeping the production default unchanged.",
+        "Document the per-node scope and legal domain: values should remain within [ElectionTick, 2*ElectionTick-1] or be validated as the target validates them."
       ],
       "execution_paths": [
-        "In-module per-node pinning: raft.SetRandomizedElectionTimeout (test-only export in raft_test.go) plus rafttest's set-randomized-election-timeout handler set r.randomizedElectionTimeout directly before driving ticks; used in testdata/prevote_checkquorum.txt and forget_leader.txt.",
-        "Default production randomness: resetRandomizedElectionTimeout draws from globalRand (crypto/rand, no seed) on every reset() (state transitions to follower/candidate), so concurrent multi-node runs get non-reproducible, non-assignable timeout choices."
+        "Election timeout randomization (all drive paths): the raft runtime draws randomizedElectionTimeout from globalRand on becoming follower/candidate; the draw determines when tickElection fires MsgHup, so it controls which node becomes candidate and when. Same behavior under RawNode direct drive, Node channel drive, and rafttest env drive."
       ],
       "obligations": {}
     },
     "time_control": {
-      "status": "SUPPORTED",
+      "status": "PATCHABLE",
       "evidence": [
         {
           "file": "rawnode.go",
-          "symbol": "(*RawNode).Tick",
+          "symbol": "RawNode.Tick",
           "line": 64,
-          "reason": "RawNode.Tick calls raft.tick() — a single deterministic protocol time step with no wall-clock involvement."
-        },
-        {
-          "file": "rawnode.go",
-          "symbol": "(*RawNode).TickQuiesced",
-          "line": 78,
-          "reason": "TickQuiesced advances electionElapsed without other processing, an explicit-tick variant for quiesced groups."
+          "reason": "Advances the internal logical clock by exactly one tick synchronously (rn.raft.tick()), the directly testable Tick on the RawNode path."
         },
         {
           "file": "node.go",
-          "symbol": "(*node).Tick",
+          "symbol": "Node.Tick",
           "line": 463,
-          "reason": "Node.Tick enqueues to a buffered tickc (cap 128) consumed by the run loop (node.go:438-439), giving the async path the same per-tick control."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "(*raft).tickElection",
-          "line": 850,
-          "reason": "tickElection increments electionElapsed and steps MsgHup when pastElectionTimeout() holds; tickHeartbeat (line 862) drives heartbeats and CheckQuorum — all timing in tick counts, no clocks."
+          "reason": "Nonblocking send into tickc (cap 128) with a default branch that drops the tick when the run loop is blocked, logging 'A tick missed to fire'; requested advances can be lost."
         },
         {
           "file": "rafttest/interaction_env_handler_tick.go",
-          "symbol": "(*InteractionEnv).Tick",
+          "symbol": "InteractionEnv.Tick",
           "line": 34,
-          "reason": "env.Tick loops RawNode.Tick num times, and tick-election/tick-heartbeat handlers drive exactly ElectionTick/HeartbeatTick ticks, preserving transition conditions."
+          "reason": "env.Tick(idx,num) calls the embedded RawNode.Tick num times; exact and synchronous on the harness path."
+        },
+        {
+          "file": "raft.go",
+          "symbol": "tickElection",
+          "line": 850,
+          "reason": "tickElection increments electionElapsed and fires MsgHup once past the randomized election timeout; tickHeartbeat drives heartbeats and check-quorum — the protocol transitions driven by Tick."
         }
       ],
-      "boundary": "Analyze the pinned standalone go.etcd.io/raft/v3 module. Public Node and RawNode protocol APIs, Ready processing, synchronous and asynchronous storage write behavior, Storage interfaces and module-provided implementations, membership changes, and rafttest support are inside the boundary. Real networking, external WAL/disk, application state machines, process supervision, and the full etcd server are outside.",
-      "gap": null,
-      "reason": "All protocol timing is expressed in tick units: Node.Tick and RawNode.Tick advance electionElapsed/heartbeatElapsed by exactly one tick, and tickElection/tickHeartbeat trigger transitions when the elapsed counters reach the (possibly randomized) timeouts. There is no wall-clock dependency in the raft core, so explicit-tick control is directly usable and deterministic; rafttest.Tick and the tick-election/tick-heartbeat handlers loop the same RawNode.Tick surface.",
+      "boundary": null,
+      "gap": "Node.Tick (node.go:463-470) sends into tickc with a default branch that drops the tick and logs 'A tick missed to fire' when the buffer is full; the Node-driven path therefore does not guarantee that a requested advance is accepted and applied. RawNode.Tick and rafttest Tick(idx,num) are exact.",
+      "reason": "RawNode.Tick and the rafttest Tick handler are exact, synchronous, deterministic logical-clock advances that drive electionElapsed/heartbeatElapsed and produce protocol transitions (tickElection/tickHeartbeat); there is no wall clock in the protocol itself. However, Node.Tick on the channel-driven path is a nonblocking send into a 128-slot buffer that drops ticks with only a warning when the run loop is busy, so a requested advance is not guaranteed to be applied on that path. Making that path lossless is a low-intrusion change that preserves timer ordering and transition conditions.",
       "limitations": [
-        "The exact tick at which an election fires depends on randomizedElectionTimeout (see randomness_control); tick advancement itself is deterministic, but the transition point is random unless the timeout is pinned.",
-        "Node.Tick drops ticks when the 128-slot buffer is full (node.go:467-469 logs 'A tick missed to fire'), so a slow consumer loses ticks.",
-        "The rafttest node harness drives Tick from a real 5ms time.Ticker (rafttest/node.go:67), but that wall clock only schedules Tick calls and does not enter the protocol.",
-        "state_trace.go contains diagnostic time.Sleep calls used only by TraceLogger tracing, not by protocol transitions."
+        "Node.Tick drops ticks (with a warning) when 128 ticks are buffered; tests must keep the run loop drained or use RawNode.Tick for guaranteed advances.",
+        "The unexported internal network harness (rafttest/node.go) drives nodes from a real time.Ticker (5ms) and randomized send sleeps; it is same-package-only and its wall-clock behavior is outside the protocol time path.",
+        "Randomized election timeout still determines when a ticked election actually starts (see randomness_control), so exact tick counts do not by themselves manufacture an election outcome."
       ],
-      "suggested_direction": null,
+      "suggested_direction": "Remove or acknowledge the drop in Node.Tick so every claimed path applies each requested advance deterministically; RawNode and rafttest Tick already satisfy this.",
       "entrypoints": [
-        "Node.Tick",
-        "RawNode.Tick",
-        "RawNode.TickQuiesced",
-        "rafttest.Tick",
-        "rafttest.Handle (tick-election / tick-heartbeat)"
+        "raft.RawNode.Tick",
+        "raft.RawNode.TickQuiesced",
+        "raft.Node.Tick",
+        "rafttest.InteractionEnv.Tick"
       ],
       "usage_examples": [
         "// Requires: rn *raft.RawNode\nrn.Tick()",
-        "// Requires: env *rafttest.InteractionEnv\n_ = env.Tick(0, env.Nodes[0].Config.ElectionTick)"
+        "// Requires: env *rafttest.InteractionEnv\n_ = env.Tick(0, 3)"
       ],
-      "existing_test_interface_complete": true,
-      "test_support_reason": "Explicit per-tick control exists on both Node and RawNode with no wall-clock dependency in the core, satisfying the explicit_tick accepted form without new target code.",
-      "suggested_changes": [],
+      "existing_test_interface_complete": false,
+      "test_support_reason": "The protocol time model is a purely logical clock with no wall-clock dependency, and RawNode.Tick plus rafttest Tick provide exact deterministic advances; only the Node-interface Tick is a nonblocking surface that can drop a requested advance, so the Node-driven path is not complete.",
+      "suggested_changes": [
+        "Make Node.Tick lossless: remove the default drop branch (block until the run loop consumes or the node is stopped), preserving the buffered channel for normal operation and keeping production tick ordering and transition conditions.",
+        "Alternatively add a synchronous tick confirmation (e.g. an optional interface with TickAndWait or draining tickc before returning) so the Node path guarantees each requested advance is applied deterministically.",
+        "Keep RawNode.Tick as the documented exact surface and have rafttest Tick continue delegating to it."
+      ],
       "execution_paths": [
-        "RawNode explicit tick: RawNode.Tick()/TickQuiesced() advance the protocol clock deterministically; transitions fire only when the caller has supplied enough ticks (tickElection/tickHeartbeat).",
-        "Node explicit tick: Node.Tick() posts to a buffered tickc consumed by the run loop, which calls RawNode.Tick (node.run case <-n.tickc); rafttest.Tick and the tick-election/tick-heartbeat handlers are loops over the same RawNode.Tick surface."
+        "RawNode direct drive: rn.Tick() is a synchronous, deterministic advance; election and heartbeat transitions fire deterministically on the next Ready.",
+        "Node channel drive: n.Tick() posts to a buffered channel consumed by the run loop; exact when the loop keeps up, but drops ticks (with a warning) when the buffer is full, so advances are not guaranteed.",
+        "rafttest InteractionEnv: env.Tick(idx,num) calls RawNode.Tick exactly num times; deterministic advance used by tick-election/tick-heartbeat commands."
       ],
       "obligations": {}
     }
