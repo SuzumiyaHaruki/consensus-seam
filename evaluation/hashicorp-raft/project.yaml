@@ -1,0 +1,50 @@
+name: hashicorp-raft
+language: go
+protocol: raft
+repository: ../../../hashicorp-raft
+
+system_boundary:
+  kind: protocol_library
+  description: >
+    Analyze the pinned github.com/hashicorp/raft module. The public Raft API and
+    protocol state loops, Transport abstraction, InmemTransport, observer and
+    future mechanisms, module-provided in-memory stores and snapshots, and
+    package-provided in-process testing support are inside the boundary. Real
+    TCP/network transport implementations and socket behavior, external durable
+    store implementations, application FSM semantics, process supervision, and
+    the raft-compat, fuzzy, and bench subdirectories are outside.
+
+experiment:
+  kind: blind_capability
+  oracle_visible_to_agents: false
+  research_claim: >
+    Blind discovery and low-intrusion completion of seven basic test-control
+    capabilities in a production Go Raft library whose asynchronous runtime and
+    real-time mechanisms differ from manually ticked protocol libraries.
+
+# `patch` 是首次目标的完整盲生成流程。此处不提供 transform allowlist、
+# capability checks、隐藏测试或人工答案。
+build:
+  command: go test -run '^$' ./...
+
+test:
+  command: go test ./...
+
+working_directory: .
+
+llm:
+  analyzer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768
+  transformer:
+    model: deepseek-v4-flash
+    thinking: enabled
+    reasoning_effort: max
+    max_tokens: 32768
+  reviewer:
+    model: deepseek-v4-pro
+    thinking: enabled
+    reasoning_effort: high
+    max_tokens: 32768

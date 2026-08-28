@@ -27,9 +27,9 @@ Agent 1 对每项能力保留原有六种分类：
 - `UNKNOWN`：源码证据不足，无法可靠判断；
 - `NOT_APPLICABLE`：相对于本次系统边界不适用。
 
-人工只定义系统边界，不需要预先知道目标有哪些实现路径。Agent 1 应从源码中发现边界内所有实质不同的路径，例如同步/异步执行方式、不同节点抽象或不同消息出口；Agent 2 应尽可能覆盖所有能够低侵入实现的路径。确实无法安全覆盖的路径必须在报告中说明，不能静默忽略。
+v0.1 明确只面向 Go 共识实现。人工只定义系统边界，不需要预先知道目标有哪些实现路径。Agent 1 从源码发现边界内所有实质不同的公开路径；Agent 2 尽可能覆盖所有能够低侵入实现的路径，无法安全覆盖时明确报告。
 
-“实质不同的路径”指输入边界、输出边界或控制方式不同的公开运行路径，不是要求枚举协议内部每一个条件分支。
+一条路径表示测试方通过一组一致的公开输入输出边界、缓存或目标所有权和控制方式驱动系统。不同公开节点 API、输入输出边界或同步/异步控制面通常是不同路径；消息类型、helper、文件和到达同一控制面的内部条件分支不是不同路径。
 
 ## 三个 Agent 与控制器
 
@@ -40,11 +40,115 @@ Agent 1 对每项能力保留原有六种分类：
 
 Agent 3 发现违反能力合同、路径覆盖声明或接口报告的问题时，必须通过 `REVISE_AGENT1` 或 `REVISE_AGENT2` 自动反馈；只有不妨碍合同成立的剩余限制才能保留在 `PASS.risks`。Agent 2 修订发生在重新应用上一版候选的 fresh worktree 中，不需要人工提供测试或重新从空白生成。
 
-全局能力规范只描述行为，不规定所有目标必须使用相同的语言接口。某种传输抽象、节点类型或节点注册表只能是具体目标的实现选择，不能成为通用前提。
+全局能力规范只描述测试行为，不规定统一 Go API。传输抽象、节点类型、节点注册表、缓存结构和函数名都由目标决定。
 
-Analyzer 必须区分“底层原语存在”和“测试接口完整存在”。一次性消息输出、channel 交付、发送 hook、内部队列或正常协议输入函数都只是原语；即使测试方可以自行把输出复制到新切片，也不能据此声称目标已经提供缓存。Agent 必须从源码发现目标实际存在的重要路径，每条声明支持的路径都要有测试可控的显式缓存，并明确指定缓存实例与正常输入入口的关系。测试方根据消息内容选择，接口则返回不会因前序删除或并发捕获而悄悄指向另一条消息的实例引用。目标已有记录、opaque handle、token、指针或可选控制 ID 都可以成为引用形式；下标只有在原子、版本化或不存在中间变更时才成立。全局合同规定功能，不预设路径数量、统一 API 形状或数字 ID。
+Analyzer 必须区分“底层原语存在”和“测试接口完整存在”。消息捕获要求受控输出在投递前进入测试可见缓存，并提供枚举、`Take`、`Drop` 和 `Clear`；一次性输出、channel、投递后日志和普通输入函数都只是原语。实例引用要么仍命中测试方观察到的实例，要么明确报告过期，不能静默指向另一实例；不要求永久数字 ID。
 
-低侵入改造可以是包装、hook、依赖注入、配置项、只读 accessor 或扩展目标已有测试 harness。消息控制必须最终形成一个目标原生的缓存控制面，但可以直接扩展已有缓存而不建立平行存储，也不要求固定类型或方法名。只有所有已发现路径都已经具备完整控制面时才是 `SUPPORTED`；只要某条路径仍要求测试方自行保存消息或自行拼接缓存与输入原语，就应在可低侵入补充时标为 `PATCHABLE`。
+消息捕获和注入使用同一组路径逐条分析，不能用 A 路径的捕获和 B 路径的注入拼成完整支持。注入可以采用分离式 `Take + ProtocolInput`，也可以采用组合式单调用；后者不默认承诺事务原子性。两种形式都要说明正常输入入口以及成功、失败和未确认异步投递的缓存效果。请求—响应或 future 路径还必须保留原有完成机制，不能让发送方、响应 channel 或 future 静默失联。选择、调度、重试和断言仍由测试方负责。
+
+低侵入改造可以是复用、包装、hook、依赖注入、配置项、只读 accessor 或扩展现有测试 harness。生命周期最低要求是让逻辑节点不可用并恢复可用；已有 pause/resume、stop/reconstruction 或调用方调度可以直接组合时，不为接口对称性重复包装，也不发明 crash 或持久化语义。
+
+## 目录架构
+
+主要数据流如下：
+
+```text
+project.yaml + spec/ + prompts/
+              ↓
+      consensus_seam/cli.py
+              ↓
+    consensus_seam/workflow.py
+              ↓
+ Agent 1 → Agent 2 worktree → Agent 3
+              ↓
+     verify/ + reporting.py
+              ↓
+         runs/<run-id>/
+```
+
+仓库结构：
+
+```text
+consensus-seam/                         # 仓库根目录
+├── consensus_seam/                    # Python Controller 与三个 Agent 的实现
+│   ├── agents/                        # 严格隔离的 Agent 角色
+│   │   ├── base.py                    # Prompt 组装、结构化输出与校验重试
+│   │   ├── analyzer.py                # Agent 1：只读能力分析
+│   │   ├── transformer.py             # Agent 2：隔离 worktree 中低侵入修改
+│   │   └── reviewer.py                # Agent 3：独立只读审查与反馈路由
+│   ├── languages/                     # 目标语言后端；v0.1 只支持 Go
+│   │   ├── base.py                    # Verifier/workspace 共用语言边界
+│   │   ├── go.py                      # Go 格式化、构建辅助和符号查询
+│   │   └── go_ast/main.go             # Go AST 声明、方法和引用定位工具
+│   ├── llm/                           # 模型供应商与工具循环
+│   │   ├── base.py                    # 与供应商无关的最小 LLM 接口
+│   │   ├── client.py                  # 确定性/占位 Client
+│   │   ├── deepseek.py                # DeepSeek Chat Completions HTTP 传输
+│   │   ├── profiles.py                # manifest/CLI 模型配置合并
+│   │   └── runtime.py                 # 三个角色共用的有界工具调用循环
+│   ├── verify/                        # 不依赖 Agent 自我声明的确定性验证
+│   │   ├── baseline.py                # 干净目标 revision 的 baseline
+│   │   ├── capability.py              # 项目专属能力检查及失败码
+│   │   ├── fixtures.py                # Reviewer 后注入 evaluator-only fixture
+│   │   └── verifier.py                # 格式化、构建、原测试和能力检查执行
+│   ├── cli.py                         # analyze/patch/run/repair 命令入口
+│   ├── workflow.py                    # Agent、修订、验证和产物的显式状态机
+│   ├── models.py                      # Pydantic 数据合同、枚举与跨字段校验
+│   ├── config.py                      # project/spec/policy/protocol 加载与边界校验
+│   ├── routing.py                     # 固定失败和 Reviewer 反馈路由
+│   ├── workspace.py                   # 隔离 Git worktree 生命周期
+│   ├── tools.py                       # 按角色限制读、搜索、补丁和命令工具
+│   ├── reporting.py                   # JSON、USAGE、AUDIT、统计和 latest 输出
+│   ├── resources.py                   # 源码/wheel 中定位 prompts 与 spec
+│   └── __main__.py                    # python -m consensus_seam 入口
+├── prompts/                           # 提供给 Agent 的英文行为要求
+│   ├── agent1.md                      # 证据、路径发现和能力分类
+│   ├── agent2.md                      # 低侵入实现、消息闭环和最少测试
+│   └── agent3.md                      # 逐路径审查、完成机制和问题路由
+├── spec/                              # 目标无关能力与修改合同
+│   ├── capabilities.yaml              # 七项能力英文合同
+│   ├── modification-policy.yaml       # Agent 2 允许/禁止的修改
+│   └── protocols/raft.yaml            # Raft 概念简介，不是 ground truth
+├── evaluation/                        # 目标专属正式实验输入
+│   ├── README.md                      # 评测材料和 Agent 可见边界
+│   ├── mini-raft/                     # 小型缺口目标与隐藏验收材料
+│   │   ├── project.yaml               # 预配置 run 项目清单
+│   │   ├── human-ground-truth.yaml    # 运行后独立评估，不进入 Prompt
+│   │   └── hidden-acceptance/         # Reviewer 后才注入的目标测试
+│   ├── etcd-raft/                     # etcd/raft 3.6 盲 patch 目标
+│   │   ├── project.yaml               # 仓库、边界、命令和模型配置
+│   │   └── README.md                  # 固定 revision 与运行说明
+│   └── hashicorp-raft/                # HashiCorp Raft v1.7.3 对照目标
+│       ├── project.yaml               # 真实时间/异步运行盲 patch 配置
+│       └── README.md                  # 固定 revision、边界与基线说明
+├── targets/                           # 新目标接入模板
+│   └── examples/
+│       ├── project.yaml.example       # 最小项目清单示例
+│       └── post-hoc-checks.yaml.example # repair 检查示例
+├── docs/                              # 面向使用者的中文说明
+│   ├── capabilities.md                # 七项能力合同
+│   ├── design-analysis.md             # 研究目标、路径、分工和 repair 边界
+│   ├── required-materials.md          # 新目标与正式实验所需材料
+│   └── redundancy-audit.md            # Python 冗余审计与清理记录
+├── presentation/                      # 展示材料
+│   ├── ConsensusSeam_etcd实验展示.pdf # 当前架构与 etcd 实验展示
+│   └── generate_demo_pdf.py           # ReportLab 可重复生成脚本
+├── tests/                             # Controller 测试，不是目标协议测试
+│   ├── unit/                          # 模型、配置、Prompt、路由、LLM、工具、报告
+│   ├── integration/                   # 工作流、worktree、Go 符号、fixture、修订闭环
+│   └── helpers.py                     # 测试共享构造辅助
+├── runs/                              # 实验产物
+│   ├── <run-id>/                      # 完整本地运行、日志和临时信息；Git 忽略
+│   └── latest/                        # 最近一次可审计小型产物；Git 跟踪
+├── README.md                          # 项目入口、架构和使用说明
+├── CODEX_SPEC.md                      # v0.1 非目标与实现边界
+├── pyproject.toml                     # 包、依赖、CLI、wheel 资源和 pytest 配置
+├── .gitignore                         # 忽略环境、密钥和除 latest 外的 runs
+└── .gitattributes                     # PDF 作为 binary 处理
+```
+
+`.venv/`、`.pytest_cache/`、`__pycache__/`、`dist/` 和 `build/` 是本地生成
+目录，不属于仓库源码架构，并由 `.gitignore` 忽略。
 
 ## v0.1 不追求什么
 
@@ -124,7 +228,7 @@ consensus-seam repair  --project /绝对路径/project.yaml \
 - Analyzer 可以列目录、读文件、搜索文本和查询 Go 声明，不能编辑源码或运行目标测试。
 - Transformer 只能编辑隔离 Git worktree，并受有限的 `apply_patch`/`write_file` 操作约束。
 - Reviewer 分别读取原始和修改后的代码，不能写文件。
-- Agent 2 可以新增 `*_test.go`，但不能修改目标仓库已有的 Go 测试。
+- Agent 2 只能新增验证新行为所需的最少 `*_test.go`，不能修改目标仓库已有测试，也不应重复已有覆盖或生成大规模参数组合。
 - 如果 Agent 2 在实现阶段发现能力需要侵入式修改，可以报告 `INVASIVE_REDISCOVERED`；该候选 worktree 会被丢弃。
 
 这些安全措施用于隔离修改和保持实验可审计，不代表框架已经验证了所有目标语义。
@@ -192,6 +296,15 @@ etcd/raft 第一阶段接口生成：
 ```bash
 GOTOOLCHAIN=auto consensus-seam patch \
   --project evaluation/etcd-raft/project.yaml \
+  --api-key-file /绝对路径/deepseek-key.txt \
+  --model-profile manifest
+```
+
+HashiCorp Raft `v1.7.3` 第一阶段接口生成：
+
+```bash
+consensus-seam patch \
+  --project evaluation/hashicorp-raft/project.yaml \
   --api-key-file /绝对路径/deepseek-key.txt \
   --model-profile manifest
 ```

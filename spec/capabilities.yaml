@@ -3,207 +3,132 @@ version: 1
 capabilities:
   message_capture:
     description: >
-      Across the materially distinct execution paths discovered inside the system
-      boundary, controlled protocol output is intercepted into an explicit,
-      test-visible cache before it automatically continues along its original
-      path. The target may have zero, one, or many such paths; their number and
-      architecture must be discovered from source rather than assumed. The test
-      decides when and how cached messages are processed. Safely unimplemented
-      paths must be reported explicitly.
+      On every claimed message-control path, controlled protocol output is
+      retained in a test-visible cache before delivery. Delivery resumes only
+      through a later test action. The target may have one or many paths; Agent 1
+      discovers them from the Go source instead of assuming an architecture.
     testing_contract:
-      activation: >
-        Every claimed path has a target-native test control facade that activates
-        or exposes capture. It may extend an existing cache, queue, constructor,
-        test environment, harness, hook, or wrapper, but the facade and required
-        setup must be declared in the interface report. A particular transport
-        abstraction and a universal wrapper type are not assumed.
-      explicit_cache: >
-        A message being observable, returned once, handed through a channel, or
-        stored in a queue that the claimed test consumer cannot control is not by
-        itself a test cache. A complete cache is explicit control state that keeps
-        captured instances until a declared test operation consumes or removes
-        them, and exposes enumeration plus exact-instance remove or clear
-        operations. Saying that the test could build its own slice or map outside
-        the supplied interface proves an underlying primitive, not existing
-        support.
-      cache_visibility: >
-        Test code can enumerate or inspect cached message instances, including
-        enough target-native content to decide what to do and the current cache
-        order. The framework does not decide which message a test should choose.
-      instance_operation: >
-        Test code can act on one specified cached instance and can remove or clear
-        cached messages. Selection and reference are separate: the test chooses
-        by inspecting target-native message content, while the facade returns a
-        reference that continues to identify that concrete cache instance until
-        its declared consumption or removal. The reference may be a target-native
-        record, opaque handle, pointer, token, or optional control ID; no universal
-        ID form is required.
-      reference_stability: >
-        A bare mutable-list position is not a stable reference when earlier
-        removal, concurrent capture, sorting, or another public mutation can make
-        it designate a different instance. An index is acceptable only when the
-        facade makes the observation and operation atomic, versioned, or otherwise
-        guarantees that no intervening mutation can change its meaning. Duplicate
-        messages must remain distinguishable.
-      consumer_scope: >
-        For every claimed path, declare whether its entrypoints are callable by
-        external consumers, same-package tests, or only an internal harness. An
-        internal-only helper does not prove a public test interface.
+      controlled_cache: >
+        The cache retains message instances until the test explicitly takes,
+        drops, clears, or injects them. A one-shot result, observable channel,
+        post-delivery log, or caller-created collection is only a primitive.
+      operations: >
+        Test code can enumerate target-native message content and order, take one
+        selected instance and obtain its message and routing information, drop one
+        selected instance, and clear the cache. Method names are target-defined.
+      instance_reference: >
+        A reference must either still identify the observed cache instance or be
+        rejected as stale; it must never silently retarget another instance.
+        Records, handles, pointers, tokens, or mutation-safe indexes are allowed.
+        Permanent numeric message IDs are not required.
+      path_pairing: >
+        Message capture and injection use the same discovered path partition and
+        path names. For each path, report its output boundary, cache owner, normal
+        input boundary, and consumer scope. Evidence from one path cannot prove
+        support on another path.
       snapshot_safety: >
-        Returned pending data must not let callers accidentally mutate the
-        controller's internal state through shared mutable slices, pointers, or
-        nested objects. Reuse a target-native clone operation when available;
-        otherwise copy the mutable parts or explicitly narrow the claim.
-      store_consistency: >
-        Any new handles or metadata remain consistent with every existing mutation
-        path for the underlying cache. Prefer one authoritative cache; do not rely
-        on parallel stores staying aligned when a public API can mutate only one.
-        A publicly mutable collection plus a bulk filter is not an exact-instance
-        control facade when test authors must splice the collection themselves or
-        when parallel reference metadata cannot observe those mutations.
-      path_coverage: >
-        The Analyzer discovers the materially distinct in-scope paths without
-        assuming how many exist. SUPPORTED requires an explicit controllable cache
-        on every such path for the claimed consumer scope. One complete harness
-        path does not cover another path that only returns or emits messages. The
-        implementation covers every low-intrusion path it can and explicitly
-        records covered and uncovered paths.
-      test_support_gap: >
-        A raw outbound message API, one-shot batch, channel handoff, send hook, or
-        inaccessible queue is an underlying primitive. It is complete only when a
-        target-provided test facade keeps controlled output from automatically
-        continuing, retains it in an authoritative cache, and exposes the required
-        cache operations. An existing target-native cache may remain the single
-        authoritative store and be adapted rather than copied; otherwise a
-        wrapper, hook, or low-intrusion combination must add the missing behavior.
+        Returned snapshots must not let callers accidentally mutate cached,
+        protocol, or controller state through shared mutable data.
 
   message_injection:
     description: >
-      Test code can specify one previously cached legal message instance and
-      deliver it through the recorded target's normal protocol input entrypoint.
-      The test owns the choice and scheduling policy; the interface provides
-      target-native cache and ingress operations with explicit cache effects.
+      Test code can deliver a concrete instance selected from the message-capture
+      cache through that path's normal protocol input boundary. The message and
+      destination are preserved, and cache effects are explicit.
+    accepted_v0_forms:
+      - separated_take_and_input
+      - combined_single_call
     testing_contract:
-      exact_instance: >
-        The test can refer to and operate on one concrete cached instance using a
-        stable target-native record, opaque handle, token, pointer, or optional
-        control ID returned during cache enumeration. A position may be used only
-        under the reference-stability rule. ConsensusSeam does not provide the
-        policy for choosing that instance; the test chooses by inspecting the
-        target-native message snapshot and then operates through its reference.
-      cache_relationship: >
-        The injection facade operates on the same authoritative cache used by
-        message capture. An arbitrary message accepted by a normal protocol
-        ingress API is only an input primitive; it is not the controlled injection
-        interface unless the cache operation that selected or consumed that exact
-        instance is explicit and coherent.
-      operation_shape: >
-        The facade may expose a cache Take followed by a target-bound input
-        operation, or one combined Inject operation. Neither form nor any method
-        name is globally required. Both forms must make the relationship to the
-        authoritative cache explicit and state the cache effect and error behavior.
-      target_binding: >
-        Use target-object ownership or routing that actually exists in the target.
-        A target ID alone is not a target-object binding. The facade must resolve
-        the stored destination to the real target object, or validate that a
-        caller-supplied target object matches the cached instance before delivery.
-        Existing constructors, node collections, registries, resolvers, or test
-        environments are allowed when documented in the interface report.
-      delivery_boundary: >
-        Injection enters the normal protocol input boundary for the declared
-        path and does not mutate protocol state directly.
-      success_and_consumption: >
-        A combined injection wrapper must not report confirmed success while an
-        asynchronous path may silently drop the attempt. A separate take-and-input
-        facade may leave retry, requeue, or deliberate loss policy to the test;
-        its responsibilities must be explicit rather than hidden.
-      consumer_scope: >
-        The interface report distinguishes externally callable, same-package,
-        and internal-harness injection entrypoints. A path is covered only for
-        the consumer scope that can actually call it.
-      path_coverage: >
-        Discover rather than assume the number and shape of in-scope paths. Apply
-        cache-linked injection to every discovered path that can be supported
-        without changing core semantics. A protocol-ingress primitive on a path
-        without the capture cache and facade does not make that path SUPPORTED.
-        Explicitly report remaining paths and why they are not safely implemented.
+      same_path: >
+        Injection operates on the same cache instance and the same declared
+        message-control path as capture. A standalone input function or capture
+        from a different path is only a primitive, not complete injection.
+      separated_form: >
+        The cache Take operation may remove and return the selected message plus
+        enough routing information for a test that already owns the real target
+        objects to call the documented normal input entrypoint. Later retry,
+        requeue, duplication, or loss is tester policy.
+      combined_form: >
+        A combined single-call operation may locate the cached instance, bind or
+        validate its real target, invoke normal input, and update the cache. One
+        call does not imply transactional atomicity.
+      cache_effects: >
+        State what successful delivery, synchronous failure, and unconfirmed
+        asynchronous delivery do to the selected cache entry. Different effects
+        are allowed when they are truthful and explicit.
+      completion_mechanism: >
+        Request-response or future-based paths preserve and document their
+        original completion mechanism. Capture, removal, timeout, or injection
+        must not silently orphan the sender, response channel, or future.
+      tester_policy: >
+        The interface supplies cache and ingress mechanics. The test chooses the
+        message, schedule, retry behavior, duplication, and assertions.
 
   time_control:
     description: >
-      Test code can deterministically advance time observed by the protocol. It
-      must not add ForceTimeout, ForceElection, or equivalent shortcuts that
-      manufacture protocol outcomes directly.
+      Test code can deterministically advance time observed by the protocol.
+      It must not manufacture election, timeout, or other protocol outcomes.
     accepted_v0_forms:
       - explicit_tick
       - injectable_clock
     testing_contract:
-      test_support_assessment: >
-        Reuse a directly testable Tick or Clock when sufficient. Add a thin
-        coordination wrapper, harness method, or hook only when multiple existing
-        time paths or asynchronous completion prevent direct deterministic use.
+      direct_use_or_thin_coordination: >
+        Reuse a directly testable Tick or Clock when sufficient. Add coordination
+        only when existing time paths cannot be used deterministically as exposed.
       input_domain: >
-        New control values preserve the target's existing legal domain or reject
-        invalid values explicitly; a test hook must not silently create protocol
-        states that the original implementation considers impossible.
+        New values preserve the target's legal domain or reject invalid values.
 
   randomness_control:
     description: >
       Protocol-relevant randomness can be fixed or injected so the same initial
-      state and seed produce repeatable random choices.
+      state and control parameters reproduce the same random choices.
     testing_contract:
-      test_support_assessment: >
-        Reuse existing configuration when directly testable; otherwise a Config
-        option, dependency-injected source, hook, or test constructor may expose
-        the existing random choice without replacing its algorithm.
-      input_domain: >
-        Fixed values, seeds, or injected sources preserve existing validation and
-        legal ranges. If the target intentionally supports a broader test-only
-        domain, the interface must validate and document that domain explicitly.
+      preserve_behavior: >
+        Reuse existing configuration or expose the existing random choice through
+        a config option, injected source, hook, or test constructor. Do not replace
+        the algorithm, and keep the production default unchanged.
+      scope_and_domain: >
+        Document whether control is per node, instance, or shared, and preserve or
+        explicitly validate the target's legal value domain.
 
   lifecycle_control:
     description: >
-      Test code can make a node unavailable and make it available again using an
-      existing target-native pause, stop, resume, restart, reconstruction, or
-      process-control boundary. The report names the actual mechanism and must not
-      claim production crash fidelity unless the target defines it.
+      Test code can make a selected logical node stop protocol activity and later
+      make it participate again. The report names the actual pause/resume,
+      stop/reconstruction, scheduling, or process-control mechanism.
     obligations:
-      stop_boundary: Identify how the node becomes unavailable and whether this is pause, graceful stop, or crash-like reconstruction.
-      restart_or_recovery_boundary: Identify how availability is restored and whether the same instance resumes or a new instance is created.
-      state_ownership_defined: Record target-defined recoverable-state ownership when relevant; use NOT_APPLICABLE for an availability-only mode that makes no crash claim.
-      persistent_volatile_semantics_defined: Record target-defined persistent/volatile semantics when relevant; use NOT_APPLICABLE rather than inventing them for pause/resume.
+      stop_boundary: Identify how the logical node becomes unavailable.
+      restart_or_recovery_boundary: Identify how the same logical node becomes available again.
+      state_ownership_defined: Record only state ownership defined by the target, or use NOT_APPLICABLE.
+      persistent_volatile_semantics_defined: Record only persistence semantics defined by the target, or use NOT_APPLICABLE.
     testing_contract:
-      test_support_assessment: >
-        The v0.1 minimum is unavailable-and-restore control with its mechanism
-        stated honestly. Test support may compose existing pause, stop, create,
-        resume, or restart APIs, but it must not equate pause with a production
-        crash or invent state ownership and persistence semantics. A dedicated
-        lifecycle facade or convenience command is not required for every harness:
-        caller-controlled suspension and resumption of scheduling, or public
-        reconstruction from target-owned state, satisfies the minimum when it is
-        directly usable and documented. Classify PATCHABLE only when a discovered
-        path cannot actually be made unavailable and available again, not merely
-        because the composition is manual.
+      availability_cycle: >
+        Both unavailable and restore actions are required, but they may be a
+        directly usable composition of existing target operations. A dedicated
+        convenience wrapper is not required.
+      honest_semantics: >
+        State whether the same instance resumes or a new instance is constructed.
+        Do not call pause or graceful stop a production crash, and do not invent
+        persistence or recovery semantics.
 
   observation:
     description: >
-      Expose the minimum global or node state needed for capability verification
-      and later testing. Fields may remain protocol- and implementation-specific;
+      Expose the minimum target-native node or global state needed by later tests;
       v0.1 does not require a universal state schema.
     testing_contract:
-      test_support_assessment: >
-        Use an existing Status API directly when sufficient. A read-only wrapper
-        or accessor may aggregate existing state but must not create protocol state.
+      direct_use_or_accessor: >
+        Reuse an existing status interface when sufficient. Otherwise a read-only
+        accessor may aggregate existing state without creating protocol state.
       snapshot_safety: >
-        A read-only result must not expose mutable aliases that let callers change
-        protocol or controller state through the observation interface.
+        Observation results must not expose mutable aliases into internal state.
 
   external_input:
     description: >
-      Discover existing proposal, request, transaction, or equivalent application
-      workload entrypoints. v0.1 does not create new business-input APIs.
+      Discover existing application workload entrypoints such as proposals,
+      requests, transactions, or membership changes. v0.1 does not create them.
     obligations:
       workload_entrypoint: Identify application work originating outside the protocol.
-      protocol_ingress_excluded: Exclude peer-to-peer protocol ingress handlers.
+      protocol_ingress_excluded: Exclude peer-to-peer protocol message ingress.
       timer_and_internal_events_excluded: Exclude Tick, timers, callbacks, and internal events.
 
 prerequisites:
