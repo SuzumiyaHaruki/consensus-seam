@@ -12,7 +12,6 @@ from pydantic import BaseModel, ValidationError
 from .models import (
     CapabilitySpec,
     ModificationPolicy,
-    PostHocCheckManifest,
     ProjectManifest,
     VerificationFixtureConfig,
 )
@@ -46,10 +45,16 @@ class LoadedProject:
     manifest: ProjectManifest
     repository: Path
     working_directory: Path
+    scope_roots: tuple[Path, ...]
+    evidence_roots: tuple[Path, ...]
     capabilities: CapabilitySpec
     modification_policy: ModificationPolicy
     protocol_brief: dict[str, Any]
     verification_fixtures: tuple[ResolvedVerificationFixture, ...] = ()
+
+    @property
+    def readable_roots(self) -> tuple[Path, ...]:
+        return self.scope_roots + self.evidence_roots
 
     def agent_manifest(self) -> dict[str, Any]:
         """返回允许披露给三个 Agent 的项目视图。
@@ -63,15 +68,6 @@ class LoadedProject:
             mode="json",
             exclude={"capability_checks", "verification_fixtures", "experiment"},
         )
-
-
-@dataclass(frozen=True)
-class LoadedPostHocChecks:
-    """解析后的生成后检查清单与 evaluator-only fixture。"""
-
-    manifest_path: Path
-    manifest: PostHocCheckManifest
-    verification_fixtures: tuple[ResolvedVerificationFixture, ...]
 
 
 def _read_yaml(path: Path) -> Any:
@@ -134,6 +130,22 @@ def _resolve_verification_fixtures(
     return tuple(resolved)
 
 
+def _resolve_source_roots(repository: Path, roots: list[Path]) -> tuple[Path, ...]:
+    """解析 Agent 可见目录；配置只能指向仓库内已有文件夹。"""
+
+    resolved: list[Path] = []
+    for root in roots:
+        path = (repository / root).resolve()
+        try:
+            path.relative_to(repository)
+        except ValueError as exc:
+            raise ConfigurationError("source roots must stay inside repository") from exc
+        if not path.is_dir():
+            raise ConfigurationError(f"source root is not a directory: {path}")
+        resolved.append(path)
+    return tuple(resolved)
+
+
 def load_project(
     manifest_path: str | Path,
     *,
@@ -182,35 +194,18 @@ def load_project(
         configuration_directory=path.parent,
         repository=repository,
     )
+    scope_roots = _resolve_source_roots(repository, manifest.scope_roots)
+    evidence_roots = _resolve_source_roots(repository, manifest.evidence_roots)
 
     return LoadedProject(
         manifest_path=path,
         manifest=manifest,
         repository=repository,
         working_directory=working_directory,
+        scope_roots=scope_roots,
+        evidence_roots=evidence_roots,
         capabilities=capabilities,
         modification_policy=policy,
         protocol_brief=protocol_brief,
-        verification_fixtures=fixtures,
-    )
-
-
-def load_posthoc_checks(
-    manifest_path: str | Path,
-    *,
-    repository: Path,
-) -> LoadedPostHocChecks:
-    """加载生成后 checks，并沿用项目 fixture 的安全边界。"""
-
-    path = Path(manifest_path).expanduser().resolve()
-    manifest = _load_model(path, PostHocCheckManifest)
-    fixtures = _resolve_verification_fixtures(
-        manifest.verification_fixtures,
-        configuration_directory=path.parent,
-        repository=repository.resolve(),
-    )
-    return LoadedPostHocChecks(
-        manifest_path=path,
-        manifest=manifest,
         verification_fixtures=fixtures,
     )

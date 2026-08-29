@@ -55,6 +55,8 @@ def project(tmp_path: Path) -> LoadedProject:
         manifest=manifest,
         repository=original,
         working_directory=original,
+        scope_roots=(original,),
+        evidence_roots=(),
         capabilities=None,  # type: ignore[arg-type]
         modification_policy=None,  # type: ignore[arg-type]
         protocol_brief={},

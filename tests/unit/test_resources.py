@@ -13,6 +13,9 @@ def test_source_resource_root_contains_target_independent_go_contract() -> None:
     contract = capabilities + analyzer + transformer + reviewer
 
     assert "path_pairing" in spec["capabilities"]["message_capture"]["testing_contract"]
+    assert {"protocol_plane", "control_subject", "shared_boundary"} <= set(
+        spec["scope_rules"]
+    )
 
     for required in (
         "NewMessageController",
@@ -22,13 +25,13 @@ def test_source_resource_root_contains_target_independent_go_contract() -> None:
         "NewRandomController",
         "NewLifecycleController",
         "ErrLifecycleUnsupported",
-        "smallest focused Go tests",
+        "tests should normally be smaller than the production change",
         "message_cache_injection_coherence",
         "core_semantics_required",
         "unavoidable uncontrolled window",
         "concrete target-native owner",
         "abandoned execution context",
-        "every active message, time, randomness, and lifecycle controller",
+        "every active controller controls the fresh subject",
     ):
         assert required in contract
 

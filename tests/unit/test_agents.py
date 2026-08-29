@@ -45,6 +45,8 @@ def loaded_project(tmp_path: Path) -> LoadedProject:
         manifest=manifest,
         repository=repo,
         working_directory=repo,
+        scope_roots=(repo,),
+        evidence_roots=(),
         capabilities=CapabilitySpec.model_validate(
             {"version": 1, "capabilities": definitions, "prerequisites": {}}
         ),

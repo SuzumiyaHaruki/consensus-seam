@@ -1,4 +1,4 @@
-"""v0.1 四种工作流的命令行入口。"""
+"""v0.1 三种工作流的命令行入口。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .config import load_posthoc_checks, load_project
+from .config import load_project
 from .llm.client import FakeLLMClient, UnconfiguredLLMClient
 from .llm.deepseek import DeepSeekClient
 from .llm.runtime import ToolCallingAgentRuntime
@@ -35,10 +35,10 @@ def _read_api_key_file(path: Path) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """构造四个工作流共用的命令行参数。
+    """构造三个工作流共用的命令行参数。
 
-    analyze/patch/run/repair 的差别由 Workflow 方法决定，项目路径、模型配置和
-    凭据加载方式保持一致，避免四个入口出现行为漂移。
+    analyze/patch/run 的差别由 Workflow 方法决定，项目路径、模型配置和
+    凭据加载方式保持一致，避免三个入口出现行为漂移。
     """
 
     parser = argparse.ArgumentParser(prog="consensus-seam")
@@ -47,7 +47,6 @@ def build_parser() -> argparse.ArgumentParser:
         ("analyze", "运行只读能力分析 Agent"),
         ("patch", "运行 Analyzer、Transformer 和独立 Reviewer"),
         ("run", "运行带预配置 checks 的固定评测/回归流程"),
-        ("repair", "可选：使用生成后的真实测试修复已有候选接口"),
     ):
         subparser = subparsers.add_parser(command, help=description)
         subparser.add_argument("--project", required=True, type=Path)
@@ -72,20 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
             type=Path,
             help="只包含 DeepSeek API 密钥的 UTF-8 文本文件",
         )
-        if command == "repair":
-            subparser.add_argument(
-                "--run",
-                dest="source_run",
-                required=True,
-                type=Path,
-                help="包含原候选报告和 changes.patch 的运行目录",
-            )
-            subparser.add_argument(
-                "--checks",
-                required=True,
-                type=Path,
-                help="生成后 capability checks 与 fixture 映射 YAML",
-            )
     return parser
 
 
@@ -130,18 +115,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         # 子命令名称受 argparse choices 限制，因此这里的动态分派不会调用
         # 任意对象属性。
-        if args.command == "repair":
-            posthoc_checks = load_posthoc_checks(
-                args.checks,
-                repository=project.repository,
-            )
-            result = workflow.repair(
-                project,
-                source_run=args.source_run,
-                checks=posthoc_checks,
-            )
-        else:
-            result = getattr(workflow, args.command)(project)
+        result = getattr(workflow, args.command)(project)
         print(result.model_dump_json(indent=2))
         return 0 if result.outcome.value not in {"FAILED", "PARTIAL"} else 1
     except KeyboardInterrupt:

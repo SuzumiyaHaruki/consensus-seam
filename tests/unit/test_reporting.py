@@ -24,22 +24,11 @@ def test_publish_latest_tracks_audit_files_but_excludes_worktree(tmp_path: Path)
     worktree = first.run_directory / "patched-worktree"
     worktree.mkdir()
     (worktree / "generated.go").write_text("package generated\n", encoding="utf-8")
-    repair_candidate = first.run_directory / "repair-candidate"
-    repair_candidate.mkdir()
-    (repair_candidate / "generated.go").write_text(
-        "package generated\n", encoding="utf-8"
-    )
-    repaired = first.run_directory / "repaired-worktree-p1"
-    repaired.mkdir()
-    (repaired / "generated.go").write_text("package generated\n", encoding="utf-8")
-
     latest = first.publish_latest()
     assert (latest / "capability-report.json").is_file()
     assert (latest / "logs/build.json").is_file()
     assert (latest / "APPLY.md").is_file()
     assert not (latest / "patched-worktree").exists()
-    assert not (latest / "repair-candidate").exists()
-    assert not (latest / "repaired-worktree-p1").exists()
     assert latest == runs / "latest" / "mini-raft"
 
     second = ArtifactStore.create(runs)

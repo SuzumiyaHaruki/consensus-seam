@@ -62,7 +62,16 @@ class IndependentReviewer(StructuredAgent[ReviewReport]):
         }
         return self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
-            tools=reviewer_tools(project.repository, worktree, self.backend),
+            tools=reviewer_tools(
+                project.repository,
+                worktree,
+                self.backend,
+                original_roots=project.readable_roots,
+                patched_roots=tuple(
+                    worktree / root.relative_to(project.repository)
+                    for root in project.readable_roots
+                ),
+            ),
             post_validate=lambda report: report.validate_for_interface(interface_report),
             invocation_id=invocation_id,
         )

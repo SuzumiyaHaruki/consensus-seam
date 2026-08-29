@@ -88,7 +88,7 @@ class SystemBoundary(StrictModel):
 class ExperimentConfig(StrictModel):
     """实验性质及其可公开研究主张。"""
 
-    kind: Literal["engineering_smoke", "blind_capability", "repair"]
+    kind: Literal["engineering_smoke", "blind_capability"]
     oracle_visible_to_agents: bool
     research_claim: str = Field(min_length=1)
 
@@ -170,18 +170,6 @@ class VerificationFixtureConfig(StrictModel):
         return self
 
 
-class PostHocCheckManifest(StrictModel):
-    """生成后测试使用的独立检查清单。"""
-
-    capability_checks: list[CapabilityCheckConfig] = Field(min_length=1)
-    verification_fixtures: list[VerificationFixtureConfig] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_checks(self) -> "PostHocCheckManifest":
-        _validate_capability_check_configs(self.capability_checks)
-        return self
-
-
 TransformCapability = Literal[
     "message_capture",
     "message_injection",
@@ -207,6 +195,8 @@ class ProjectManifest(StrictModel):
     protocol: str = Field(min_length=1)
     repository: Path
     system_boundary: SystemBoundary
+    scope_roots: list[Path] = Field(default_factory=lambda: [Path(".")])
+    evidence_roots: list[Path] = Field(default_factory=list)
     experiment: ExperimentConfig | None = None
     build: CommandConfig
     test: CommandConfig
@@ -221,6 +211,14 @@ class ProjectManifest(StrictModel):
     def validate_capability_checks(self) -> "ProjectManifest":
         """检查实验选择和失败码之间的静态一致性。"""
 
+        all_roots = self.scope_roots + self.evidence_roots
+        if not self.scope_roots:
+            raise ValueError("scope_roots cannot be empty")
+        if len(all_roots) != len(set(all_roots)):
+            raise ValueError("scope_roots and evidence_roots must be unique")
+        for root in all_roots:
+            if root.is_absolute() or ".." in root.parts or ".git" in root.parts:
+                raise ValueError("source roots must be safe repository-relative folders")
         if self.transform_capabilities is not None:
             if not self.transform_capabilities:
                 raise ValueError("transform_capabilities cannot be empty")
@@ -246,6 +244,7 @@ class CapabilitySpec(StrictModel):
     """内置能力规范；所有目标项目共享，不包含目标 oracle。"""
 
     version: int = Field(ge=1)
+    scope_rules: dict[str, str] = Field(default_factory=dict)
     capabilities: dict[str, CapabilityDefinition]
     prerequisites: CapabilityPrerequisites = Field(
         default_factory=CapabilityPrerequisites
@@ -873,7 +872,6 @@ class WorkflowOutcome(str, Enum):
     ANALYZED = "ANALYZED"
     NO_PATCH_NEEDED = "NO_PATCH_NEEDED"
     PASS = "PASS"
-    REPAIRED = "REPAIRED"
     PARTIAL = "PARTIAL"
     FAILED = "FAILED"
 

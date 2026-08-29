@@ -529,9 +529,7 @@ class ArtifactStore:
             for source in self.run_directory.rglob("*"):
                 relative = source.relative_to(self.run_directory)
                 if any(
-                    part == "repair-candidate"
-                    or part.startswith("patched-worktree")
-                    or part.startswith("repaired-worktree")
+                    part.startswith("patched-worktree")
                     for part in relative.parts
                 ):
                     continue
@@ -548,8 +546,6 @@ class ArtifactStore:
                 "included": "报告、补丁、统计和日志",
                 "excluded": [
                     "patched-worktree*",
-                    "repair-candidate",
-                    "repaired-worktree*",
                 ],
             }
             manifest["experiment"] = run_config.get("experiment")
@@ -564,7 +560,7 @@ class ArtifactStore:
             )
             outcome = manifest["outcome"]
             has_patch = (staging / "changes.patch").is_file()
-            applicable = outcome in {"PASS", "REPAIRED"} and has_patch
+            applicable = outcome == "PASS" and has_patch
             apply_text = (
                 f"""# 应用最近一次已验证补丁
 

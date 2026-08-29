@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from consensus_seam.config import ConfigurationError, load_posthoc_checks, load_project
+from consensus_seam.config import ConfigurationError, load_project
 
 
 def write_manifest(path: Path, repo: Path, working_directory: str = ".") -> None:
@@ -85,29 +85,29 @@ def test_transform_capabilities_must_be_unique(tmp_path: Path) -> None:
         load_project(manifest)
 
 
-def test_load_posthoc_checks_resolves_external_fixtures(tmp_path: Path) -> None:
+def test_source_roots_are_folder_scoped_and_role_separated(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    repo.mkdir()
-    fixture = tmp_path / "post_hoc_test.go"
-    fixture.write_text("package acceptance_test\n", encoding="utf-8")
-    manifest = tmp_path / "post-hoc-checks.yaml"
+    (repo / "core").mkdir(parents=True)
+    (repo / "support").mkdir()
+    manifest = tmp_path / "project.yaml"
+    write_manifest(manifest, repo)
     manifest.write_text(
-        "\n".join(
-            [
-                "capability_checks:",
-                "  - name: generated injection",
-                "    capability: message_injection",
-                "    command: go test ./posthoc",
-                "    failure_code: MESSAGE_INJECTION_FAILED",
-                "verification_fixtures:",
-                f"  - source: {fixture.name}",
-                "    destination: posthoc/post_hoc_test.go",
-            ]
-        ),
+        manifest.read_text(encoding="utf-8")
+        + "\nscope_roots: [core]\nevidence_roots: [support]\n",
         encoding="utf-8",
     )
 
-    loaded = load_posthoc_checks(manifest, repository=repo)
+    loaded = load_project(manifest)
 
-    assert loaded.verification_fixtures[0].source == fixture.resolve()
-    assert loaded.manifest.capability_checks[0].capability == "message_injection"
+    assert loaded.scope_roots == ((repo / "core").resolve(),)
+    assert loaded.evidence_roots == ((repo / "support").resolve(),)
+    assert loaded.readable_roots == loaded.scope_roots + loaded.evidence_roots
+
+    (repo / "not-a-folder").write_text("data\n", encoding="utf-8")
+    write_manifest(manifest, repo)
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + "\nscope_roots: [not-a-folder]\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError, match="not a directory"):
+        load_project(manifest)

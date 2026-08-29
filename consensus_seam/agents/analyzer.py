@@ -58,7 +58,11 @@ class CapabilityAnalyzer(StructuredAgent[CapabilityReport]):
         }
         report = self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
-            tools=analyzer_tools(project.repository, self.backend),
+            tools=analyzer_tools(
+                project.repository,
+                self.backend,
+                readable_roots=project.readable_roots,
+            ),
             post_validate=validate_target,
             invocation_id=invocation_id,
         )

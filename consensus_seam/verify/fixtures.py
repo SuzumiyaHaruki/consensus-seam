@@ -8,24 +8,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from ..config import LoadedProject, ResolvedVerificationFixture
+from ..config import ResolvedVerificationFixture
 
 
 class VerificationFixtureError(RuntimeError):
     """隐藏 fixture 无法安全复制或清除时抛出。"""
 
     pass
-
-
-@contextmanager
-def materialized_verification_fixtures(
-    project: LoadedProject,
-    worktree: Path,
-) -> Iterator[None]:
-    """兼容项目 manifest 的 fixture 入口。"""
-
-    with materialized_fixtures(project.verification_fixtures, worktree):
-        yield
 
 
 @contextmanager

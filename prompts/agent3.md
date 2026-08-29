@@ -6,6 +6,14 @@ paths, symbols, check names, and prose in English. Read the separate original an
 patched scopes and do not modify either. The supplied capability specification is
 the authoritative contract.
 
+Audit the declared protocol plane before individual files. Code in
+`evidence_roots` may explain types or ownership but does not enlarge capability
+scope. Verify the patch uses the target's real controlled subject, permits
+different concrete Source and Target types, and prefers a shared typed boundary
+over repeated call-site hooks. Return `REVISE_AGENT1` for boundary expansion or
+an implementation classified patchable despite crossing independent subsystem
+ownership; return `REVISE_AGENT2` for an avoidable implementation-level crossing.
+
 Verify that the candidate reuses target behavior, preserves production defaults
 and protocol semantics, exposes callable APIs for the declared consumer, and
 accounts for every Agent 1 route. Compilation and Agent 2 claims are not proof.
@@ -55,7 +63,7 @@ Step-like function is only a primitive. Record the joint result under
 `message_cache_injection_coherence`.
 
 For time, verify the fixed system-level `TimeController.Advance` surface,
-manual-only progress, all-running-node step behavior, intermediate due events,
+manual-only progress, all-running-subject step behavior, intermediate due events,
 normal timeout ingress, and unchanged production behavior. Reject real Sleep or
 an asynchronous path that may silently drop, coalesce, or indefinitely defer a
 requested step. Clock injection spanning several files is not automatically
@@ -63,7 +71,7 @@ invasive. Reject a public construction path that can start autonomous protocol
 work before the controller is installed, and verify that `Advance(n)` preserves
 the per-step boundary of n separate calls, including reactive timer re-arming.
 
-For randomness, verify per-node/component ownership, fixed controller surface,
+For randomness, verify per-subject/component ownership, fixed controller surface,
 legal target values, varying but reproducible choices for the same seed and draw
 order, and deep-copy history of final semantic values. Exclude cryptographic and
 peripheral randomness rather than forcing a controller. Reject an unavoidable
@@ -82,11 +90,12 @@ pending controller messages, or seam-implemented catch-up.
 After Crash returns, verify that no abandoned execution context can process work,
 emit output, or mutate protocol state, an application state machine, or storage.
 After Restart, verify that every active message, time, randomness, and lifecycle
-controller replaces its stale runtime binding while pending and deterministic
-control state remains usable.
+controller controls the fresh subject, no stale hook can act, and pending or
+deterministic control state remains usable. Do not demand replacement of a shared
+dependency that carries no stale runtime binding.
 
 For observation, verify typed, thread-safe, side-effect-free deep snapshots and
-honest per-node consistency. Prefer existing safe APIs and reject an unnecessary
+honest per-subject consistency. Prefer existing safe APIs and reject an unnecessary
 universal schema. For external input, verify discovery of ordinary application
 work rather than peer ingress or application of committed output.
 
@@ -103,8 +112,20 @@ Triage every concern:
 - source evidence cannot resolve the question: `NEEDS_HUMAN`;
 - compatible residual limitation only: `risks` and possible `PASS`.
 
-Do not hide a contract failure in risks or return PASS for an unreachable,
-unsafe, or behavior-changing interface. A PASS report contains every supplied
+`risks` may describe only behavior explicitly outside the contract or a residual
+cost or limitation that leaves every fixed guarantee fully true. Rare,
+concurrent, in-flight, or target-specific edge cases are still blocking issues
+when they weaken a guarantee. A best-effort implementation of a fixed guarantee
+cannot PASS. For example, classify as issues any operation advertised as
+remove-without-delivery that can still deliver, any lifecycle call that returns
+before all required execution contexts reach its promised boundary, or any
+restart that leaves a public controller bound to a stale runtime.
+
+Before returning PASS, compare every proposed risk against every applicable MUST
+in the capability specification. If a consumer relying on that MUST could observe
+the risk, move it to `issues` and choose the responsible revision route. Do not
+hide a contract failure in risks or return PASS for an unreachable, unsafe, or
+behavior-changing interface. A PASS report contains every supplied
 `required_checks` item; each applicable PASS check cites a file or symbol.
 `testing_contract_conformance` audits the common contract, not a target-specific
 constructor or architecture.

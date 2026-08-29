@@ -5,6 +5,13 @@ Write the structured interface report in English. Keep JSON keys, enum values,
 identifiers, paths, symbols, and prose in English. The supplied capability
 specification is the authoritative behavior and public-interface contract.
 
+Modify only `scope_roots`; `evidence_roots` are read-only context. Do not expand
+the declared protocol plane to make a capability work. Prefer the lowest shared
+typed boundary, and connect route-specific adapters to one authoritative
+controller rather than duplicating state. If implementation requires coordinating
+independent lifecycle, persistence, application, or process owners, report
+`INVASIVE_REDISCOVERED` instead of building a supervisor.
+
 Act only on capabilities classified `PATCHABLE` and selected by
 `transform_capabilities`. Reuse target behavior where possible, then add the
 smallest public facade, wrapper, hook, dependency, configuration, or typed
@@ -70,14 +77,14 @@ wait-for-quiescence behavior.
 
 For time, implement the system facade `TimeController.Advance`. In controlled
 mode only `Advance` progresses protocol time, each step advances every running
-node one unit, and `Advance(n)` processes intermediate steps. Reuse native Tick
+controlled subject one unit, and `Advance(n)` processes intermediate steps. Reuse native Tick
 or inject a shared virtual clock without changing timeout ordering or directly
 manufacturing protocol outcomes. Each internal step must expose the same boundary
 as a separate `Advance(1)`, including timers re-armed in reaction to earlier
 steps.
 
 For randomness, route every selected in-scope choice through the owning
-node/component `RandomController`. Keep legal domains and the original algorithm;
+subject/component `RandomController`. Keep legal domains and the original algorithm;
 same seed and draw order reproduce the sequence, repeated choices still vary,
 and `Choices` returns deep-copied final semantic values before dependent test
 actions need them. Use one controller per owner, or include the concrete target-
@@ -89,12 +96,12 @@ all five. Attempt each operation and label its actual change scope in `notes` as
 allowed when default-disabled and semantics-preserving. A method that would
 require core semantic changes returns `ErrLifecycleUnsupported`; do not fake it.
 Keep MessageController entries across lifecycle changes, exclude unavailable
-nodes from time advancement, distinguish Stop recovery from Crash recovery, and
+subjects from time advancement, distinguish Stop recovery from Crash recovery, and
 leave post-restart catch-up to the protocol and test. After Crash returns no old
 execution context may process work or mutate state, an application state machine,
-or storage. Restart must replace the old runtime in every active controller,
-discard stale timers and hooks, and keep pending-message and deterministic
-control ownership usable.
+or storage. After Restart each controller must control the fresh subject and no
+stale hook may act. Keep pending-message and deterministic control state usable; a
+shared dependency may remain when it carries no stale runtime binding.
 
 For observation, reuse an existing safe typed API or add only a thread-safe,
 side-effect-free deep snapshot accessor. Do not add a universal state schema or
@@ -106,16 +113,14 @@ scope, covered and uncovered paths, and remaining limitations. Each implemented
 capability needs a concise type-check-ready Go example using real visible symbols;
 use a leading `// Requires:` for assumed typed variables and no ellipsis.
 
-Add only the smallest focused Go tests required for generated behavior. Do not
-rewrite existing target tests, duplicate coverage, or generate matrices. After
-two failed patches to one file, reread the exact range. During the tool loop,
-never run an unfiltered package test suite: use `go_test_compile` for compilation
-and `go_test` with one exact `TestName` or a short `TestName|TestName` alternation
-for generated behavior, without regex wildcards or embedded CLI flags.
-Package-wide regression is a later Controller/Verifier responsibility and must
-not be repeated per capability. Stop when the candidate
-compiles and the necessary focused checks pass. If implementation proves that a
-selected capability requires core semantic changes, return
+Add tests only for behavior introduced by this implementation unit. Reuse
+existing fixtures and extract shared setup instead of copying it. Prefer
+table-driven cases and add at most one end-to-end scenario per unit; do not test
+target protocol outcomes or catch-up except as minimal wiring evidence. A
+Reviewer revision adds one minimal regression case per distinct issue. Generated
+tests should normally be smaller than the production change; stop after the
+affected focused checks pass. If implementation proves that a selected
+capability requires core semantic changes, return
 `INVASIVE_REDISCOVERED` rather than continuing indefinitely.
 
 Revision worktrees may contain a prior candidate. Preserve its public surface

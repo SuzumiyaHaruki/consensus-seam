@@ -1,6 +1,8 @@
 {
   "excluded": [
-    "patched-worktree*"
+    "patched-worktree*",
+    "repair-candidate",
+    "repaired-worktree*"
   ],
   "experiment": {
     "kind": "blind_capability",
@@ -8,7 +10,8 @@
     "research_claim": "Blind discovery and low-intrusion completion of seven basic test-control capabilities in a production Go Raft library whose asynchronous runtime and real-time mechanisms differ from manually ticked protocol libraries.\n"
   },
   "included": "\u62a5\u544a\u3001\u8865\u4e01\u3001\u7edf\u8ba1\u548c\u65e5\u5fd7",
+  "outcome": "PASS",
   "project": "hashicorp-raft",
-  "published_at": "2026-08-28T12:11:17.333040+00:00",
-  "source_run": "20260828T040929.872963Z"
+  "published_at": "2026-08-29T04:45:11.465455+00:00",
+  "source_run": "20260829T023652.248514Z"
 }

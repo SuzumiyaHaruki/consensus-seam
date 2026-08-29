@@ -75,10 +75,9 @@ class GoMethodInput(ToolInput):
 
 class ReadonlyCheckInput(ToolInput):
     scope: str = Field(min_length=1, max_length=100)
-    check: Literal["go_test", "go_test_compile", "go_doc"]
+    check: Literal["go_test", "go_test_compile"]
     package: str = Field(default="./...", min_length=1, max_length=500)
     run: str | None = Field(default=None, max_length=500)
-    symbol: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def require_focused_test(self) -> "ReadonlyCheckInput":
@@ -224,11 +223,22 @@ class LocalToolFactory:
         *,
         backend: GoBackend,
         writable_scope: str | None = None,
+        readable_roots: dict[str, tuple[Path, ...]] | None = None,
+        writable_roots: tuple[Path, ...] | None = None,
         allowed_checks: set[str] | None = None,
     ) -> None:
         self.scopes = {name: root.resolve() for name, root in scopes.items()}
+        self.readable_roots = {
+            name: tuple(path.resolve() for path in roots)
+            for name, roots in (readable_roots or {}).items()
+        }
         self.backend = backend
         self.writable_scope = writable_scope
+        self.writable_roots = (
+            tuple(path.resolve() for path in writable_roots)
+            if writable_roots is not None
+            else None
+        )
         self.allowed_checks = allowed_checks or set()
 
     def read_only_registry(self, *, include_checks: bool) -> ToolRegistry:
@@ -284,7 +294,7 @@ class LocalToolFactory:
                     "run_readonly_check",
                     self._scope_help(
                         "Run an allowlisted focused go_test (exact TestName required), "
-                        "package compile, or go_doc check."
+                        "or package compile check."
                     ),
                     ReadonlyCheckInput,
                     self._run_readonly_check,
@@ -347,7 +357,38 @@ class LocalToolFactory:
             raise ValueError("path escapes the allowed repository scope") from exc
         if writable and scope != self.writable_scope:
             raise ValueError(f"scope {scope!r} is read-only")
+        allowed = (
+            self.writable_roots
+            if writable and self.writable_roots is not None
+            else self.readable_roots.get(scope, (root,))
+        )
+        if not any(resolved == item or item in resolved.parents for item in allowed):
+            kind = "writable" if writable else "visible"
+            raise ValueError(f"path is outside the configured {kind} source roots")
         return resolved
+
+    def _backend_roots(self, scope: str) -> tuple[Path, ...]:
+        return self.readable_roots.get(scope, (self._root(scope),))
+
+    def _display_backend_result(
+        self,
+        scope: str,
+        search_root: Path,
+        value: str | dict[str, object],
+    ) -> str | dict[str, object]:
+        """把子目录查询结果恢复为仓库根相对路径。"""
+
+        prefix = search_root.relative_to(self._root(scope)).as_posix()
+        if prefix == ".":
+            return value
+        if isinstance(value, dict):
+            result = dict(value)
+            if isinstance(result.get("file"), str):
+                result["file"] = f"{prefix}/{result['file']}"
+            return result
+        file_part, separator, remainder = value.partition(":")
+        file_part = file_part.removeprefix("./")
+        return f"{prefix}/{file_part}{separator}{remainder}"
 
     def _list_files(self, value: ToolInput) -> dict[str, Any]:
         """确定性列出文件，跳过 .git 且不跟随目录符号链接。"""
@@ -485,25 +526,49 @@ class LocalToolFactory:
         """委托语言后端查找声明。"""
 
         args = SymbolInput.model_validate(value)
-        return self.backend.find_symbol(self._root(args.scope), args.symbol)[:500]
+        results: list[str] = []
+        for root in self._backend_roots(args.scope):
+            results.extend(
+                self._display_backend_result(args.scope, root, item)  # type: ignore[arg-type]
+                for item in self.backend.find_symbol(root, args.symbol)
+            )
+        return results[:500]
 
     def _find_references(self, value: ToolInput) -> list[str]:
         args = SymbolInput.model_validate(value)
-        return self.backend.find_references(self._root(args.scope), args.symbol)[:500]
+        results: list[str] = []
+        for root in self._backend_roots(args.scope):
+            results.extend(
+                self._display_backend_result(args.scope, root, item)  # type: ignore[arg-type]
+                for item in self.backend.find_references(root, args.symbol)
+            )
+        return results[:500]
 
     def _go_find_type(self, value: ToolInput) -> list[dict[str, object]]:
         args = GoTypeInput.model_validate(value)
-        return self.backend.go_find_type(self._root(args.scope), args.name)
+        results: list[dict[str, object]] = []
+        for root in self._backend_roots(args.scope):
+            results.extend(
+                self._display_backend_result(args.scope, root, item)  # type: ignore[arg-type]
+                for item in self.backend.go_find_type(root, args.name)
+            )
+        return results
 
     def _go_find_method(self, value: ToolInput) -> list[dict[str, object]]:
         args = GoMethodInput.model_validate(value)
-        return self.backend.go_find_method(self._root(args.scope), args.receiver, args.method)
+        results: list[dict[str, object]] = []
+        for root in self._backend_roots(args.scope):
+            results.extend(
+                self._display_backend_result(args.scope, root, item)  # type: ignore[arg-type]
+                for item in self.backend.go_find_method(root, args.receiver, args.method)
+            )
+        return results
 
     def _run_readonly_check(self, value: ToolInput) -> dict[str, Any]:
         """执行角色白名单内的 Go 查询/测试命令。
 
-        Analyzer 只允许 go_doc；Transformer 才能运行 go_test。参数通过正则
-        限制后使用 argv 调用，不经过 shell。
+        只有 Transformer 能运行 go_test。参数通过正则限制后使用 argv 调用，
+        不经过 shell。
         """
 
         args = ReadonlyCheckInput.model_validate(value)
@@ -515,21 +580,16 @@ class LocalToolFactory:
         valid_package = re.fullmatch(r"[A-Za-z0-9_./*?\[\]-]+", args.package)
         if not valid_package or args.package.startswith("-"):
             raise ValueError("invalid Go package pattern")
-        if args.symbol is not None and not re.fullmatch(r"[A-Za-z0-9_./-]+", args.symbol):
-            raise ValueError("invalid go_doc symbol")
-        if args.check == "go_doc":
-            command = ["go", "doc", args.symbol or args.package]
-        else:
-            command = ["go", "test"]
-            if args.check == "go_test_compile":
-                command.append("-run=^$")
-            elif args.run is not None:
-                names = [
-                    item.removeprefix("^").removesuffix("$")
-                    for item in args.run.split("|")
-                ]
-                command.append("-run=^(?:" + "|".join(map(re.escape, names)) + ")$")
-            command.append(args.package)
+        command = ["go", "test"]
+        if args.check == "go_test_compile":
+            command.append("-run=^$")
+        elif args.run is not None:
+            names = [
+                item.removeprefix("^").removesuffix("$")
+                for item in args.run.split("|")
+            ]
+            command.append("-run=^(?:" + "|".join(map(re.escape, names)) + ")$")
+        command.append(args.package)
         completed = subprocess.run(
             command,
             cwd=self._root(args.scope),
@@ -571,8 +631,7 @@ class LocalToolFactory:
                 raise RuntimeError(completed.stderr.strip() or f"git apply {mode} failed")
         return {"applied": True}
 
-    @staticmethod
-    def _validate_patch_paths(patch: str) -> None:
+    def _validate_patch_paths(self, patch: str) -> None:
         """拒绝删除、重命名、二进制 patch 和越界路径。"""
 
         forbidden = (
@@ -592,6 +651,7 @@ class LocalToolFactory:
             path = Path(raw[2:] if raw.startswith(("a/", "b/")) else raw)
             if path.is_absolute() or ".." in path.parts or ".git" in path.parts:
                 raise ValueError(f"unsafe patch path: {raw}")
+            self._resolve(self.writable_scope or "", path.as_posix(), writable=True)
 
     def _write_file(self, value: ToolInput) -> dict[str, Any]:
         """在唯一可写 scope 内创建或覆盖一个 UTF-8 文件。"""
@@ -607,30 +667,59 @@ class LocalToolFactory:
         return {"path": args.path, "bytes": len(encoded)}
 
 
-def analyzer_tools(repository: Path, backend: GoBackend) -> ToolRegistry:
+def analyzer_tools(
+    repository: Path,
+    backend: GoBackend,
+    *,
+    readable_roots: tuple[Path, ...] | None = None,
+) -> ToolRegistry:
     """Agent 1：目标源码只读，且不能运行目标测试。"""
 
     return LocalToolFactory(
         {"source": repository},
         backend=backend,
-        allowed_checks={"go_doc"},
-    ).read_only_registry(include_checks=True)
+        readable_roots=(
+            {"source": readable_roots} if readable_roots is not None else None
+        ),
+    ).read_only_registry(include_checks=False)
 
 
-def transformer_tools(worktree: Path, backend: GoBackend) -> ToolRegistry:
+def transformer_tools(
+    worktree: Path,
+    backend: GoBackend,
+    *,
+    readable_roots: tuple[Path, ...] | None = None,
+    writable_roots: tuple[Path, ...] | None = None,
+) -> ToolRegistry:
     """Agent 2：只可写 detached worktree，并可运行受限 Go 检查。"""
 
     return LocalToolFactory(
         {"worktree": worktree},
         backend=backend,
         writable_scope="worktree",
-        allowed_checks={"go_test", "go_test_compile", "go_doc"},
+        readable_roots=(
+            {"worktree": readable_roots} if readable_roots is not None else None
+        ),
+        writable_roots=writable_roots,
+        allowed_checks={"go_test", "go_test_compile"},
     ).transformer_registry()
 
 
-def reviewer_tools(original: Path, patched: Path, backend: GoBackend) -> ToolRegistry:
+def reviewer_tools(
+    original: Path,
+    patched: Path,
+    backend: GoBackend,
+    *,
+    original_roots: tuple[Path, ...] | None = None,
+    patched_roots: tuple[Path, ...] | None = None,
+) -> ToolRegistry:
     """Agent 3：同时读取 original/patched，但没有写入和命令执行工具。"""
 
+    configured = None
+    if original_roots is not None and patched_roots is not None:
+        configured = {"original": original_roots, "patched": patched_roots}
     return LocalToolFactory(
-        {"original": original, "patched": patched}, backend=backend
+        {"original": original, "patched": patched},
+        backend=backend,
+        readable_roots=configured,
     ).read_only_registry(include_checks=False)

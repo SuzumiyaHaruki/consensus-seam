@@ -13,6 +13,17 @@
 
 不要求为每个目标预先提供人工 ground truth，也不要求人工写出完整接口答案。
 
+`scope_roots` 和 `evidence_roots` 都是面向大型或多子系统仓库的可选配置：
+
+- 不配置时，`scope_roots` 默认为仓库根目录，`evidence_roots` 默认为空；
+- `scope_roots` 只限制 Agent 可分析和修改的文件夹；
+- `evidence_roots` 只补充分析类型、构造关系和所有权所需的只读文件夹；
+- 两者都是源码权限边界，不代替 `system_boundary`，也不会扩大能力范围。
+
+普通的独立协议库无需填写这两个字段。只有仓库较大、包含多个独立子系统，或
+理解核心代码确实需要查看范围外依赖时，才建议按文件夹配置；不要求人工指定到
+具体文件。
+
 ## DeepSeek 运行材料
 
 1. 可用的 DeepSeek API 密钥；
@@ -59,34 +70,6 @@ consensus-seam analyze \
 - 本目标额外关注的严格检查。
 
 这些材料属于具体目标，不会自动进入全局能力规范。
-
-## 可选的生成后 repair 材料
-
-当接口形状由 Agent 自行设计时，可以不提供 capability checks。`patch` 完成后已经能够获得接口代码；只有希望继续验证或提高候选质量时，才需要根据实际接口准备一个后置检查清单：
-
-```yaml
-capability_checks:
-  - name: generated interface scenario
-    capability: message_injection
-    command: go test ./_consensus_seam_posthoc/acceptance -run '^TestGeneratedInterface$' -count=1
-    failure_code: MESSAGE_INJECTION_FAILED
-
-verification_fixtures:
-  - source: post-hoc/generated_interface_test.go
-    destination: _consensus_seam_posthoc/acceptance/generated_interface_test.go
-```
-
-然后运行：
-
-```bash
-consensus-seam repair \
-  --project /绝对路径/project.yaml \
-  --run /绝对路径/runs/<原生成实验> \
-  --checks /绝对路径/post-hoc-checks.yaml \
-  --api-key-file /绝对路径/deepseek-key.txt
-```
-
-后置 fixture 必须位于目标仓库之外，且检查能力必须是原 `interface-report.json` 已实现的能力。可以一次只验证一个真实使用场景，不要求提前穷举所有能力。
 
 ## etcd/raft 首轮修改实验
 

@@ -155,6 +155,50 @@ deleted file mode 100644
     assert (repo / "node.go").exists()
 
 
+def test_folder_roots_separate_writable_scope_from_read_only_evidence(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    core = repo / "core"
+    support = repo / "support"
+    outside = repo / "outside"
+    for folder in (core, support, outside):
+        folder.mkdir(parents=True)
+    (support / "types.go").write_text("package support\n\ntype Shared struct{}\n")
+    (outside / "hidden.go").write_text("package outside\n\ntype Hidden struct{}\n")
+
+    analyzer = analyzer_tools(
+        repo, GoBackend(), readable_roots=(core, support)
+    )
+    assert json.loads(
+        analyzer.execute("read_file", '{"scope":"source","path":"support/types.go"}')
+    )["ok"] is True
+    assert json.loads(
+        analyzer.execute("read_file", '{"scope":"source","path":"outside/hidden.go"}')
+    )["ok"] is False
+    hidden = json.loads(
+        analyzer.execute("find_symbol", '{"scope":"source","symbol":"Hidden"}')
+    )
+    assert hidden["result"] == []
+
+    transformer = transformer_tools(
+        repo,
+        GoBackend(),
+        readable_roots=(core, support),
+        writable_roots=(core,),
+    )
+    assert json.loads(
+        transformer.execute(
+            "write_file", '{"path":"core/controller.go","content":"package core\\n"}'
+        )
+    )["ok"] is True
+    assert json.loads(
+        transformer.execute(
+            "write_file", '{"path":"support/changed.go","content":"package support\\n"}'
+        )
+    )["ok"] is False
+
+
 def test_all_tool_results_are_bounded() -> None:
     registry = ToolRegistry(
         [

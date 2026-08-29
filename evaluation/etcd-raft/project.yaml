@@ -21,8 +21,8 @@ experiment:
     interfaces in a production consensus library without a human answer key or
     a predeclared target-specific API shape.
 
-# `patch` 会构建候选并执行 Reviewer，完成后已经获得接口代码。若需要继续
-# 提高候选质量，使用者可以查看实际接口，再为可选的 `repair` 编写真实测试。
+# `patch` 会构建候选并执行 Reviewer，完成后已经获得接口代码；使用者可以
+# 查看实际接口并在应用候选后运行自己的测试。
 build:
   command: go test -run '^$' ./...
 

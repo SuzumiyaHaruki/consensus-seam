@@ -32,6 +32,11 @@ test:
 
 working_directory: .
 
+# 上次实验在第三轮 Reviewer 后仍发现新的阻塞问题，因此为自动反馈保留一轮
+# 修订空间；该预算只影响本目标，不改变全局默认值。
+limits:
+  agent2_patch_rounds: 4
+
 llm:
   analyzer:
     model: deepseek-v4-flash

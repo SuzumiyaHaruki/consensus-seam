@@ -8,21 +8,15 @@ from typing import Any
 import pytest
 
 from consensus_seam.cli import main
-from consensus_seam.config import LoadedProject, load_posthoc_checks, load_project
+from consensus_seam.config import LoadedProject, load_project
 from consensus_seam.llm.client import FakeLLMClient
 from consensus_seam.llm.runtime import ToolCallingAgentRuntime
 from consensus_seam.models import (
     AgentModelConfig,
-    CapabilityReport,
-    InterfaceReport,
     WorkflowOutcome,
 )
 from consensus_seam.llm.base import AgentRuntimeError, ToolExecutor
-from consensus_seam.workflow import (
-    ConsensusWorkflow,
-    ExperimentPreconditionError,
-    RepairInputError,
-)
+from consensus_seam.workflow import ConsensusWorkflow, ExperimentPreconditionError
 from tests.helpers import capability_report, review_report, write_project_manifest
 
 
@@ -112,109 +106,6 @@ class EditingFakeClient:
                 }
             )
         return json.dumps(review_report())
-
-
-class PostHocSourceRuntime:
-    """生成一个可编译但尚未满足后置真实测试的候选接口。"""
-
-    def run(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        response_schema: dict[str, Any] | None = None,
-        *,
-        agent: str,
-        model: AgentModelConfig,
-        tools: ToolExecutor | None = None,
-        invocation_id: str | None = None,
-    ) -> str:
-        if agent == "analyzer":
-            return json.dumps(capability_report())
-        if agent == "transformer":
-            assert tools is not None
-            result = json.loads(
-                tools.execute(
-                    "write_file",
-                    json.dumps(
-                        {
-                            "path": "generated.go",
-                            "content": "package mini\n\nfunc GeneratedValue() int { return 1 }\n",
-                        }
-                    ),
-                )
-            )
-            assert result["ok"] is True
-            return json.dumps(
-                {
-                    "message_injection": {
-                        "implemented": True,
-                        "entrypoint": {
-                            "file": "generated.go",
-                            "symbol": "GeneratedValue",
-                        },
-                        "implementation_approach": ["test accessor"],
-                    }
-                }
-            )
-        return json.dumps(review_report())
-
-
-class PostHocRepairRuntime:
-    """只执行 Agent 2 修复与 Agent 3 复审，不允许重新分析。"""
-
-    def __init__(self) -> None:
-        self.agents: list[str] = []
-
-    def run(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        response_schema: dict[str, Any] | None = None,
-        *,
-        agent: str,
-        model: AgentModelConfig,
-        tools: ToolExecutor | None = None,
-        invocation_id: str | None = None,
-    ) -> str:
-        self.agents.append(agent)
-        if agent == "analyzer":
-            raise AssertionError("repair must not rerun Analyzer")
-        if agent == "transformer":
-            payload = json.loads(user_prompt)
-            assert payload["feedback"]["failure"] == "POST_HOC_VERIFICATION_FAILED"
-            assert tools is not None
-            result = json.loads(
-                tools.execute(
-                    "apply_patch",
-                    json.dumps(
-                        {
-                            "patch": """diff --git a/generated.go b/generated.go
---- a/generated.go
-+++ b/generated.go
-@@ -3 +3 @@
--func GeneratedValue() int { return 1 }
-+func GeneratedValue() int { return 2 }
-"""
-                        }
-                    ),
-                )
-            )
-            assert result["ok"] is True
-            return json.dumps(
-                {
-                    "message_injection": {
-                        "implemented": True,
-                        "entrypoint": {
-                            "file": "generated.go",
-                            "symbol": "GeneratedValue",
-                        },
-                        "implementation_approach": ["post-hoc repair"],
-                    }
-                }
-            )
-        return json.dumps(review_report())
-
-
 class SplitCapabilityRuntime:
     """确认消息捕获与注入共享一个 Transformer 工具循环。"""
 
@@ -695,41 +586,6 @@ def test_transform_units_put_lifecycle_after_other_controllers() -> None:
         "observation",
         "lifecycle_control",
     ]
-
-
-def test_repair_of_one_message_side_keeps_message_control_grouped() -> None:
-    payload = capability_report()
-    payload["capabilities"]["message_capture"].update(
-        {
-            "status": "PATCHABLE",
-            "gap": "capture cache is missing",
-            "existing_test_interface_complete": False,
-            "test_support_reason": "capture needs the shared controller",
-            "suggested_changes": ["add the shared message controller"],
-        }
-    )
-    report = CapabilityReport.model_validate(payload)
-    interface = InterfaceReport.model_validate(
-        {
-            "message_capture": {
-                "implemented": True,
-                "entrypoint": {"symbol": "Pending"},
-            },
-            "message_injection": {
-                "implemented": True,
-                "entrypoint": {"symbol": "Inject"},
-            },
-        }
-    )
-
-    selected = ConsensusWorkflow._repair_transform_capabilities(
-        {"message_injection"},
-        report,
-        interface,
-    )
-    assert selected == {"message_capture", "message_injection"}
-
-
 def test_reviewer_revision_only_reruns_implicated_capability_group(
     tmp_path: Path,
 ) -> None:
@@ -830,134 +686,6 @@ def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
     assert "injectForTest" in usage
     assert (result.run_directory / "AUDIT.md").is_file()
     assert not (repo / "injection_seam.go").exists()
-
-
-def test_posthoc_repair_reuses_candidate_and_routes_failure_to_agent2(
-    tmp_path: Path,
-    monkeypatch: Any,
-) -> None:
-    monkeypatch.setenv("GOCACHE", str(tmp_path / "gocache"))
-    repo, project = initialized_project(tmp_path, command="go test ./...")
-
-    source_result = ConsensusWorkflow(
-        PostHocSourceRuntime(),
-        runs_root=tmp_path / "source-runs",
-    ).patch(project)
-    assert source_result.outcome is WorkflowOutcome.PASS
-
-    fixture = tmp_path / "generated_interface_test.go"
-    fixture.write_text(
-        """package acceptance_test
-
-import (
-    "testing"
-    mini "example.invalid/mini"
-)
-
-func TestGeneratedInterface(t *testing.T) {
-    if got := mini.GeneratedValue(); got != 2 {
-        t.Fatalf("GeneratedValue() = %d, want 2", got)
-    }
-}
-""",
-        encoding="utf-8",
-    )
-    checks_path = tmp_path / "post-hoc-checks.yaml"
-    checks_path.write_text(
-        "\n".join(
-            [
-                "capability_checks:",
-                "  - name: generated interface scenario",
-                "    capability: message_injection",
-                "    command: go test ./_consensus_seam_posthoc/acceptance -run '^TestGeneratedInterface$' -count=1",
-                "    failure_code: MESSAGE_INJECTION_FAILED",
-                "verification_fixtures:",
-                f"  - source: {fixture.name}",
-                "    destination: _consensus_seam_posthoc/acceptance/generated_interface_test.go",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    checks = load_posthoc_checks(checks_path, repository=repo)
-    runtime = PostHocRepairRuntime()
-
-    result = ConsensusWorkflow(
-        runtime,
-        runs_root=tmp_path / "repair-runs",
-    ).repair(
-        project,
-        source_run=source_result.run_directory,
-        checks=checks,
-    )
-
-    assert result.outcome is WorkflowOutcome.REPAIRED
-    assert runtime.agents == ["transformer", "reviewer"]
-    patch = (result.run_directory / "changes.patch").read_text(encoding="utf-8")
-    assert "return 2" in patch
-    assert not (repo / "generated.go").exists()
-    assert (result.run_directory / "logs/verification-initial.json").is_file()
-    assert (result.run_directory / "logs/verification-repair-p1.json").is_file()
-    assert not (
-        result.run_directory
-        / "repaired-worktree-p1/_consensus_seam_posthoc/acceptance/generated_interface_test.go"
-    ).exists()
-    run_config = json.loads((result.run_directory / "run-config.json").read_text())
-    assert run_config["repair"]["source_run"] == str(source_result.run_directory)
-
-
-def test_repair_rejects_source_candidate_that_failed_review(tmp_path: Path) -> None:
-    repo, project = initialized_project(tmp_path)
-    source = tmp_path / "source-run"
-    source.mkdir()
-    (source / "capability-report.json").write_text(
-        CapabilityReport.model_validate(capability_report()).model_dump_json(),
-        encoding="utf-8",
-    )
-    interface = InterfaceReport.model_validate(
-        {
-            "message_injection": {
-                "implemented": True,
-                "entrypoint": {"symbol": "Inject"},
-            }
-        }
-    )
-    (source / "interface-report.json").write_text(
-        interface.model_dump_json(), encoding="utf-8"
-    )
-    rejected = review_report()
-    rejected["overall"] = "REVISE_AGENT2"
-    rejected["issues"] = [{"reason": "candidate is not ready"}]
-    (source / "review-report.json").write_text(
-        json.dumps(rejected), encoding="utf-8"
-    )
-    revision = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    (source / "run-config.json").write_text(
-        json.dumps({"source_revisions": {"target": {"revision": revision}}}),
-        encoding="utf-8",
-    )
-    (source / "changes.patch").write_text("not-empty\n", encoding="utf-8")
-    checks_path = tmp_path / "checks.yaml"
-    checks_path.write_text(
-        """capability_checks:
-  - name: injection
-    capability: message_injection
-    command: go test ./...
-    failure_code: MESSAGE_INJECTION_FAILED
-""",
-        encoding="utf-8",
-    )
-    checks = load_posthoc_checks(checks_path, repository=repo)
-
-    workflow = ConsensusWorkflow(FakeLLMClient([]), runs_root=tmp_path / "runs")
-    with pytest.raises(RepairInputError, match="did not pass independent review"):
-        workflow._load_repair_source(project, source, checks)
-
-
 def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) -> None:
     _, project = initialized_project(
         tmp_path,

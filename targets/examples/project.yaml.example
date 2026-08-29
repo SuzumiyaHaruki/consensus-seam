@@ -10,6 +10,13 @@ system_boundary:
     execution paths inside this boundary. External applications and real network
     behavior are outside the boundary.
 
+# 以下两个字段均可省略；省略时默认整个仓库可读写，不附加只读目录。
+# 大型仓库需要限制文件夹级源码权限时，再取消注释并替换实际路径。
+# scope_roots:
+#   - path/to/protocol
+# evidence_roots:
+#   - path/to/shared-types
+
 transform_capabilities:
   - message_capture
   - message_injection

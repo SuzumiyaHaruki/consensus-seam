@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 from consensus_seam.config import load_project
-from consensus_seam.verify.fixtures import materialized_verification_fixtures
+from consensus_seam.verify.fixtures import materialized_fixtures
 
 
 def test_hidden_fixture_is_not_agent_visible_and_is_removed_after_use(
@@ -34,7 +34,7 @@ def test_hidden_fixture_is_not_agent_visible_and_is_removed_after_use(
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     destination = worktree / project.verification_fixtures[0].destination
-    with materialized_verification_fixtures(project, worktree):
+    with materialized_fixtures(project.verification_fixtures, worktree):
         assert destination.is_file()
     assert not destination.exists()
 
@@ -130,7 +130,7 @@ func (controller *messageController) Inject(id string) error {
     )
     environment = os.environ.copy()
     environment["GOCACHE"] = str(tmp_path / "gocache")
-    with materialized_verification_fixtures(project, worktree):
+    with materialized_fixtures(project.verification_fixtures, worktree):
         completed = subprocess.run(
             ["go", "test", "./_consensus_seam_hidden/acceptance"],
             cwd=worktree,

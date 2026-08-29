@@ -72,21 +72,3 @@ GOTOOLCHAIN=auto consensus-seam patch \
 ```
 
 预期产物包括能力报告、接口报告、中文结构的使用报告、候选补丁、Reviewer 报告、未解决项、模型统计、工具审计和运行配置。目标原仓库不会被直接修改。
-
-## 可选流程：生成后测试与修复
-
-如果希望进一步验证或提高候选质量，可以根据主流程实际生成的 `interface-report.json` 和 `USAGE.md` 编写后置测试，再运行：
-
-```bash
-cd /home/nitro/Desktop/consensus-seam
-. .venv/bin/activate
-
-GOTOOLCHAIN=auto consensus-seam repair \
-  --project /home/nitro/Desktop/consensus-seam/evaluation/etcd-raft/project.yaml \
-  --run /home/nitro/Desktop/consensus-seam/runs/<主流程时间戳目录> \
-  --checks /绝对路径/etcd-post-hoc-checks.yaml \
-  --api-key-file /home/nitro/Desktop/ds.txt \
-  --model-profile manifest
-```
-
-后置测试第一次通过时结果为 `PASS`；需要 Agent 2 修复后通过时结果为 `REPAIRED`。两者都只证明实际测试场景，不声称完备协议正确性。

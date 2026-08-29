@@ -20,8 +20,15 @@ ConsensusSeam v0.1 只处理 Go 共识实现。能力规范统一测试方看到
 注入拼成完整能力。路径必须从测试方能够构造或调用的公开控制面开始；单个
 消息类别、timer 位置或随机调用点只作为该路径的内部证据。
 
+可选的 `scope_roots` 是可读写文件夹，`evidence_roots` 只用于查找类型、构造和
+所有权；省略时分别默认为仓库根目录和空。两者只约束源码权限，不定义能力范围。
+系统控制声明的协议平面，而不是所有可见源码；不能为了补齐能力扩大边界。控制
+对象可以是节点、Reactor、Service、Actor、组件或进程。
+优先选择保留逻辑内容、身份、完成点和正常入口的最低共享类型化边界；跨越
+独立生命周期、持久化或应用所有权时应判为侵入式。
+
 项目内部测试包可以提供证据，但不能仅凭同包测试能够调用就声称外部测试方
-可用。固定名称是对外合同，不限制内部结构；下文中的“目标节点 ID 类型”、
+可用。固定名称是对外合同，不限制内部结构；下文中的“目标身份类型”、
 “目标消息类型”等是类型槽，Agent 必须换成真实、导出的 Go 类型，不能原样
 生成占位名称。
 
@@ -35,8 +42,8 @@ type MessageKind string
 
 type PendingMessage struct {
     Handle  MessageHandle
-    Source  /* 目标节点 ID 类型 */
-    Target  /* 目标节点 ID 类型 */
+    Source  /* 目标来源身份类型 */
+    Target  /* 目标接收身份类型，可与 Source 不同 */
     Kind    MessageKind
     Message /* 目标消息载体 */
 }
@@ -110,7 +117,7 @@ Advance(steps uint64) error
 ```
 
 测试模式下，不调用 `Advance`，协议时间就不前进；消息操作、观察和外部
-输入不能附带推进。一个 step 统一推进所有 Running 节点一个目标定义的时间
+输入不能附带推进。一个 step 统一推进所有 Running 受控对象一个目标定义的时间
 单位，`Advance(n)` 等价于连续 n 次 `Advance(1)`，不能跳过中间 timer；
 每一步都要保留独立调用的边界，包括前一步协议动作重新注册的 timer。
 
@@ -149,15 +156,15 @@ Controller 必须在第一次受控随机选择前安装。每条 Choice 还必�
 type LifecycleController
 
 func NewLifecycleController(/* 目标依赖 */) *LifecycleController
-func (c *LifecycleController) Pause(node /* 目标节点 ID */) error
-func (c *LifecycleController) Resume(node /* 目标节点 ID */) error
-func (c *LifecycleController) Stop(node /* 目标节点 ID */) error
-func (c *LifecycleController) Crash(node /* 目标节点 ID */) error
-func (c *LifecycleController) Restart(node /* 目标节点 ID */) error
+func (c *LifecycleController) Pause(target /* 受控对象身份类型 */) error
+func (c *LifecycleController) Resume(target /* 受控对象身份类型 */) error
+func (c *LifecycleController) Stop(target /* 受控对象身份类型 */) error
+func (c *LifecycleController) Crash(target /* 受控对象身份类型 */) error
+func (c *LifecycleController) Restart(target /* 受控对象身份类型 */) error
 ```
 
 - Pause/Resume：保留同一个运行实例和易失状态；暂停期间不处理消息、不推进
-  节点时间、不产生输出。只隔离网络不算 Pause。
+  受控对象时间、不产生输出。只隔离网络不算 Pause。
 - Stop：执行正常关闭，允许目标完成正常清理和持久化；之后可以按目标的
   post-stop 状态 Restart。
 - Crash：不额外刷新协议状态，丢弃运行实例和易失状态，只保留目标此前已
@@ -167,11 +174,11 @@ func (c *LifecycleController) Restart(node /* 目标节点 ID */) error
 - Restart：记录先前是 Stop 还是 Crash，使用相同身份、配置和目标正常恢复
   入口；Crash 后必须创建新运行实例。协议追赶由测试方用其他接口驱动。
 
-已进入 MessageController 的消息在节点不可用期间继续保留；节点不可用时
-Inject 失败且不移除消息。节点内部未处理队列在 Crash 时作为易失状态丢失；
-Paused、Stopped、Crashed 节点不接收时间步骤。Restart 还必须替换所有已启用
-Controller 中的旧运行实例绑定，丢弃旧 timer/hook，同时保持 Pending 消息、
-受控时间和随机序列仍可继续使用。
+已进入 MessageController 的消息在目标不可用期间继续保留；目标不可用时
+Inject 失败且不移除消息。受控对象内部未处理队列在 Crash 时作为易失状态丢失；
+Paused、Stopped、Crashed 对象不接收时间步骤。Restart 后所有已启用 Controller
+必须控制新对象且旧 hook 不再生效；没有旧实例绑定的共享依赖可以继续复用，
+Pending 消息、受控时间和随机序列仍须可用。
 
 Agent 尝试五项操作，并逐项标注：
 
@@ -188,7 +195,7 @@ Agent 尝试五项操作，并逐项标注：
 `Observe() /* 目标状态类型 */`。
 
 观察必须线程安全、无副作用、不推进时间，并返回无可变别名的深快照。
-v0.1 只保证单节点快照，不承诺同时冻结所有节点；多个 getter 拼接的时间
+v0.1 只保证单对象快照，不承诺同时冻结所有对象；多个 getter 拼接的时间
 一致性限制必须说明。
 
 ## 7. 外部输入
@@ -211,4 +218,4 @@ hook、依赖注入、配置或 accessor，但必须给出完整构造和接线�
 
 `capability-report.json` 记录修改前事实，`interface-report.json` 记录生成
 接口和范围，中文 `USAGE.md` 给出接口矩阵、构造方式和示例，`AUDIT.md`
-记录独立审查。`patch` 能独立生成候选，`repair` 只是可选质量增强。
+记录独立审查。`patch` 本身完成候选生成和 Reviewer 驱动的自动修订。

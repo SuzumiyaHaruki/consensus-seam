@@ -1,0 +1,4479 @@
+diff --git a/api.go b/api.go
+index 2b38798..d054117 100644
+--- a/api.go
++++ b/api.go
+@@ -222,6 +222,27 @@ type Raft struct {
+ 	// legacy metrics are those that have `_peer_name` as metric suffix instead as labels.
+ 	// e.g: raft_replication_heartbeat_peer0
+ 	noLegacyTelemetry bool
++
++	// random, when set, routes this node's hidden protocol draws through the
++	// controller installed via Config.Random. It is set once before the
++	// node's goroutines start.
++	random *RandomController
++
++	// clock is the time source for this node's protocol loops, installed
++	// once from Config.Clock before the node's goroutines start. It is
++	// never nil: when no controller is configured it is the real wall
++	// clock and production behavior is unchanged.
++	clock Clock
++
++	// The following fields implement the default-disabled lifecycle pause
++	// gate used by LifecycleController.Pause/Resume. They are inert unless
++	// a controller pauses the node: no production code path observes them,
++	// and production behavior is unchanged while they are never used.
++	pauseNotifyCh chan struct{}
++	paused        atomic.Bool
++	pausedMu      sync.Mutex
++	pausedCh      chan struct{}
++	pausedAckCh   chan struct{}
+ }
+ 
+ // BootstrapCluster initializes a server's storage with the given cluster
+@@ -575,6 +596,19 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
+ 		mainThreadSaturation:  newSaturationMetric([]string{"raft", "thread", "main", "saturation"}, 1*time.Second),
+ 		preVoteDisabled:       conf.PreVoteDisabled || !transportSupportPreVote,
+ 		noLegacyTelemetry:     conf.NoLegacyTelemetry,
++		random:                conf.Random,
++		clock:                 conf.Clock,
++		pauseNotifyCh:         make(chan struct{}, 1),
++	}
++	if r.clock == nil {
++		r.clock = realClock{}
++	}
++	// When the configured clock is a TimeController's shared virtual clock,
++	// attribute every timer armed by this node to the node so the controller
++	// can exclude paused, stopped, and crashed nodes from time steps. The
++	// wrapper is transparent: it only tags timers with the node.
++	if vc, ok := r.clock.(*virtualClock); ok {
++		r.clock = &nodeClock{vc: vc, r: r}
+ 	}
+ 	if !transportSupportPreVote && !conf.PreVoteDisabled {
+ 		r.logger.Warn("pre-vote is disabled because it is not supported by the Transport")
+diff --git a/config.go b/config.go
+index 0f58697..8075fe9 100644
+--- a/config.go
++++ b/config.go
+@@ -240,6 +240,23 @@ type Config struct {
+ 	// e.g: raft_replication_heartbeat_peer0
+ 	NoLegacyTelemetry bool
+ 
++	// Random, when set, routes every hidden non-cryptographic protocol draw
++	// of this node (election, heartbeat, commit, and snapshot interval
++	// jitter) through the controller. It must be installed before NewRaft
++	// starts the node's goroutines; when nil (the default), the package's
++	// normal global random source is used and production behavior is
++	// unchanged.
++	Random *RandomController
++
++	// Clock, when set, routes every protocol-relevant timer and time check
++	// of this node (heartbeat, election, commit, lease, snapshot, backoff,
++	// and last-contact timestamps) through the provided source. Install the
++	// shared virtual clock of a TimeController here before NewRaft starts
++	// the node's goroutines so protocol time is fully controlled from the
++	// start; when nil (the default), the node uses the real wall clock and
++	// production behavior is unchanged.
++	Clock Clock
++
+ 	// skipStartup allows NewRaft() to bypass all background work goroutines
+ 	skipStartup bool
+ }
+diff --git a/controlled_transport.go b/controlled_transport.go
+new file mode 100644
+index 0000000..525f043
+--- /dev/null
++++ b/controlled_transport.go
+@@ -0,0 +1,350 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"fmt"
++	"io"
++	"sync"
++	"time"
++)
++
++// ControlledTransport wraps an InmemTransport and routes every outbound
++// cross-node message through a MessageController while controlled mode is
++// enabled. While disabled, it is a pure pass-through delegate, so production
++// behavior is unchanged. Install one wrapper per node and pass the wrapper to
++// NewRaft as the node's Transport.
++//
++// The wrapper implements Transport, WithPreVote, WithPeers, and WithClose so it
++// is a drop-in LoopbackTransport for in-process testing.
++type ControlledTransport struct {
++	base       *InmemTransport
++	controller *MessageController
++	id         ServerID // the local node's ID, the Source of captured requests
++
++	closedCh    chan struct{}
++	closeOnce   sync.Once
++	pipelinesMu sync.Mutex
++	pipelines   []*controlledPipeline
++}
++
++// NewControlledTransport wraps an in-memory transport and binds it to the
++// local node ID and the shared MessageController. The wrapper auto-registers
++// nothing else: target ServerIDs for captured requests come from the ID
++// argument of each transport call (the target's ID), exactly as Raft invokes
++// them.
++func NewControlledTransport(t *InmemTransport, ctl *MessageController, id ServerID) *ControlledTransport {
++	return &ControlledTransport{
++		base:       t,
++		controller: ctl,
++		id:         id,
++		closedCh:   make(chan struct{}),
++	}
++}
++
++func (t *ControlledTransport) controlled() bool {
++	return t.controller != nil && t.controller.Controlled()
++}
++
++// Consumer implements the Transport interface. Inbound RPCs are consumed
++// directly from the underlying transport's consumer channel; in controlled
++// mode the only writer to that channel is MessageController.Inject.
++func (t *ControlledTransport) Consumer() <-chan RPC {
++	return t.base.Consumer()
++}
++
++// LocalAddr implements the Transport interface.
++func (t *ControlledTransport) LocalAddr() ServerAddress {
++	return t.base.LocalAddr()
++}
++
++// AppendEntries implements the Transport interface. In controlled mode the
++// request is captured and the call blocks until the captured response entry is
++// injected, mirroring the synchronous exchange of InmemTransport.AppendEntries.
++func (t *ControlledTransport) AppendEntries(id ServerID, target ServerAddress, args *AppendEntriesRequest, resp *AppendEntriesResponse) error {
++	if !t.controlled() {
++		return t.base.AppendEntries(id, target, args, resp)
++	}
++	waitCh := make(chan RPCResponse, 1)
++	payload := MessagePayload{AppendEntriesRequest: copyAppendEntriesRequest(args)}
++	if _, err := t.controller.capture(t, MessageKindAppendEntriesRequest, t.id, id, target, payload, nil, waitCh); err != nil {
++		return err
++	}
++	return t.waitRPC(waitCh, resp, t.base.timeout)
++}
++
++// RequestVote implements the Transport interface. See AppendEntries.
++func (t *ControlledTransport) RequestVote(id ServerID, target ServerAddress, args *RequestVoteRequest, resp *RequestVoteResponse) error {
++	if !t.controlled() {
++		return t.base.RequestVote(id, target, args, resp)
++	}
++	waitCh := make(chan RPCResponse, 1)
++	payload := MessagePayload{RequestVoteRequest: copyRequestVoteRequest(args)}
++	if _, err := t.controller.capture(t, MessageKindRequestVoteRequest, t.id, id, target, payload, nil, waitCh); err != nil {
++		return err
++	}
++	return t.waitRPC(waitCh, resp, t.base.timeout)
++}
++
++// RequestPreVote implements the WithPreVote interface. See AppendEntries.
++func (t *ControlledTransport) RequestPreVote(id ServerID, target ServerAddress, args *RequestPreVoteRequest, resp *RequestPreVoteResponse) error {
++	if !t.controlled() {
++		return t.base.RequestPreVote(id, target, args, resp)
++	}
++	waitCh := make(chan RPCResponse, 1)
++	payload := MessagePayload{RequestPreVoteRequest: copyRequestPreVoteRequest(args)}
++	if _, err := t.controller.capture(t, MessageKindRequestPreVoteRequest, t.id, id, target, payload, nil, waitCh); err != nil {
++		return err
++	}
++	return t.waitRPC(waitCh, resp, t.base.timeout)
++}
++
++// InstallSnapshot implements the Transport interface. The snapshot stream is
++// fully buffered into replayable storage at capture time; a copy failure is
++// returned to the caller and no entry is registered. Delivery uses a fresh
++// reader over the controller's private buffer.
++func (t *ControlledTransport) InstallSnapshot(id ServerID, target ServerAddress, args *InstallSnapshotRequest, resp *InstallSnapshotResponse, data io.Reader) error {
++	if !t.controlled() {
++		return t.base.InstallSnapshot(id, target, args, resp, data)
++	}
++	var stream []byte
++	if data != nil {
++		buf, err := io.ReadAll(data)
++		if err != nil {
++			return fmt.Errorf("failed to buffer snapshot stream: %w", err)
++		}
++		stream = buf
++	}
++	waitCh := make(chan RPCResponse, 1)
++	payload := MessagePayload{InstallSnapshotRequest: copyInstallSnapshotRequest(args)}
++	if _, err := t.controller.capture(t, MessageKindInstallSnapshotRequest, t.id, id, target, payload, stream, waitCh); err != nil {
++		return err
++	}
++	return t.waitRPC(waitCh, resp, 10*t.base.timeout)
++}
++
++// TimeoutNow implements the Transport interface. See AppendEntries.
++func (t *ControlledTransport) TimeoutNow(id ServerID, target ServerAddress, args *TimeoutNowRequest, resp *TimeoutNowResponse) error {
++	if !t.controlled() {
++		return t.base.TimeoutNow(id, target, args, resp)
++	}
++	waitCh := make(chan RPCResponse, 1)
++	payload := MessagePayload{TimeoutNowRequest: copyTimeoutNowRequest(args)}
++	if _, err := t.controller.capture(t, MessageKindTimeoutNowRequest, t.id, id, target, payload, nil, waitCh); err != nil {
++		return err
++	}
++	return t.waitRPC(waitCh, resp, 10*t.base.timeout)
++}
++
++// AppendEntriesPipeline implements the Transport interface. In controlled
++// mode each pipelined request is captured and its AppendFuture completes when
++// the captured response entry is injected.
++func (t *ControlledTransport) AppendEntriesPipeline(id ServerID, target ServerAddress) (AppendPipeline, error) {
++	if !t.controlled() {
++		return t.base.AppendEntriesPipeline(id, target)
++	}
++	// Mirror the underlying transport's peer validation at creation time.
++	t.base.RLock()
++	_, ok := t.base.peers[target]
++	t.base.RUnlock()
++	if !ok {
++		return nil, fmt.Errorf("failed to connect to peer: %v", target)
++	}
++	p := &controlledPipeline{
++		trans:      t,
++		controller: t.controller,
++		source:     t.id,
++		target:     id,
++		targetAddr: target,
++		doneCh:     make(chan AppendFuture, 16),
++		closedCh:   make(chan struct{}),
++	}
++	t.pipelinesMu.Lock()
++	t.pipelines = append(t.pipelines, p)
++	t.pipelinesMu.Unlock()
++	return p, nil
++}
++
++// EncodePeer implements the Transport interface.
++func (t *ControlledTransport) EncodePeer(id ServerID, addr ServerAddress) []byte {
++	return t.base.EncodePeer(id, addr)
++}
++
++// DecodePeer implements the Transport interface.
++func (t *ControlledTransport) DecodePeer(buf []byte) ServerAddress {
++	return t.base.DecodePeer(buf)
++}
++
++// SetHeartbeatHandler implements the Transport interface. The underlying
++// in-memory transport does not support the fast path, so heartbeats arrive on
++// the consumer channel and are captured like any other message.
++func (t *ControlledTransport) SetHeartbeatHandler(cb func(rpc RPC)) {
++	t.base.SetHeartbeatHandler(cb)
++}
++
++// Connect implements the WithPeers interface. Wrapped transports are unwrapped
++// so the underlying routing tables connect, exactly as with plain
++// InmemTransport values.
++func (t *ControlledTransport) Connect(peer ServerAddress, tr Transport) {
++	base := tr
++	if ct, ok := tr.(*ControlledTransport); ok {
++		base = ct.base
++	}
++	t.base.Connect(peer, base)
++}
++
++// Disconnect implements the WithPeers interface.
++func (t *ControlledTransport) Disconnect(peer ServerAddress) {
++	t.base.Disconnect(peer)
++	t.pipelinesMu.Lock()
++	for _, p := range t.pipelines {
++		if p.targetAddr == peer {
++			p.Close()
++		}
++	}
++	t.pipelinesMu.Unlock()
++}
++
++// DisconnectAll implements the WithPeers interface.
++func (t *ControlledTransport) DisconnectAll() {
++	t.base.DisconnectAll()
++	t.pipelinesMu.Lock()
++	ps := t.pipelines
++	t.pipelines = nil
++	t.pipelinesMu.Unlock()
++	for _, p := range ps {
++		p.Close()
++	}
++}
++
++// Close implements the WithClose interface: it unblocks every controlled call
++// still waiting on a response and closes the underlying transport.
++func (t *ControlledTransport) Close() error {
++	t.closeOnce.Do(func() { close(t.closedCh) })
++	t.pipelinesMu.Lock()
++	ps := t.pipelines
++	t.pipelines = nil
++	t.pipelinesMu.Unlock()
++	for _, p := range ps {
++		p.Close()
++	}
++	return t.base.Close()
++}
++
++// waitRPC blocks until the captured response entry is injected, then copies
++// the typed response into resp. The wait is bounded by the same timeout the
++// underlying transport would use for the same exchange, so a dropped or never
++// injected response resolves exactly like a real transport timeout and never
++// deadlocks node shutdown.
++func (t *ControlledTransport) waitRPC(waitCh chan RPCResponse, resp interface{}, timeout time.Duration) error {
++	var timeoutCh <-chan time.Time
++	if timeout > 0 {
++		timeoutCh = time.After(timeout)
++	}
++	select {
++	case rpcResp := <-waitCh:
++		if rpcResp.Error != nil {
++			return rpcResp.Error
++		}
++		switch out := rpcResp.Response.(type) {
++		case *AppendEntriesResponse:
++			if r, ok := resp.(*AppendEntriesResponse); ok {
++				*r = *out
++				return nil
++			}
++		case *RequestVoteResponse:
++			if r, ok := resp.(*RequestVoteResponse); ok {
++				*r = *out
++				return nil
++			}
++		case *RequestPreVoteResponse:
++			if r, ok := resp.(*RequestPreVoteResponse); ok {
++				*r = *out
++				return nil
++			}
++		case *InstallSnapshotResponse:
++			if r, ok := resp.(*InstallSnapshotResponse); ok {
++				*r = *out
++				return nil
++			}
++		case *TimeoutNowResponse:
++			if r, ok := resp.(*TimeoutNowResponse); ok {
++				*r = *out
++				return nil
++			}
++		}
++		return fmt.Errorf("unexpected response type %T", rpcResp.Response)
++	case <-timeoutCh:
++		return fmt.Errorf("command timed out")
++	case <-t.closedCh:
++		return ErrTransportShutdown
++	}
++}
++
++// controlledPipeline is the controlled-mode AppendPipeline. Each AppendEntries
++// captures a request; the returned AppendFuture completes with the response
++// when the captured response entry is injected.
++type controlledPipeline struct {
++	trans      *ControlledTransport
++	controller *MessageController
++	source     ServerID
++	target     ServerID
++	targetAddr ServerAddress
++
++	doneCh    chan AppendFuture
++	closedCh  chan struct{}
++	closeOnce sync.Once
++}
++
++func (p *controlledPipeline) AppendEntries(args *AppendEntriesRequest, resp *AppendEntriesResponse) (AppendFuture, error) {
++	select {
++	case <-p.closedCh:
++		return nil, ErrPipelineShutdown
++	default:
++	}
++	future := &appendFuture{start: time.Now(), args: args, resp: resp}
++	future.init()
++
++	waitCh := make(chan RPCResponse, 1)
++	payload := MessagePayload{AppendEntriesRequest: copyAppendEntriesRequest(args)}
++	if _, err := p.controller.capture(p.trans, MessageKindAppendEntriesRequest, p.source, p.target, p.targetAddr, payload, nil, waitCh); err != nil {
++		return nil, err
++	}
++
++	timeout := p.trans.base.timeout
++	go func() {
++		var timeoutCh <-chan time.Time
++		if timeout > 0 {
++			timeoutCh = time.After(timeout)
++		}
++		var rpcResp RPCResponse
++		select {
++		case rpcResp = <-waitCh:
++		case <-timeoutCh:
++			rpcResp = RPCResponse{Error: fmt.Errorf("command timed out")}
++		case <-p.closedCh:
++			rpcResp = RPCResponse{Error: ErrPipelineShutdown}
++		}
++		if rpcResp.Error == nil {
++			if out, ok := rpcResp.Response.(*AppendEntriesResponse); ok {
++				*future.resp = *out
++			}
++		}
++		future.respond(rpcResp.Error)
++		select {
++		case p.doneCh <- future:
++		case <-p.closedCh:
++		}
++	}()
++	return future, nil
++}
++
++func (p *controlledPipeline) Consumer() <-chan AppendFuture {
++	return p.doneCh
++}
++
++func (p *controlledPipeline) Close() error {
++	p.closeOnce.Do(func() { close(p.closedCh) })
++	return nil
++}
+diff --git a/fsm.go b/fsm.go
+index be6a24e..8b3c010 100644
+--- a/fsm.go
++++ b/fsm.go
+@@ -235,6 +235,12 @@ func (r *Raft) runFSM() {
+ 	saturation := newSaturationMetric([]string{"raft", "thread", "fsm", "saturation"}, 1*time.Second)
+ 
+ 	for {
++		// Lifecycle pause gate (default-disabled test hook, see
++		// LifecycleController): while paused, no log is applied to the FSM
++		// and no snapshot or restore is processed.
++		if !r.waitWhilePaused() {
++			return
++		}
+ 		saturation.sleeping()
+ 
+ 		select {
+diff --git a/lifecycle_control.go b/lifecycle_control.go
+new file mode 100644
+index 0000000..db70d9b
+--- /dev/null
++++ b/lifecycle_control.go
+@@ -0,0 +1,408 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"errors"
++	"fmt"
++	"sync"
++)
++
++// ErrLifecycleUnsupported is returned by a LifecycleController operation that
++// cannot be implemented for the target without changing core protocol,
++// persistence, state-transition, or ordering semantics. It is a plain sentinel
++// so callers can classify failures with errors.Is.
++var ErrLifecycleUnsupported = errors.New("raft: lifecycle operation unsupported")
++
++// LifecycleStatus is the recorded lifecycle state of one node managed by a
++// LifecycleController.
++type LifecycleStatus int
++
++const (
++	// LifecycleRunning means the node has a live runtime that is processing
++	// protocol work.
++	LifecycleRunning LifecycleStatus = iota
++	// LifecyclePaused means the node's runtime is alive but its main
++	// protocol loops are blocked by the pause gate.
++	LifecyclePaused
++	// LifecycleStopped means the node was shut down through the target's
++	// normal shutdown path.
++	LifecycleStopped
++	// LifecycleCrashed means the node's runtime was discarded abruptly
++	// without an extra protocol-state flush.
++	LifecycleCrashed
++)
++
++func (s LifecycleStatus) String() string {
++	switch s {
++	case LifecycleRunning:
++		return "running"
++	case LifecyclePaused:
++		return "paused"
++	case LifecycleStopped:
++		return "stopped"
++	case LifecycleCrashed:
++		return "crashed"
++	default:
++		return "unknown"
++	}
++}
++
++// managedNode is one node managed by a LifecycleController: the live runtime
++// binding plus the construction parameters needed to rebuild the runtime on
++// Restart through the target's normal recovery.
++type managedNode struct {
++	id     ServerID
++	raft   *Raft
++	conf   Config
++	fsm    FSM
++	logs   LogStore
++	stable StableStore
++	snaps  SnapshotStore
++	trans  Transport
++	status LifecycleStatus
++}
++
++// LifecycleController manages the lifecycle of in-process Raft nodes: it can
++// temporarily pause and resume a running runtime, stop a node with the
++// target's normal shutdown, crash a node abruptly, and restart it through the
++// target's normal recovery using the same identity, configuration, and durable
++// stores. The controller is inert until nodes are registered: registering a
++// node never changes its behavior, and production behavior is unchanged when
++// no controller is used.
++//
++// Wiring: create the controller, construct each node with NewRaft as usual,
++// then register it so Restart can rebuild the runtime:
++//
++//	lc := raft.NewLifecycleController()
++//	r, _ := raft.NewRaft(conf, fsm, store, store, snaps, trans)
++//	_ = lc.Register(r)
++//	_ = lc.Pause("node-1")
++//	_ = lc.Resume("node-1")
++//	_ = lc.Stop("node-1")
++//	_ = lc.Restart("node-1")
++//	r2 := lc.Raft("node-1") // the fresh runtime
++//
++// Pause and Resume are implemented with a narrow, default-disabled pause gate
++// in the node's main protocol loops (a core hook): while paused, the loops
++// block before selecting, so no RPC is handled, no protocol timer action is
++// processed, and no new leadership or commit decision is made, while the same
++// runtime and its volatile state are retained. Stop, Crash, and Restart are
++// facades over the target's own Shutdown and NewRaft behavior; no protocol,
++// persistence, state-transition, or ordering semantics are changed. All
++// methods are safe for concurrent use.
++type LifecycleController struct {
++	mu    sync.Mutex
++	nodes map[ServerID]*managedNode
++}
++
++// NewLifecycleController creates an empty controller and registers every node
++// passed to it. Nodes may also be registered later with Register.
++func NewLifecycleController(nodes ...*Raft) *LifecycleController {
++	lc := &LifecycleController{nodes: make(map[ServerID]*managedNode)}
++	for _, n := range nodes {
++		_ = lc.Register(n)
++	}
++	return lc
++}
++
++// Register binds node to this controller. Registration records the node's
++// identity, runtime, and construction parameters (configuration, FSM, log and
++// stable stores, snapshot store, and transport) so that a later Restart can
++// rebuild the runtime through NewRaft with the same identity and durable
++// state. Registering an ID that is already bound replaces the binding; this is
++// how a consumer re-registers a node after building a fresh runtime with a
++// fresh transport wrapper. Register returns an error for a nil node or for a
++// node whose configuration was never stored (a zero-value or manually
++// constructed *Raft), so registration can never panic.
++func (lc *LifecycleController) Register(node *Raft) error {
++	if node == nil {
++		return errors.New("raft: cannot register a nil node with LifecycleController")
++	}
++	conf, ok := node.conf.Load().(Config)
++	if !ok {
++		return errors.New("raft: cannot register a node without a stored configuration")
++	}
++	n := &managedNode{
++		id:     node.localID,
++		raft:   node,
++		conf:   conf,
++		fsm:    node.fsm,
++		logs:   node.logs,
++		stable: node.stable,
++		snaps:  node.snapshots,
++		trans:  node.trans,
++		status: LifecycleRunning,
++	}
++	lc.mu.Lock()
++	defer lc.mu.Unlock()
++	lc.nodes[node.localID] = n
++	return nil
++}
++
++// Raft returns the runtime currently bound to the registered node id, or nil
++// if the node is not registered or its runtime has been discarded by Stop or
++// Crash. After a successful Restart it returns the fresh runtime.
++func (lc *LifecycleController) Raft(id ServerID) *Raft {
++	lc.mu.Lock()
++	defer lc.mu.Unlock()
++	n, ok := lc.nodes[id]
++	if !ok {
++		return nil
++	}
++	return n.raft
++}
++
++// Status returns the recorded lifecycle status of the registered node id.
++func (lc *LifecycleController) Status(id ServerID) (LifecycleStatus, error) {
++	lc.mu.Lock()
++	defer lc.mu.Unlock()
++	n, ok := lc.nodes[id]
++	if !ok {
++		return 0, fmt.Errorf("raft: node %s is not registered with LifecycleController", id)
++	}
++	return n.status, nil
++}
++
++// Pause temporarily blocks the node's main protocol loops. The same runtime
++// and its volatile state are retained: while paused the node does not handle
++// inbound protocol messages, does not act on protocol timers, does not make
++// new leadership, commit, or apply decisions, and emits no protocol output:
++// the per-peer replication, heartbeat, pipeline, FSM-applier, and snapshot
++// loops are gated by the same default-disabled pause gate, so no AppendEntries,
++// RequestVote, snapshot, or apply work is performed while paused. The node
++// does not progress.
++// Pause waits until the node's main loop has reached a pause boundary, so when
++// it returns the node is quiescent (an operation already in flight at the time
++// of the call completes first). Pause returns an error if the node is not
++// registered or is not running.
++func (lc *LifecycleController) Pause(id ServerID) error {
++	lc.mu.Lock()
++	defer lc.mu.Unlock()
++	n, ok := lc.nodes[id]
++	if !ok {
++		return fmt.Errorf("raft: node %s is not registered with LifecycleController", id)
++	}
++	if n.status != LifecycleRunning {
++		return fmt.Errorf("raft: cannot pause node %s in state %s", id, n.status)
++	}
++	n.raft.setLifecyclePaused(true)
++	n.status = LifecyclePaused
++	return nil
++}
++
++// Resume unblocks the node's main protocol loops after Pause and continues
++// the same runtime. Resume returns an error if the node is not paused.
++func (lc *LifecycleController) Resume(id ServerID) error {
++	lc.mu.Lock()
++	defer lc.mu.Unlock()
++	n, ok := lc.nodes[id]
++	if !ok {
++		return fmt.Errorf("raft: node %s is not registered with LifecycleController", id)
++	}
++	if n.status != LifecyclePaused {
++		return fmt.Errorf("raft: cannot resume node %s in state %s", id, n.status)
++	}
++	n.raft.setLifecyclePaused(false)
++	n.status = LifecycleRunning
++	return nil
++}
++
++// Stop shuts the node down through the target's normal shutdown path
++// (Raft.Shutdown, which is documented as not graceful: it performs no extra
++// protocol-state flush) and waits for all tracked protocol goroutines to
++// exit. Durable state (term, log, snapshots, configuration) is retained by the
++// caller-owned stores and can be recovered by a later Restart. The runtime
++// binding is discarded. Stop returns an error if the node is not registered or
++// is not running or paused.
++func (lc *LifecycleController) Stop(id ServerID) error {
++	return lc.terminate(id, LifecycleStopped)
++}
++
++// Crash abruptly discards the node's runtime: it stops all activity without an
++// extra protocol-state flush and waits for all tracked protocol goroutines to
++// exit, including the auxiliary plain-go goroutines (the leadership transfer,
++// its timeout watcher, and the log-store metrics emitter), so after Crash
++// returns no execution context of the old runtime can process protocol work,
++// emit protocol output (such as a TimeoutNow request), or mutate volatile
++// state, the application state machine, or durable storage. Only state
++// already durable under the target's semantics (term, log, snapshots,
++// configuration) is retained. The runtime binding is discarded. Crash returns
++// an error if the node is not registered or is not running or paused.
++func (lc *LifecycleController) Crash(id ServerID) error {
++	return lc.terminate(id, LifecycleCrashed)
++}
++
++// terminate implements Stop and Crash. The target's Shutdown is both the
++// normal-stop and the abrupt-stop primitive (it is documented as not
++// graceful), so both operations use the same target path; the controller only
++// records which one was requested so that Restart knows the recovery
++// semantics the consumer expects.
++func (lc *LifecycleController) terminate(id ServerID, status LifecycleStatus) error {
++	verb := "stop"
++	if status == LifecycleCrashed {
++		verb = "crash"
++	}
++	lc.mu.Lock()
++	n, ok := lc.nodes[id]
++	if !ok {
++		lc.mu.Unlock()
++		return fmt.Errorf("raft: node %s is not registered with LifecycleController", id)
++	}
++	if n.status != LifecycleRunning && n.status != LifecyclePaused {
++		lc.mu.Unlock()
++		return fmt.Errorf("raft: cannot %s node %s in state %s", verb, id, n.status)
++	}
++	r := n.raft
++	lc.mu.Unlock()
++
++	if err := r.Shutdown().Error(); err != nil {
++		return fmt.Errorf("raft: shutdown of node %s failed: %w", id, err)
++	}
++	// Wait for the auxiliary plain-go goroutines that are not part of the
++	// tracked protocol group. Every blocking point they can reach is aborted
++	// by the shutdown signal (shutdownCh, leftLeaderLoop, stopCh) or by the
++	// transport close performed by the shutdown future, so this wait is
++	// bounded and guarantees that no abandoned execution context of the old
++	// runtime survives Stop or Crash.
++	r.waitAux()
++
++	lc.mu.Lock()
++	defer lc.mu.Unlock()
++	// Only discard the binding if it is still the runtime we shut down.
++	if cur, ok := lc.nodes[id]; ok && cur == n {
++		n.raft = nil
++		n.status = status
++	}
++	return nil
++}
++
++// Restart rebuilds the node's runtime through the target's normal recovery:
++// it calls NewRaft with the registered identity, configuration, FSM, and
++// durable stores. After a Stop the fresh runtime recovers the target's normal
++// post-stop state; after a Crash it recovers the pre-crash durable state with
++// a fresh runtime. The old runtime binding is replaced, stale timers and hooks
++// belong to the discarded runtime, and post-restart catch-up is left to the
++// protocol. Restart returns an error if the node is not registered or is still
++// running or paused.
++func (lc *LifecycleController) Restart(id ServerID) error {
++	lc.mu.Lock()
++	n, ok := lc.nodes[id]
++	if !ok {
++		lc.mu.Unlock()
++		return fmt.Errorf("raft: node %s is not registered with LifecycleController", id)
++	}
++	if n.status != LifecycleStopped && n.status != LifecycleCrashed {
++		lc.mu.Unlock()
++		return fmt.Errorf("raft: cannot restart node %s in state %s", id, n.status)
++	}
++	conf := n.conf
++	fsm, logs, stable, snaps := n.fsm, n.logs, n.stable, n.snaps
++	trans := n.trans
++	lc.mu.Unlock()
++
++	// In a controlled deployment the node's transport is a
++	// ControlledTransport wrapper; the old wrapper was closed with the old
++	// runtime, so the fresh runtime gets a fresh wrapper over the same
++	// underlying transport and message controller so capture and injection
++	// keep working after the restart. Pending messages captured before the
++	// stop/crash are re-bound to the fresh wrapper so their handles remain
++	// injectable after the restart (a closed-owner entry would otherwise be
++	// refused deterministically by Inject).
++	if ct, ok := trans.(*ControlledTransport); ok {
++		fresh := NewControlledTransport(ct.base, ct.controller, ct.id)
++		ct.controller.rebindOwner(ct, fresh)
++		trans = fresh
++	}
++
++	r, err := NewRaft(&conf, fsm, logs, stable, snaps, trans)
++	if err != nil {
++		return fmt.Errorf("raft: restart of node %s failed: %w", id, err)
++	}
++
++	lc.mu.Lock()
++	defer lc.mu.Unlock()
++	if cur, ok := lc.nodes[id]; ok && cur == n {
++		n.raft = r
++		n.trans = trans
++		n.conf = conf
++		n.status = LifecycleRunning
++	}
++	return nil
++}
++
++// setLifecyclePaused flips the node's pause gate. This is a narrow,
++// default-disabled test hook backing LifecycleController.Pause/Resume: while
++// the gate is set, the node's main protocol loops block before selecting so
++// no inbound message is handled, no protocol timer action is processed, and
++// no new leadership or commit decision is made. The runtime and its volatile
++// state are retained. Production behavior is unchanged while the gate is
++// never set.
++//
++// Setting the gate wakes an idle main loop through pauseNotifyCh and waits
++// until the loop acknowledges that it has reached a pause boundary, so when
++// this method returns the node is quiescent. The wait is aborted if the node
++// shuts down while pausing.
++func (r *Raft) setLifecyclePaused(paused bool) {
++	r.pausedMu.Lock()
++	if r.paused.Load() == paused {
++		r.pausedMu.Unlock()
++		return
++	}
++	r.paused.Store(paused)
++	if paused {
++		r.pausedCh = make(chan struct{})
++		r.pausedAckCh = make(chan struct{}, 1)
++		select {
++		case r.pauseNotifyCh <- struct{}{}:
++		default:
++		}
++		ack := r.pausedAckCh
++		r.pausedMu.Unlock()
++
++		select {
++		case <-ack:
++		case <-r.shutdownCh:
++		}
++		return
++	}
++	if r.pausedCh != nil {
++		close(r.pausedCh)
++	}
++	r.pausedCh = nil
++	r.pausedAckCh = nil
++	// Drain any stale wake-up so resumed loops do not spin on it.
++	select {
++	case <-r.pauseNotifyCh:
++	default:
++	}
++	r.pausedMu.Unlock()
++}
++
++// waitWhilePaused blocks the calling protocol loop while the pause gate is
++// set. It returns false if the node shuts down while waiting, in which case
++// the caller must exit its loop.
++func (r *Raft) waitWhilePaused() bool {
++	for r.paused.Load() {
++		r.pausedMu.Lock()
++		ch := r.pausedCh
++		ack := r.pausedAckCh
++		r.pausedMu.Unlock()
++		if ch == nil {
++			return true
++		}
++		if ack != nil {
++			select {
++			case ack <- struct{}{}:
++			default:
++			}
++		}
++		select {
++		case <-ch:
++		case <-r.shutdownCh:
++			return false
++		}
++	}
++	return true
++}
+diff --git a/lifecycle_control_test.go b/lifecycle_control_test.go
+new file mode 100644
+index 0000000..fc4ab18
+--- /dev/null
++++ b/lifecycle_control_test.go
+@@ -0,0 +1,910 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"errors"
++	"fmt"
++	"testing"
++	"time"
++)
++
++// lifecycleTestNode builds one bootstrapped single-voter node with small
++// timeouts so protocol progress is observable within milliseconds of real
++// time. The caller owns shutdown of the returned node.
++func lifecycleTestNode(t *testing.T, id ServerID) (*Raft, *InmemStore, *InmemTransport) {
++	t.Helper()
++	conf := DefaultConfig()
++	conf.HeartbeatTimeout = 50 * time.Millisecond
++	conf.ElectionTimeout = 50 * time.Millisecond
++	conf.CommitTimeout = 5 * time.Millisecond
++	conf.LeaderLeaseTimeout = 50 * time.Millisecond
++	conf.LocalID = id
++	conf.Logger = newTestLogger(t)
++
++	store := NewInmemStore()
++	snaps := NewInmemSnapshotStore()
++	addr, trans := NewInmemTransport(ServerAddress(string(id)))
++	if err := BootstrapCluster(conf, store, store, snaps, trans, Configuration{
++		Servers: []Server{{Suffrage: Voter, ID: id, Address: addr}},
++	}); err != nil {
++		t.Fatalf("BootstrapCluster failed: %v", err)
++	}
++	r, err := NewRaft(conf, &MockFSM{}, store, store, snaps, trans)
++	if err != nil {
++		t.Fatalf("NewRaft failed: %v", err)
++	}
++	return r, store, trans
++}
++
++func waitForRaftState(t *testing.T, r *Raft, want RaftState, timeout time.Duration) {
++	t.Helper()
++	deadline := time.Now().Add(timeout)
++	for time.Now().Before(deadline) {
++		if r.State() == want {
++			return
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	t.Fatalf("timed out waiting for state %v, got %v", want, r.State())
++}
++
++// TestLifecycleControllerPauseBlocksProtocolProgress verifies that a paused
++// node does not progress at all: with 50ms heartbeat and election timeouts a
++// running node starts an election and becomes leader within a few hundred
++// milliseconds, while a paused node must remain a follower with no commit
++// progress, and resumes into leadership once unpaused.
++func TestLifecycleControllerPauseBlocksProtocolProgress(t *testing.T) {
++	r, _, _ := lifecycleTestNode(t, ServerID("node-1"))
++	lc := NewLifecycleController(r)
++	defer func() { _ = r.Shutdown().Error() }()
++
++	if err := lc.Pause("node-1"); err != nil {
++		t.Fatalf("Pause failed: %v", err)
++	}
++	st, err := lc.Status("node-1")
++	if err != nil || st != LifecyclePaused {
++		t.Fatalf("expected LifecyclePaused, got %v (%v)", st, err)
++	}
++
++	time.Sleep(400 * time.Millisecond)
++	if got := r.State(); got != Follower {
++		t.Fatalf("expected Follower while paused, got %v", got)
++	}
++	if got := r.CommitIndex(); got != 0 {
++		t.Fatalf("expected no commit progress while paused, commit index %d", got)
++	}
++
++	if err := lc.Resume("node-1"); err != nil {
++		t.Fatalf("Resume failed: %v", err)
++	}
++	st, err = lc.Status("node-1")
++	if err != nil || st != LifecycleRunning {
++		t.Fatalf("expected LifecycleRunning after resume, got %v (%v)", st, err)
++	}
++	waitForRaftState(t, r, Leader, 5*time.Second)
++}
++
++// TestLifecycleControllerPauseBlocksApply verifies that a paused leader makes
++// no commit or apply decisions: an Apply enqueued while paused must not
++// complete, and must complete normally after Resume.
++func TestLifecycleControllerPauseBlocksApply(t *testing.T) {
++	r, _, _ := lifecycleTestNode(t, ServerID("node-1"))
++	lc := NewLifecycleController(r)
++	defer func() { _ = r.Shutdown().Error() }()
++	waitForRaftState(t, r, Leader, 5*time.Second)
++
++	if err := lc.Pause("node-1"); err != nil {
++		t.Fatalf("Pause failed: %v", err)
++	}
++	applied := make(chan error, 1)
++	go func() { applied <- r.Apply([]byte("paused-apply"), 0).Error() }()
++
++	select {
++	case err := <-applied:
++		t.Fatalf("Apply completed while paused: %v", err)
++	case <-time.After(300 * time.Millisecond):
++	}
++
++	if err := lc.Resume("node-1"); err != nil {
++		t.Fatalf("Resume failed: %v", err)
++	}
++	select {
++	case err := <-applied:
++		if err != nil {
++			t.Fatalf("Apply failed after resume: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("Apply did not complete after resume")
++	}
++}
++
++// TestLifecycleControllerStopRestart verifies normal stop and recovery: Stop
++// runs the target's normal shutdown and discards the runtime binding, and
++// Restart builds a fresh runtime on the same identity and durable stores that
++// can elect itself leader again while the old runtime stays shut down.
++func TestLifecycleControllerStopRestart(t *testing.T) {
++	r, _, _ := lifecycleTestNode(t, ServerID("node-1"))
++	lc := NewLifecycleController(r)
++
++	if err := lc.Stop("node-1"); err != nil {
++		t.Fatalf("Stop failed: %v", err)
++	}
++	if got := r.State(); got != Shutdown {
++		t.Fatalf("expected Shutdown after Stop, got %v", got)
++	}
++	if got := lc.Raft("node-1"); got != nil {
++		t.Fatalf("expected runtime binding discarded after Stop, got %v", got)
++	}
++	st, err := lc.Status("node-1")
++	if err != nil || st != LifecycleStopped {
++		t.Fatalf("expected LifecycleStopped, got %v (%v)", st, err)
++	}
++
++	if err := lc.Restart("node-1"); err != nil {
++		t.Fatalf("Restart failed: %v", err)
++	}
++	r2 := lc.Raft("node-1")
++	if r2 == nil || r2 == r {
++		t.Fatalf("expected a fresh runtime after Restart")
++	}
++	if got := r.State(); got != Shutdown {
++		t.Fatalf("old runtime must stay shut down after Restart, got %v", got)
++	}
++	defer func() { _ = r2.Shutdown().Error() }()
++
++	// The fresh runtime recovers the durable bootstrap configuration and can
++	// elect itself leader again without any peers.
++	waitForRaftState(t, r2, Leader, 5*time.Second)
++}
++
++// TestLifecycleControllerCrashRestartKeepsDurableState verifies abrupt crash
++// and recovery: Crash discards the runtime without an extra protocol-state
++// flush, and Restart recovers the pre-crash durable state (term and log) with
++// a fresh runtime.
++func TestLifecycleControllerCrashRestartKeepsDurableState(t *testing.T) {
++	r, _, _ := lifecycleTestNode(t, ServerID("node-1"))
++	lc := NewLifecycleController(r)
++	waitForRaftState(t, r, Leader, 5*time.Second)
++
++	future := r.Apply([]byte("cmd-1"), 0)
++	if err := future.Error(); err != nil {
++		t.Fatalf("Apply failed: %v", err)
++	}
++	appliedIndex := future.Index()
++	termAtApply := r.CurrentTerm()
++
++	if err := lc.Crash("node-1"); err != nil {
++		t.Fatalf("Crash failed: %v", err)
++	}
++	if got := r.State(); got != Shutdown {
++		t.Fatalf("expected Shutdown after Crash, got %v", got)
++	}
++	if got := lc.Raft("node-1"); got != nil {
++		t.Fatalf("expected runtime binding discarded after Crash")
++	}
++	st, err := lc.Status("node-1")
++	if err != nil || st != LifecycleCrashed {
++		t.Fatalf("expected LifecycleCrashed, got %v (%v)", st, err)
++	}
++
++	if err := lc.Restart("node-1"); err != nil {
++		t.Fatalf("Restart failed: %v", err)
++	}
++	r2 := lc.Raft("node-1")
++	if r2 == nil {
++		t.Fatalf("expected a fresh runtime after Restart")
++	}
++	defer func() { _ = r2.Shutdown().Error() }()
++
++	// Durable state survives the crash: the fresh runtime sees the same term
++	// and the same log entries and can elect itself leader again.
++	if got := r2.CurrentTerm(); got < termAtApply {
++		t.Fatalf("term regressed across crash: got %d, want >= %d", got, termAtApply)
++	}
++	if got := r2.LastIndex(); got < appliedIndex {
++		t.Fatalf("durable log lost across crash: last index %d, want >= %d", got, appliedIndex)
++	}
++	waitForRaftState(t, r2, Leader, 5*time.Second)
++}
++
++// TestLifecycleControllerErrors verifies the error paths: unknown nodes, nil
++// registration, invalid state transitions, and ErrLifecycleUnsupported
++// classifiability.
++func TestLifecycleControllerErrors(t *testing.T) {
++	lc := NewLifecycleController()
++	if err := lc.Register(nil); err == nil {
++		t.Fatalf("expected error registering a nil node")
++	}
++	if err := lc.Stop(ServerID("missing")); err == nil {
++		t.Fatalf("expected error stopping an unregistered node")
++	}
++	if err := lc.Crash(ServerID("missing")); err == nil {
++		t.Fatalf("expected error crashing an unregistered node")
++	}
++	if err := lc.Restart(ServerID("missing")); err == nil {
++		t.Fatalf("expected error restarting an unregistered node")
++	}
++	if _, err := lc.Status(ServerID("missing")); err == nil {
++		t.Fatalf("expected error querying an unregistered node")
++	}
++	if got := lc.Raft(ServerID("missing")); got != nil {
++		t.Fatalf("expected nil runtime for an unregistered node")
++	}
++	if !errors.Is(fmt.Errorf("wrapped: %w", ErrLifecycleUnsupported), ErrLifecycleUnsupported) {
++		t.Fatalf("ErrLifecycleUnsupported must classify with errors.Is")
++	}
++
++	r, _, _ := lifecycleTestNode(t, ServerID("node-2"))
++	if err := lc.Register(r); err != nil {
++		t.Fatalf("Register failed: %v", err)
++	}
++	defer func() { _ = r.Shutdown().Error() }()
++
++	if err := lc.Restart("node-2"); err == nil {
++		t.Fatalf("expected error restarting a running node")
++	}
++	if err := lc.Pause("node-2"); err != nil {
++		t.Fatalf("Pause failed: %v", err)
++	}
++	if err := lc.Pause("node-2"); err == nil {
++		t.Fatalf("expected error pausing a paused node")
++	}
++	if err := lc.Resume("node-2"); err != nil {
++		t.Fatalf("Resume failed: %v", err)
++	}
++	if err := lc.Resume("node-2"); err == nil {
++		t.Fatalf("expected error resuming a running node")
++	}
++	if err := lc.Stop("node-2"); err != nil {
++		t.Fatalf("Stop failed: %v", err)
++	}
++	if err := lc.Stop("node-2"); err == nil {
++		t.Fatalf("expected error stopping a stopped node")
++	}
++	if err := lc.Pause("node-2"); err == nil {
++		t.Fatalf("expected error pausing a stopped node")
++	}
++	if err := lc.Restart("node-2"); err != nil {
++		t.Fatalf("Restart failed: %v", err)
++	}
++	r2 := lc.Raft("node-2")
++	if r2 == nil || r2 == r {
++		t.Fatalf("expected a fresh runtime after Restart")
++	}
++	defer func() { _ = r2.Shutdown().Error() }()
++}
++
++// TestLifecycleControllerRegisterReplacesBinding verifies that re-registering
++// an already registered ID replaces the binding.
++func TestLifecycleControllerRegisterReplacesBinding(t *testing.T) {
++	lc := NewLifecycleController()
++	r1, _, _ := lifecycleTestNode(t, ServerID("node-3"))
++	r2, _, _ := lifecycleTestNode(t, ServerID("node-3"))
++	defer func() { _ = r1.Shutdown().Error() }()
++	defer func() { _ = r2.Shutdown().Error() }()
++	if err := lc.Register(r1); err != nil {
++		t.Fatalf("Register failed: %v", err)
++	}
++	if err := lc.Register(r2); err != nil {
++		t.Fatalf("Register replace failed: %v", err)
++	}
++	if got := lc.Raft("node-3"); got != r2 {
++		t.Fatalf("expected the latest registration to win")
++	}
++}
++
++// TestLifecycleControllerRestartRejoinsCluster verifies that a restarted
++// follower rejoins a live cluster: after Stop and Restart (with the in-memory
++// routes restored, as required after the target's shutdown closes the
++// transport), the fresh runtime learns the leader's commit index and catches
++// its log up to an entry committed after the restart.
++func TestLifecycleControllerRestartRejoinsCluster(t *testing.T) {
++	ids := []ServerID{"n1", "n2", "n3"}
++	servers := make([]Server, len(ids))
++	for i, id := range ids {
++		servers[i] = Server{Suffrage: Voter, ID: id, Address: ServerAddress(string(id))}
++	}
++
++	var rafts []*Raft
++	var transports []*InmemTransport
++	lc := NewLifecycleController()
++	for _, id := range ids {
++		conf := DefaultConfig()
++		conf.HeartbeatTimeout = 50 * time.Millisecond
++		conf.ElectionTimeout = 50 * time.Millisecond
++		conf.CommitTimeout = 5 * time.Millisecond
++		conf.LeaderLeaseTimeout = 50 * time.Millisecond
++		conf.LocalID = id
++		conf.Logger = newTestLogger(t)
++
++		store := NewInmemStore()
++		snaps := NewInmemSnapshotStore()
++		_, trans := NewInmemTransport(ServerAddress(string(id)))
++		if err := BootstrapCluster(conf, store, store, snaps, trans, Configuration{Servers: servers}); err != nil {
++			t.Fatalf("BootstrapCluster failed: %v", err)
++		}
++		r, err := NewRaft(conf, &MockFSM{}, store, store, snaps, trans)
++		if err != nil {
++			t.Fatalf("NewRaft failed: %v", err)
++		}
++		rafts = append(rafts, r)
++		transports = append(transports, trans)
++		if err := lc.Register(r); err != nil {
++			t.Fatalf("Register failed: %v", err)
++		}
++	}
++	for i := range transports {
++		for j := range transports {
++			if i != j {
++				transports[i].Connect(transports[j].LocalAddr(), transports[j])
++			}
++		}
++	}
++	stopAll := func() {
++		for _, r := range rafts {
++			_ = r.Shutdown().Error()
++		}
++		if r2 := lc.Raft(ids[1]); r2 != nil && r2 != rafts[1] {
++			_ = r2.Shutdown().Error()
++		}
++	}
++	t.Cleanup(stopAll)
++
++	// Elect a leader, then stop and restart one follower.
++	leader := waitForAnyLeader(t, rafts, 10*time.Second)
++	followerIdx := -1
++	for i, r := range rafts {
++		if r != leader {
++			followerIdx = i
++			break
++		}
++	}
++	if followerIdx == -1 {
++		t.Fatalf("no follower found")
++	}
++	followerID := ids[followerIdx]
++	if err := lc.Stop(followerID); err != nil {
++		t.Fatalf("Stop failed: %v", err)
++	}
++	if err := lc.Restart(followerID); err != nil {
++		t.Fatalf("Restart failed: %v", err)
++	}
++	restarted := lc.Raft(followerID)
++	if restarted == nil || restarted == rafts[followerIdx] {
++		t.Fatalf("expected a fresh runtime after Restart")
++	}
++
++	// The target's shutdown closed the follower's transport (wiping its
++	// routing table); restore the in-process topology.
++	for i := range transports {
++		if i == followerIdx {
++			continue
++		}
++		transports[i].Connect(transports[followerIdx].LocalAddr(), transports[followerIdx])
++		transports[followerIdx].Connect(transports[i].LocalAddr(), transports[i])
++	}
++
++	// Commit an entry after the restart; the restarted follower must catch
++	// its durable log up to it.
++	future := leader.Apply([]byte("rejoin"), 0)
++	if err := future.Error(); err != nil {
++		t.Fatalf("Apply failed: %v", err)
++	}
++	appliedIndex := future.Index()
++
++	deadline := time.Now().Add(15 * time.Second)
++	for time.Now().Before(deadline) {
++		if restarted.LastIndex() >= appliedIndex {
++			return
++		}
++		time.Sleep(25 * time.Millisecond)
++	}
++	t.Fatalf("restarted follower did not rejoin: state=%v lastIndex=%d appliedIndex=%d",
++		restarted.State(), restarted.LastIndex(), appliedIndex)
++}
++
++// TestLifecycleControllerPauseStopsProtocolOutput verifies that a paused node
++// emits no protocol output at all: with the leader paused, the follower stops
++// receiving heartbeats and starts an election within a couple of heartbeat
++// timeouts (it leaves the follower state), and once the leader resumes the
++// cluster re-establishes leadership.
++func TestLifecycleControllerPauseStopsProtocolOutput(t *testing.T) {
++	ids := []ServerID{"p1", "p2"}
++	servers := []Server{
++		{Suffrage: Voter, ID: ids[0], Address: ServerAddress(string(ids[0]))},
++		{Suffrage: Voter, ID: ids[1], Address: ServerAddress(string(ids[1]))},
++	}
++	var rafts []*Raft
++	var transports []*InmemTransport
++	for _, id := range ids {
++		conf := DefaultConfig()
++		conf.HeartbeatTimeout = 50 * time.Millisecond
++		conf.ElectionTimeout = 50 * time.Millisecond
++		conf.CommitTimeout = 5 * time.Millisecond
++		conf.LeaderLeaseTimeout = 50 * time.Millisecond
++		conf.LocalID = id
++		conf.Logger = newTestLogger(t)
++		store := NewInmemStore()
++		snaps := NewInmemSnapshotStore()
++		_, trans := NewInmemTransport(ServerAddress(string(id)))
++		if err := BootstrapCluster(conf, store, store, snaps, trans, Configuration{Servers: servers}); err != nil {
++			t.Fatalf("BootstrapCluster %s: %v", id, err)
++		}
++		r, err := NewRaft(conf, &MockFSM{}, store, store, snaps, trans)
++		if err != nil {
++			t.Fatalf("NewRaft %s: %v", id, err)
++		}
++		rafts = append(rafts, r)
++		transports = append(transports, trans)
++	}
++	t.Cleanup(func() {
++		for _, r := range rafts {
++			_ = r.Shutdown().Error()
++		}
++	})
++	for i := range transports {
++		for j := range transports {
++			if i != j {
++				transports[i].Connect(ServerAddress(string(ids[j])), transports[j])
++			}
++		}
++	}
++
++	leader := waitForAnyLeader(t, rafts, 10*time.Second)
++	follower := rafts[0]
++	if leader == rafts[0] {
++		follower = rafts[1]
++	}
++
++	lc := NewLifecycleController(leader)
++	if err := lc.Pause(leader.localID); err != nil {
++		t.Fatalf("Pause failed: %v", err)
++	}
++
++	// Without leader heartbeats the follower times out and starts elections:
++	// the paused leader emits no protocol output.
++	deadline := time.Now().Add(3 * time.Second)
++	for follower.State() == Follower && time.Now().Before(deadline) {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if got := follower.State(); got == Follower {
++		t.Fatalf("follower never timed out while the leader was paused (heartbeats still flowing)")
++	}
++
++	if err := lc.Resume(leader.localID); err != nil {
++		t.Fatalf("Resume failed: %v", err)
++	}
++	// The cluster re-establishes a leader shortly after resume.
++	deadline = time.Now().Add(5 * time.Second)
++	for (rafts[0].State() != Leader && rafts[1].State() != Leader) && time.Now().Before(deadline) {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if rafts[0].State() != Leader && rafts[1].State() != Leader {
++		t.Fatalf("no leader after resume: p1=%s p2=%s", rafts[0].State(), rafts[1].State())
++	}
++}
++
++// TestLifecycleControllerCrashDuringInflightTransfer verifies that Crash
++// completes while a leadership transfer is in flight in a controlled
++// deployment: the transfer's TimeoutNow request is captured by the message
++// controller and the sender blocks on it, and Crash aborts the transfer
++// (through the shutdown signal and the transport close), waits for the
++// auxiliary transfer goroutines to exit, and returns without hanging. The
++// captured TimeoutNow entry stays pending and can still be dropped.
++func TestLifecycleControllerCrashDuringInflightTransfer(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++
++	mkConf := func(id ServerID, hb, elect time.Duration) *Config {
++		conf := inmemConfig(t)
++		conf.HeartbeatTimeout = hb
++		conf.ElectionTimeout = elect
++		conf.LeaderLeaseTimeout = hb / 2
++		conf.CommitTimeout = 50 * time.Millisecond
++		conf.PreVoteDisabled = true
++		conf.LocalID = id
++		return conf
++	}
++	conf1 := mkConf(ServerID("node1"), 1*time.Second, 1*time.Second)
++	conf2 := mkConf(ServerID("node2"), 30*time.Second, 30*time.Second)
++
++	_, t1 := NewInmemTransportWithTimeout(addr1, 5*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 5*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, conf1.LocalID)
++	w2 := NewControlledTransport(t2, ctl, conf2.LocalID)
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++
++	store1 := NewInmemStore()
++	store2 := NewInmemStore()
++	snaps1 := NewInmemSnapshotStore()
++	snaps2 := NewInmemSnapshotStore()
++	configuration := Configuration{Servers: []Server{
++		{Suffrage: Voter, ID: conf1.LocalID, Address: addr1},
++		{Suffrage: Voter, ID: conf2.LocalID, Address: addr2},
++	}}
++	if err := BootstrapCluster(conf1, store1, store1, snaps1, w1, configuration); err != nil {
++		t.Fatalf("bootstrap node1: %v", err)
++	}
++	if err := BootstrapCluster(conf2, store2, store2, snaps2, w2, configuration); err != nil {
++		t.Fatalf("bootstrap node2: %v", err)
++	}
++	ctl.SetControlled(true)
++
++	r1, err := NewRaft(conf1, &MockFSM{}, store1, store1, snaps1, w1)
++	if err != nil {
++		t.Fatalf("NewRaft node1: %v", err)
++	}
++	r2, err := NewRaft(conf2, &MockFSM{}, store2, store2, snaps2, w2)
++	if err != nil {
++		t.Fatalf("NewRaft node2: %v", err)
++	}
++	t.Cleanup(func() {
++		_ = r1.Shutdown().Error()
++		_ = r2.Shutdown().Error()
++	})
++
++	// Drive node1 to leadership purely through capture and injection.
++	deadline := time.Now().Add(30 * time.Second)
++	for r1.State() != Leader {
++		if time.Now().After(deadline) {
++			t.Fatalf("node1 never became leader; state=%s pending=%+v", r1.State(), ctl.Pending())
++		}
++		pumpController(t, ctl)
++	}
++	// Drain the remaining captured traffic so the transfer starts cleanly.
++	deadline = time.Now().Add(15 * time.Second)
++	for {
++		if len(ctl.Pending()) == 0 {
++			break
++		}
++		if time.Now().After(deadline) {
++			break
++		}
++		pumpController(t, ctl)
++		time.Sleep(5 * time.Millisecond)
++	}
++
++	// Start a leadership transfer; its TimeoutNow request is captured and the
++	// sender blocks on the controller continuation.
++	transferFuture := r1.LeadershipTransferToServer(conf2.LocalID, addr2)
++	_ = transferFuture
++	waitPending(t, ctl, func(p []PendingMessage) bool {
++		for _, pm := range p {
++			if pm.Kind == MessageKindTimeoutNowRequest {
++				return true
++			}
++		}
++		return false
++	}, 15*time.Second)
++
++	lc := NewLifecycleController(r1)
++	crashDone := make(chan error, 1)
++	go func() { crashDone <- lc.Crash(conf1.LocalID) }()
++	select {
++	case err := <-crashDone:
++		if err != nil {
++			t.Fatalf("Crash failed: %v", err)
++		}
++	case <-time.After(10 * time.Second):
++		t.Fatalf("Crash hung while a leadership transfer was in flight")
++	}
++	if got := r1.State(); got != Shutdown {
++		t.Fatalf("expected Shutdown after Crash, got %v", got)
++	}
++
++	// The captured TimeoutNow entry survives the lifecycle change as a
++	// pending message; the tester can still manage it.
++	found := false
++	for _, pm := range ctl.Pending() {
++		if pm.Kind == MessageKindTimeoutNowRequest {
++			found = true
++			if err := ctl.Drop(pm.Handle); err != nil {
++				t.Fatalf("Drop of preserved TimeoutNow entry failed: %v", err)
++			}
++		}
++	}
++	if !found {
++		t.Fatalf("captured TimeoutNow entry was lost across Crash")
++	}
++}
++
++// TestLifecycleControllerPauseBlocksInboundHandling verifies that a paused
++// node does not handle inbound protocol messages: AppendEntries delivered to a
++// paused follower are not processed (the follower's commit index does not
++// advance and the leader's Apply does not complete while the pause lasts), and
++// after Resume the same normal ingress path processes the captured traffic and
++// the cluster recovers.
++func TestLifecycleControllerPauseBlocksInboundHandling(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++
++	mkConf := func(id ServerID) *Config {
++		conf := inmemConfig(t)
++		conf.HeartbeatTimeout = 500 * time.Millisecond
++		conf.ElectionTimeout = 1 * time.Second
++		conf.LeaderLeaseTimeout = 400 * time.Millisecond
++		conf.CommitTimeout = 50 * time.Millisecond
++		conf.PreVoteDisabled = true
++		conf.LocalID = id
++		return conf
++	}
++	conf1 := mkConf(ServerID("node1"))
++	conf2 := mkConf(ServerID("node2"))
++
++	_, t1 := NewInmemTransportWithTimeout(addr1, 2*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 2*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, conf1.LocalID)
++	w2 := NewControlledTransport(t2, ctl, conf2.LocalID)
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++
++	store1 := NewInmemStore()
++	store2 := NewInmemStore()
++	snaps1 := NewInmemSnapshotStore()
++	snaps2 := NewInmemSnapshotStore()
++	configuration := Configuration{Servers: []Server{
++		{Suffrage: Voter, ID: conf1.LocalID, Address: addr1},
++		{Suffrage: Voter, ID: conf2.LocalID, Address: addr2},
++	}}
++	if err := BootstrapCluster(conf1, store1, store1, snaps1, w1, configuration); err != nil {
++		t.Fatalf("bootstrap node1: %v", err)
++	}
++	if err := BootstrapCluster(conf2, store2, store2, snaps2, w2, configuration); err != nil {
++		t.Fatalf("bootstrap node2: %v", err)
++	}
++	ctl.SetControlled(true)
++
++	r1, err := NewRaft(conf1, &MockFSM{}, store1, store1, snaps1, w1)
++	if err != nil {
++		t.Fatalf("NewRaft node1: %v", err)
++	}
++	r2, err := NewRaft(conf2, &MockFSM{}, store2, store2, snaps2, w2)
++	if err != nil {
++		t.Fatalf("NewRaft node2: %v", err)
++	}
++	t.Cleanup(func() {
++		_ = r1.Shutdown().Error()
++		_ = r2.Shutdown().Error()
++	})
++
++	// Drive either node to leadership purely through capture and injection,
++	// then settle the cluster so the follower has committed the leader's noop.
++	var leader, follower *Raft
++	deadline := time.Now().Add(30 * time.Second)
++	for r1.State() != Leader && r2.State() != Leader {
++		if time.Now().After(deadline) {
++			t.Fatalf("no leader elected; r1=%s r2=%s", r1.State(), r2.State())
++		}
++		pumpController(t, ctl)
++	}
++	if r1.State() == Leader {
++		leader, follower = r1, r2
++	} else {
++		leader, follower = r2, r1
++	}
++	deadline = time.Now().Add(15 * time.Second)
++	for follower.CommitIndex() < 1 {
++		if time.Now().After(deadline) {
++			t.Fatalf("follower never committed the noop: commit=%d", follower.CommitIndex())
++		}
++		pumpController(t, ctl)
++	}
++
++	lc := NewLifecycleController(follower)
++	if err := lc.Pause(follower.localID); err != nil {
++		t.Fatalf("Pause failed: %v", err)
++	}
++	// Pause returns once the main loop has reached the pause boundary, so the
++	// commit index read here is stable: any message already in flight at the
++	// time of the call completed before the boundary.
++	baseline := follower.CommitIndex()
++
++	// The leader tries to replicate a new entry while the follower is paused;
++	// the request is captured by the transport but the paused follower must
++	// not handle it: no response is produced, the follower's commit index does
++	// not advance, and the leader's Apply does not complete.
++	applied := make(chan error, 1)
++	go func() { applied <- leader.Apply([]byte("while-paused"), 0).Error() }()
++
++	window := time.Now().Add(150 * time.Millisecond)
++	for time.Now().Before(window) {
++		if got := follower.CommitIndex(); got != baseline {
++			t.Fatalf("paused follower processed inbound messages: commit=%d", got)
++		}
++		select {
++		case err := <-applied:
++			t.Fatalf("Apply completed while the follower was paused: %v", err)
++		case <-time.After(10 * time.Millisecond):
++		}
++	}
++
++	if err := lc.Resume(follower.localID); err != nil {
++		t.Fatalf("Resume failed: %v", err)
++	}
++
++	// After resume the same ingress path processes the captured traffic: the
++	// Apply completes and the follower's commit index advances.
++	deadline = time.Now().Add(10 * time.Second)
++	appliedDone := false
++	for {
++		if time.Now().After(deadline) {
++			t.Fatalf("cluster did not recover after resume: leader=%s follower=%s commit=%d",
++				leader.State(), follower.State(), follower.CommitIndex())
++		}
++		pumpController(t, ctl)
++		if !appliedDone {
++			select {
++			case err := <-applied:
++				if err != nil {
++					t.Fatalf("Apply failed after resume: %v", err)
++				}
++				appliedDone = true
++			default:
++			}
++		}
++		if appliedDone && follower.CommitIndex() > baseline {
++			return
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++}
++
++// TestLifecycleControllerRestartKeepsPendingInjectible verifies the full
++// lifecycle interaction with the message controller: a message captured before
++// Crash stays pending, and after Restart the LifecycleController re-binds it
++// to the fresh transport wrapper of the same node, so the same handle is
++// injectable again through the normal ingress of the live peer (the peer
++// answers and the response is captured) and the handle is invalidated on
++// acceptance.
++func TestLifecycleControllerRestartKeepsPendingInjectible(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++
++	mkConf := func(id ServerID, hb, elect time.Duration) *Config {
++		conf := inmemConfig(t)
++		conf.HeartbeatTimeout = hb
++		conf.ElectionTimeout = elect
++		conf.LeaderLeaseTimeout = hb / 2
++		conf.CommitTimeout = 50 * time.Millisecond
++		conf.PreVoteDisabled = true
++		conf.LocalID = id
++		return conf
++	}
++	conf1 := mkConf(ServerID("node1"), 1*time.Second, 1*time.Second)
++	conf2 := mkConf(ServerID("node2"), 30*time.Second, 30*time.Second)
++
++	_, t1 := NewInmemTransportWithTimeout(addr1, 5*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 5*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, conf1.LocalID)
++	w2 := NewControlledTransport(t2, ctl, conf2.LocalID)
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++
++	store1 := NewInmemStore()
++	store2 := NewInmemStore()
++	snaps1 := NewInmemSnapshotStore()
++	snaps2 := NewInmemSnapshotStore()
++	configuration := Configuration{Servers: []Server{
++		{Suffrage: Voter, ID: conf1.LocalID, Address: addr1},
++		{Suffrage: Voter, ID: conf2.LocalID, Address: addr2},
++	}}
++	if err := BootstrapCluster(conf1, store1, store1, snaps1, w1, configuration); err != nil {
++		t.Fatalf("BootstrapCluster node1: %v", err)
++	}
++	if err := BootstrapCluster(conf2, store2, store2, snaps2, w2, configuration); err != nil {
++		t.Fatalf("BootstrapCluster node2: %v", err)
++	}
++	ctl.SetControlled(true)
++
++	r1, err := NewRaft(conf1, &MockFSM{}, store1, store1, snaps1, w1)
++	if err != nil {
++		t.Fatalf("NewRaft node1: %v", err)
++	}
++	r2, err := NewRaft(conf2, &MockFSM{}, store2, store2, snaps2, w2)
++	if err != nil {
++		t.Fatalf("NewRaft node2: %v", err)
++	}
++
++	// Drive node1 to leadership purely through capture and injection.
++	deadline := time.Now().Add(30 * time.Second)
++	for r1.State() != Leader {
++		if time.Now().After(deadline) {
++			t.Fatalf("node1 never became leader; state=%s pending=%+v", r1.State(), ctl.Pending())
++		}
++		pumpController(t, ctl)
++	}
++	// Drain the remaining captured traffic so the transfer starts cleanly.
++	deadline = time.Now().Add(15 * time.Second)
++	for len(ctl.Pending()) != 0 {
++		if time.Now().After(deadline) {
++			break
++		}
++		pumpController(t, ctl)
++		time.Sleep(5 * time.Millisecond)
++	}
++
++	// Start a leadership transfer; its TimeoutNow request is captured and the
++	// sender blocks on the controller continuation.
++	transferFuture := r1.LeadershipTransferToServer(conf2.LocalID, addr2)
++	_ = transferFuture
++	waitPending(t, ctl, func(p []PendingMessage) bool {
++		for _, pm := range p {
++			if pm.Kind == MessageKindTimeoutNowRequest {
++				return true
++			}
++		}
++		return false
++	}, 15*time.Second)
++	var timeoutHandle MessageHandle
++	for _, pm := range ctl.Pending() {
++		if pm.Kind == MessageKindTimeoutNowRequest {
++			timeoutHandle = pm.Handle
++			break
++		}
++	}
++	if timeoutHandle == (MessageHandle{}) {
++		t.Fatalf("TimeoutNow entry not found")
++	}
++
++	lc := NewLifecycleController(r1)
++	if err := lc.Crash(conf1.LocalID); err != nil {
++		t.Fatalf("Crash failed: %v", err)
++	}
++	if err := lc.Restart(conf1.LocalID); err != nil {
++		t.Fatalf("Restart failed: %v", err)
++	}
++	r1b := lc.Raft(conf1.LocalID)
++	if r1b == nil || r1b == r1 {
++		t.Fatalf("expected a fresh runtime after Restart")
++	}
++	t.Cleanup(func() {
++		_ = r1b.Shutdown().Error()
++		_ = r2.Shutdown().Error()
++	})
++
++	// The preserved entry is re-bound to the fresh wrapper of the same node;
++	// restore the in-process route and deliver it through the normal ingress
++	// of node2.
++	freshW1 := r1b.trans.(*ControlledTransport)
++	freshW1.Connect(addr2, w2)
++	w2.Connect(addr1, freshW1)
++
++	if err := ctl.Inject(timeoutHandle); err != nil {
++		t.Fatalf("inject preserved TimeoutNow after restart: %v", err)
++	}
++	// Node2 processed the request through its live ingress: the response is
++	// captured as a new pending entry with reversed routing.
++	waitPending(t, ctl, func(p []PendingMessage) bool {
++		for _, pm := range p {
++			if pm.Kind == MessageKindTimeoutNowResponse && pm.Source == conf2.LocalID && pm.Target == conf1.LocalID {
++				return true
++			}
++		}
++		return false
++	}, 5*time.Second)
++	// Acceptance invalidated the handle.
++	if err := ctl.Inject(timeoutHandle); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("handle stayed valid after post-restart acceptance: %v", err)
++	}
++}
++
++func waitForAnyLeader(t *testing.T, nodes []*Raft, timeout time.Duration) *Raft {
++	t.Helper()
++	deadline := time.Now().Add(timeout)
++	for time.Now().Before(deadline) {
++		for _, r := range nodes {
++			if r.State() == Leader {
++				return r
++			}
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	t.Fatalf("no leader elected")
++	return nil
++}
+diff --git a/message_controller.go b/message_controller.go
+new file mode 100644
+index 0000000..290415e
+--- /dev/null
++++ b/message_controller.go
+@@ -0,0 +1,657 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"io"
++	"sync"
++	"sync/atomic"
++	"time"
++)
++
++// MessageHandle is an opaque, stable identity for one captured cross-node
++// message. Handles are allocated from a monotonically increasing counter and
++// are never reused: a handle stays valid while its message is pending and
++// becomes invalid after Drop, Clear, or a successful Inject.
++type MessageHandle struct {
++	id uint64
++}
++
++// MessageKind classifies a captured cross-node protocol message. The
++// underlying type is string so kinds are comparable and printable.
++type MessageKind string
++
++// The ten in-boundary cross-node message families, requests and responses.
++const (
++	MessageKindAppendEntriesRequest    MessageKind = "append_entries_request"
++	MessageKindAppendEntriesResponse   MessageKind = "append_entries_response"
++	MessageKindRequestVoteRequest      MessageKind = "request_vote_request"
++	MessageKindRequestVoteResponse     MessageKind = "request_vote_response"
++	MessageKindRequestPreVoteRequest   MessageKind = "request_prevote_request"
++	MessageKindRequestPreVoteResponse  MessageKind = "request_prevote_response"
++	MessageKindInstallSnapshotRequest  MessageKind = "install_snapshot_request"
++	MessageKindInstallSnapshotResponse MessageKind = "install_snapshot_response"
++	MessageKindTimeoutNowRequest       MessageKind = "timeout_now_request"
++	MessageKindTimeoutNowResponse      MessageKind = "timeout_now_response"
++)
++
++// MessagePayload is a typed variant carrier for the native request and
++// response commands that cross the in-boundary transport. Exactly one field is
++// set for a captured message; the field corresponds to the message Kind.
++type MessagePayload struct {
++	AppendEntriesRequest    *AppendEntriesRequest
++	AppendEntriesResponse   *AppendEntriesResponse
++	RequestVoteRequest      *RequestVoteRequest
++	RequestVoteResponse     *RequestVoteResponse
++	RequestPreVoteRequest   *RequestPreVoteRequest
++	RequestPreVoteResponse  *RequestPreVoteResponse
++	InstallSnapshotRequest  *InstallSnapshotRequest
++	InstallSnapshotResponse *InstallSnapshotResponse
++	TimeoutNowRequest       *TimeoutNowRequest
++	TimeoutNowResponse      *TimeoutNowResponse
++}
++
++// command returns the native command carried by the payload, or nil when no
++// field is set.
++func (p MessagePayload) command() interface{} {
++	switch {
++	case p.AppendEntriesRequest != nil:
++		return p.AppendEntriesRequest
++	case p.AppendEntriesResponse != nil:
++		return p.AppendEntriesResponse
++	case p.RequestVoteRequest != nil:
++		return p.RequestVoteRequest
++	case p.RequestVoteResponse != nil:
++		return p.RequestVoteResponse
++	case p.RequestPreVoteRequest != nil:
++		return p.RequestPreVoteRequest
++	case p.RequestPreVoteResponse != nil:
++		return p.RequestPreVoteResponse
++	case p.InstallSnapshotRequest != nil:
++		return p.InstallSnapshotRequest
++	case p.InstallSnapshotResponse != nil:
++		return p.InstallSnapshotResponse
++	case p.TimeoutNowRequest != nil:
++		return p.TimeoutNowRequest
++	case p.TimeoutNowResponse != nil:
++		return p.TimeoutNowResponse
++	}
++	return nil
++}
++
++// PendingMessage is the public, deeply-copied view of one captured message. It
++// is returned in stable controller acceptance order by MessageController.Pending.
++type PendingMessage struct {
++	// Handle is the stable identity of the captured message.
++	Handle MessageHandle
++	// Source is the ServerID of the node that produced the message. For a
++	// request this is the sending node; for a response this is the responding
++	// node (reversed relative to its request).
++	Source ServerID
++	// Target is the ServerID of the node the message is addressed to. For a
++	// response this is the node that issued the original request.
++	Target ServerID
++	// Kind classifies the message.
++	Kind MessageKind
++	// Message is the typed native content of the message. It is a fresh deep
++	// copy on every Pending call; mutating it never affects the controller's
++	// private copy that Inject delivers.
++	Message MessagePayload
++	// Stream is a fresh deep copy of the buffered InstallSnapshot payload
++	// stream. It is non-nil only for MessageKindInstallSnapshotRequest entries
++	// whose captured stream was non-empty; for every other kind it is nil.
++	// Mutating it never affects the controller's private replay buffer.
++	Stream []byte
++}
++
++// Controller errors. All are plain sentinel errors so callers can classify
++// failures with errors.Is.
++var (
++	// ErrMessageNotPending is returned when a handle does not identify a
++	// currently pending message (never captured, dropped, cleared, or already
++	// injected).
++	ErrMessageNotPending = errors.New("message not pending")
++	// ErrTargetUnavailable is returned by Inject when the captured target is
++	// not currently reachable through the normal in-boundary routing table.
++	ErrTargetUnavailable = errors.New("message target unavailable")
++	// ErrMessageNotAccepted is returned by Inject when the target's normal
++	// input boundary did not accept the message (for example the target's
++	// consumer queue is full and the transport send timeout elapsed).
++	ErrMessageNotAccepted = errors.New("message not accepted")
++)
++
++// pendingMessage is the controller-private representation of a captured
++// message. The payload and stream are the controller's own deep copies; the
++// response continuation keeps the original caller's exchange alive until the
++// response entry is injected.
++type pendingMessage struct {
++	handle  MessageHandle
++	kind    MessageKind
++	source  ServerID
++	target  ServerID
++	addr    ServerAddress // routing address of the message destination (requests only)
++	payload MessagePayload
++	stream  []byte // replayable buffered copy of an InstallSnapshot stream
++	waitCh  chan RPCResponse
++	resp    RPCResponse // set for response entries
++	isResp  bool
++	// injecting marks an entry whose Inject delivery is in progress. It is set
++	// under the controller lock before delivery starts and cleared again on a
++	// failed delivery, so concurrent Inject calls on one handle can never
++	// deliver the same message twice.
++	injecting bool
++	owner     *ControlledTransport
++}
++
++// MessageController owns every in-boundary cross-node message while controlled
++// mode is enabled. It is thread-safe; all public methods may be called from any
++// goroutine. Production behavior is unchanged while the controller is disabled
++// or not installed: wrapped transports simply delegate to the underlying
++// transport.
++type MessageController struct {
++	mu         sync.Mutex
++	nextID     uint64
++	pending    []*pendingMessage // controller acceptance order
++	byHandle   map[MessageHandle]*pendingMessage
++	controlled atomic.Bool
++}
++
++// NewMessageController creates an empty controller with controlled mode
++// disabled. Install it by wrapping each node's InmemTransport with
++// NewControlledTransport before starting the Raft nodes, then call
++// SetControlled(true) before the nodes can begin protocol work.
++func NewMessageController() *MessageController {
++	return &MessageController{
++		byHandle: make(map[MessageHandle]*pendingMessage),
++	}
++}
++
++// Controlled reports whether capture is currently enabled.
++func (c *MessageController) Controlled() bool {
++	return c.controlled.Load()
++}
++
++// SetControlled enables or disables capture. When disabled, wrapped transports
++// delegate every call to the underlying transport and no new entries are
++// captured; entries already pending remain manageable through Pending, Drop,
++// Clear, and Inject.
++func (c *MessageController) SetControlled(enabled bool) {
++	c.controlled.Store(enabled)
++}
++
++// Pending returns a deep snapshot of every currently captured message, in
++// stable controller acceptance order. Each call returns fresh copies: the
++// returned payloads and streams never alias the controller's private copies,
++// each other, or the copies returned by earlier Pending calls.
++func (c *MessageController) Pending() []PendingMessage {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	out := make([]PendingMessage, 0, len(c.pending))
++	for _, e := range c.pending {
++		out = append(out, PendingMessage{
++			Handle:  e.handle,
++			Source:  e.source,
++			Target:  e.target,
++			Kind:    e.kind,
++			Message: copyPayload(e.payload),
++			Stream:  copyBytes(e.stream),
++		})
++	}
++	return out
++}
++
++// Drop removes one pending message without delivering it. The handle becomes
++// invalid. A caller blocked on the dropped message's response continuation
++// remains blocked until its transport-level wait resolves; no other entry is
++// affected and no entry is reordered.
++func (c *MessageController) Drop(handle MessageHandle) error {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	e, ok := c.byHandle[handle]
++	if !ok {
++		return ErrMessageNotPending
++	}
++	c.removeLocked(e)
++	return nil
++}
++
++// Clear removes every pending message without delivering any of them. All
++// handles become invalid.
++func (c *MessageController) Clear() {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	for _, e := range c.pending {
++		delete(c.byHandle, e.handle)
++	}
++	c.pending = nil
++}
++
++// Inject delivers one pending message through the normal input boundary of its
++// captured target and updates the same cache. For a request, Inject enqueues
++// the controller's private copy into the target's consumer channel (the normal
++// protocol ingress); the request's response is separately captured as a new
++// pending entry with reversed routing and a new handle. For a response entry,
++// Inject forwards the stored response to the original caller's continuation so
++// the synchronous call, channel, or future completes normally.
++// Inject is single-delivery: while one Inject delivery of a handle is in
++// progress, a concurrent Inject of the same handle returns ErrMessageNotPending
++// without affecting the in-flight delivery, so a message can never be delivered
++// twice.
++//
++// Inject succeeds as soon as the input boundary confirms acceptance; it does
++// not wait for dequeue, state transition, response, commit, or quiescence.
++// Confirmed acceptance removes the entry and invalidates the handle. An
++// invalid handle, an unavailable target, or explicit non-acceptance returns an
++// error and preserves the entry.
++func (c *MessageController) Inject(handle MessageHandle) error {
++	c.mu.Lock()
++	e, ok := c.byHandle[handle]
++	if !ok {
++		c.mu.Unlock()
++		return ErrMessageNotPending
++	}
++	if e.injecting {
++		// A concurrent Inject is already delivering this entry; refuse the
++		// duplicate so the message is never delivered twice. The in-flight
++		// delivery decides the entry's fate.
++		c.mu.Unlock()
++		return ErrMessageNotPending
++	}
++	e.injecting = true
++	if e.isResp {
++		c.removeLocked(e)
++		c.mu.Unlock()
++		select {
++		case e.waitCh <- e.resp:
++		default: // the caller already timed out or closed; nothing to unblock
++		}
++		return nil
++	}
++	// Snapshot everything needed for delivery while holding the lock; the
++	// entry itself stays pending until acceptance is confirmed.
++	owner := e.owner
++	cmd := e.payload.command()
++	addr := e.addr
++	var reader io.Reader
++	if e.stream != nil {
++		reader = bytes.NewReader(e.stream)
++	}
++	c.mu.Unlock()
++
++	// Deterministic closed-owner handling: an entry whose owning transport was
++	// closed (Stop/Crash) is not deliverable through that transport. The check
++	// is performed once, before delivery, rather than as a select case against
++	// a permanently-ready closed channel, so the outcome is deterministic and
++	// the entry is preserved for a later retry. LifecycleController.Restart
++	// re-binds entries of a restarted node to its fresh wrapper, after which
++	// this check passes and delivery proceeds through the normal ingress.
++	select {
++	case <-owner.closedCh:
++		c.mu.Lock()
++		e.injecting = false
++		c.mu.Unlock()
++		return ErrMessageNotAccepted
++	default:
++	}
++
++	// Resolve the real captured target through the owning transport's normal
++	// routing table, exactly like InmemTransport.makeRPC.
++	owner.base.RLock()
++	peer, ok := owner.base.peers[addr]
++	owner.base.RUnlock()
++	if !ok || peer == nil {
++		// Preserve the entry and handle so a later Inject can retry.
++		c.mu.Lock()
++		e.injecting = false
++		c.mu.Unlock()
++		return ErrTargetUnavailable
++	}
++
++	respCh := make(chan RPCResponse, 1)
++	rpc := RPC{Command: cmd, Reader: reader, RespChan: respCh}
++	var timeoutCh <-chan time.Time
++	if owner.base.timeout > 0 {
++		timeoutCh = time.After(owner.base.timeout)
++	}
++	select {
++	case peer.consumerCh <- rpc:
++	case <-timeoutCh:
++		c.mu.Lock()
++		e.injecting = false
++		c.mu.Unlock()
++		return ErrMessageNotAccepted
++	}
++
++	// Confirmed acceptance: remove the request entry and invalidate its handle.
++	c.mu.Lock()
++	if cur, ok := c.byHandle[handle]; ok && cur == e {
++		c.removeLocked(e)
++	}
++	c.mu.Unlock()
++
++	// Watch for the protocol response and capture it as a new pending entry.
++	go c.awaitResponse(e, respCh)
++	return nil
++}
++
++// awaitResponse waits for the response produced by an injected request and
++// records it as a new pending entry with reversed Source/Target and a fresh
++// handle. The goroutine lives at most as long as the owning transport: it
++// exits when the transport closes.
++func (c *MessageController) awaitResponse(req *pendingMessage, respCh chan RPCResponse) {
++	select {
++	case rpcResp := <-respCh:
++		c.recordResponse(req, rpcResp)
++	case <-req.owner.closedCh:
++	}
++}
++
++// recordResponse turns one protocol response into a pending entry and keeps
++// the original caller's continuation attached to it.
++func (c *MessageController) recordResponse(req *pendingMessage, rpcResp RPCResponse) {
++	kind := responseKind(req.kind)
++	payload, err := payloadFromResponse(req.kind, rpcResp.Response)
++	if err != nil {
++		// Malformed response: never orphan the original caller.
++		select {
++		case req.waitCh <- RPCResponse{Response: rpcResp.Response, Error: err}:
++		default:
++		}
++		return
++	}
++	c.mu.Lock()
++	e := &pendingMessage{
++		handle:  MessageHandle{id: c.nextID},
++		kind:    kind,
++		source:  req.target,
++		target:  req.source,
++		addr:    req.addr,
++		payload: payload,
++		isResp:  true,
++		resp:    rpcResp,
++		waitCh:  req.waitCh,
++		owner:   req.owner,
++	}
++	c.nextID++
++	c.pending = append(c.pending, e)
++	c.byHandle[e.handle] = e
++	c.mu.Unlock()
++}
++
++// capture records one outbound request. The payload must already be a deep
++// copy owned by the controller; the stream, when non-nil, must be a fully
++// buffered, replayable copy.
++func (c *MessageController) capture(owner *ControlledTransport, kind MessageKind, source, target ServerID, addr ServerAddress, payload MessagePayload, stream []byte, waitCh chan RPCResponse) (MessageHandle, error) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	e := &pendingMessage{
++		handle:  MessageHandle{id: c.nextID},
++		kind:    kind,
++		source:  source,
++		target:  target,
++		addr:    addr,
++		payload: payload,
++		stream:  stream,
++		waitCh:  waitCh,
++		owner:   owner,
++	}
++	c.nextID++
++	c.pending = append(c.pending, e)
++	c.byHandle[e.handle] = e
++	return e.handle, nil
++}
++
++// removeLocked deletes an entry while preserving the relative order of the
++// remaining entries (controller acceptance order).
++func (c *MessageController) removeLocked(e *pendingMessage) {
++	delete(c.byHandle, e.handle)
++	for i, cur := range c.pending {
++		if cur == e {
++			c.pending = append(c.pending[:i], c.pending[i+1:]...)
++			return
++		}
++	}
++}
++
++// rebindOwner reassigns every pending entry captured through old to fresh.
++// LifecycleController.Restart calls this when it replaces a closed
++// ControlledTransport with a fresh wrapper over the same underlying transport
++// and controller, so messages captured before a Stop or Crash remain
++// deliverable through the fresh transport of the same node after the restart.
++func (c *MessageController) rebindOwner(old, fresh *ControlledTransport) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	for _, e := range c.pending {
++		if e.owner == old {
++			e.owner = fresh
++		}
++	}
++}
++
++// responseKind maps a request kind to its response kind.
++func responseKind(k MessageKind) MessageKind {
++	switch k {
++	case MessageKindAppendEntriesRequest:
++		return MessageKindAppendEntriesResponse
++	case MessageKindRequestVoteRequest:
++		return MessageKindRequestVoteResponse
++	case MessageKindRequestPreVoteRequest:
++		return MessageKindRequestPreVoteResponse
++	case MessageKindInstallSnapshotRequest:
++		return MessageKindInstallSnapshotResponse
++	case MessageKindTimeoutNowRequest:
++		return MessageKindTimeoutNowResponse
++	}
++	return k
++}
++
++// payloadFromResponse builds a typed deep-copied payload from the response to
++// a request of the given kind.
++func payloadFromResponse(kind MessageKind, resp interface{}) (MessagePayload, error) {
++	switch kind {
++	case MessageKindAppendEntriesRequest:
++		r, ok := resp.(*AppendEntriesResponse)
++		if !ok {
++			return MessagePayload{}, fmt.Errorf("unexpected response type %T for %s", resp, kind)
++		}
++		return MessagePayload{AppendEntriesResponse: copyAppendEntriesResponse(r)}, nil
++	case MessageKindRequestVoteRequest:
++		r, ok := resp.(*RequestVoteResponse)
++		if !ok {
++			return MessagePayload{}, fmt.Errorf("unexpected response type %T for %s", resp, kind)
++		}
++		return MessagePayload{RequestVoteResponse: copyRequestVoteResponse(r)}, nil
++	case MessageKindRequestPreVoteRequest:
++		r, ok := resp.(*RequestPreVoteResponse)
++		if !ok {
++			return MessagePayload{}, fmt.Errorf("unexpected response type %T for %s", resp, kind)
++		}
++		return MessagePayload{RequestPreVoteResponse: copyRequestPreVoteResponse(r)}, nil
++	case MessageKindInstallSnapshotRequest:
++		r, ok := resp.(*InstallSnapshotResponse)
++		if !ok {
++			return MessagePayload{}, fmt.Errorf("unexpected response type %T for %s", resp, kind)
++		}
++		return MessagePayload{InstallSnapshotResponse: copyInstallSnapshotResponse(r)}, nil
++	case MessageKindTimeoutNowRequest:
++		r, ok := resp.(*TimeoutNowResponse)
++		if !ok {
++			return MessagePayload{}, fmt.Errorf("unexpected response type %T for %s", resp, kind)
++		}
++		return MessagePayload{TimeoutNowResponse: copyTimeoutNowResponse(r)}, nil
++	}
++	return MessagePayload{}, fmt.Errorf("no response defined for kind %s", kind)
++}
++
++// copyPayload deep-copies every non-nil field of a payload.
++func copyPayload(p MessagePayload) MessagePayload {
++	return MessagePayload{
++		AppendEntriesRequest:    copyAppendEntriesRequest(p.AppendEntriesRequest),
++		AppendEntriesResponse:   copyAppendEntriesResponse(p.AppendEntriesResponse),
++		RequestVoteRequest:      copyRequestVoteRequest(p.RequestVoteRequest),
++		RequestVoteResponse:     copyRequestVoteResponse(p.RequestVoteResponse),
++		RequestPreVoteRequest:   copyRequestPreVoteRequest(p.RequestPreVoteRequest),
++		RequestPreVoteResponse:  copyRequestPreVoteResponse(p.RequestPreVoteResponse),
++		InstallSnapshotRequest:  copyInstallSnapshotRequest(p.InstallSnapshotRequest),
++		InstallSnapshotResponse: copyInstallSnapshotResponse(p.InstallSnapshotResponse),
++		TimeoutNowRequest:       copyTimeoutNowRequest(p.TimeoutNowRequest),
++		TimeoutNowResponse:      copyTimeoutNowResponse(p.TimeoutNowResponse),
++	}
++}
++
++func copyBytes(in []byte) []byte {
++	if in == nil {
++		return nil
++	}
++	out := make([]byte, len(in))
++	copy(out, in)
++	return out
++}
++
++func copyRPCHeader(h RPCHeader) RPCHeader {
++	return RPCHeader{ProtocolVersion: h.ProtocolVersion, ID: copyBytes(h.ID), Addr: copyBytes(h.Addr)}
++}
++
++func copyLog(l *Log) *Log {
++	if l == nil {
++		return nil
++	}
++	return &Log{
++		Index:      l.Index,
++		Term:       l.Term,
++		Type:       l.Type,
++		Data:       copyBytes(l.Data),
++		Extensions: copyBytes(l.Extensions),
++		AppendedAt: l.AppendedAt,
++	}
++}
++
++func copyAppendEntriesRequest(r *AppendEntriesRequest) *AppendEntriesRequest {
++	if r == nil {
++		return nil
++	}
++	out := &AppendEntriesRequest{
++		RPCHeader:         copyRPCHeader(r.RPCHeader),
++		Term:              r.Term,
++		Leader:            copyBytes(r.Leader),
++		PrevLogEntry:      r.PrevLogEntry,
++		PrevLogTerm:       r.PrevLogTerm,
++		LeaderCommitIndex: r.LeaderCommitIndex,
++	}
++	if r.Entries != nil {
++		out.Entries = make([]*Log, len(r.Entries))
++		for i, e := range r.Entries {
++			out.Entries[i] = copyLog(e)
++		}
++	}
++	return out
++}
++
++func copyAppendEntriesResponse(r *AppendEntriesResponse) *AppendEntriesResponse {
++	if r == nil {
++		return nil
++	}
++	return &AppendEntriesResponse{
++		RPCHeader:      copyRPCHeader(r.RPCHeader),
++		Term:           r.Term,
++		LastLog:        r.LastLog,
++		Success:        r.Success,
++		NoRetryBackoff: r.NoRetryBackoff,
++	}
++}
++
++func copyRequestVoteRequest(r *RequestVoteRequest) *RequestVoteRequest {
++	if r == nil {
++		return nil
++	}
++	return &RequestVoteRequest{
++		RPCHeader:          copyRPCHeader(r.RPCHeader),
++		Term:               r.Term,
++		Candidate:          copyBytes(r.Candidate),
++		LastLogIndex:       r.LastLogIndex,
++		LastLogTerm:        r.LastLogTerm,
++		LeadershipTransfer: r.LeadershipTransfer,
++	}
++}
++
++func copyRequestVoteResponse(r *RequestVoteResponse) *RequestVoteResponse {
++	if r == nil {
++		return nil
++	}
++	return &RequestVoteResponse{
++		RPCHeader: copyRPCHeader(r.RPCHeader),
++		Term:      r.Term,
++		Peers:     copyBytes(r.Peers),
++		Granted:   r.Granted,
++	}
++}
++
++func copyRequestPreVoteRequest(r *RequestPreVoteRequest) *RequestPreVoteRequest {
++	if r == nil {
++		return nil
++	}
++	return &RequestPreVoteRequest{
++		RPCHeader:    copyRPCHeader(r.RPCHeader),
++		Term:         r.Term,
++		LastLogIndex: r.LastLogIndex,
++		LastLogTerm:  r.LastLogTerm,
++	}
++}
++
++func copyRequestPreVoteResponse(r *RequestPreVoteResponse) *RequestPreVoteResponse {
++	if r == nil {
++		return nil
++	}
++	return &RequestPreVoteResponse{
++		RPCHeader: copyRPCHeader(r.RPCHeader),
++		Term:      r.Term,
++		Granted:   r.Granted,
++	}
++}
++
++func copyInstallSnapshotRequest(r *InstallSnapshotRequest) *InstallSnapshotRequest {
++	if r == nil {
++		return nil
++	}
++	return &InstallSnapshotRequest{
++		RPCHeader:          copyRPCHeader(r.RPCHeader),
++		SnapshotVersion:    r.SnapshotVersion,
++		Term:               r.Term,
++		Leader:             copyBytes(r.Leader),
++		LastLogIndex:       r.LastLogIndex,
++		LastLogTerm:        r.LastLogTerm,
++		Peers:              copyBytes(r.Peers),
++		Configuration:      copyBytes(r.Configuration),
++		ConfigurationIndex: r.ConfigurationIndex,
++		Size:               r.Size,
++	}
++}
++
++func copyInstallSnapshotResponse(r *InstallSnapshotResponse) *InstallSnapshotResponse {
++	if r == nil {
++		return nil
++	}
++	return &InstallSnapshotResponse{
++		RPCHeader: copyRPCHeader(r.RPCHeader),
++		Term:      r.Term,
++		Success:   r.Success,
++	}
++}
++
++func copyTimeoutNowRequest(r *TimeoutNowRequest) *TimeoutNowRequest {
++	if r == nil {
++		return nil
++	}
++	return &TimeoutNowRequest{RPCHeader: copyRPCHeader(r.RPCHeader)}
++}
++
++func copyTimeoutNowResponse(r *TimeoutNowResponse) *TimeoutNowResponse {
++	if r == nil {
++		return nil
++	}
++	return &TimeoutNowResponse{RPCHeader: copyRPCHeader(r.RPCHeader)}
++}
+diff --git a/message_controller_test.go b/message_controller_test.go
+new file mode 100644
+index 0000000..b79f3e8
+--- /dev/null
++++ b/message_controller_test.go
+@@ -0,0 +1,825 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"io"
++	"reflect"
++	"testing"
++	"time"
++)
++
++// waitPending polls the controller until pred holds over the pending snapshot
++// or the deadline passes.
++func waitPending(t *testing.T, ctl *MessageController, pred func([]PendingMessage) bool, timeout time.Duration) []PendingMessage {
++	t.Helper()
++	deadline := time.Now().Add(timeout)
++	for time.Now().Before(deadline) {
++		p := ctl.Pending()
++		if pred(p) {
++			return p
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++	t.Fatalf("timed out waiting for pending messages; last state: %+v", ctl.Pending())
++	return nil
++}
++
++// pumpController injects every pending message until the cache is empty. It
++// models a test policy of delivering all captured traffic.
++func pumpController(t *testing.T, ctl *MessageController) {
++	t.Helper()
++	for {
++		pending := ctl.Pending()
++		if len(pending) == 0 {
++			time.Sleep(5 * time.Millisecond)
++			return
++		}
++		for _, pm := range pending {
++			if err := ctl.Inject(pm.Handle); err != nil {
++				t.Fatalf("inject %s: %v", pm.Kind, err)
++			}
++		}
++	}
++}
++
++// respondLikeRaft answers every RPC the way a Raft node's main loop would,
++// mirroring processRPC: each request gets a typed response on rpc.RespChan.
++func respondLikeRaft(t *testing.T, trans *InmemTransport, recv chan<- receivedRPC) {
++	t.Helper()
++	for rpc := range trans.Consumer() {
++		var snap []byte
++		switch cmd := rpc.Command.(type) {
++		case *AppendEntriesRequest:
++			rpc.Respond(&AppendEntriesResponse{Term: cmd.Term, Success: true}, nil)
++		case *RequestVoteRequest:
++			rpc.Respond(&RequestVoteResponse{Term: cmd.Term, Granted: true}, nil)
++		case *RequestPreVoteRequest:
++			rpc.Respond(&RequestPreVoteResponse{Term: cmd.Term, Granted: true}, nil)
++		case *InstallSnapshotRequest:
++			snap, _ = io.ReadAll(rpc.Reader)
++			rpc.Respond(&InstallSnapshotResponse{Term: cmd.Term, Success: true}, nil)
++		case *TimeoutNowRequest:
++			rpc.Respond(&TimeoutNowResponse{}, nil)
++		default:
++			rpc.Respond(nil, fmt.Errorf("unexpected command %T", rpc.Command))
++		}
++		if recv != nil {
++			recv <- receivedRPC{cmd: rpc.Command, snap: snap}
++		}
++	}
++}
++
++type receivedRPC struct {
++	cmd  interface{}
++	snap []byte
++}
++
++// waitReceived returns the next RPC reported by the simulated receiver.
++func waitReceived(t *testing.T, recv <-chan receivedRPC, timeout time.Duration) receivedRPC {
++	t.Helper()
++	select {
++	case rr := <-recv:
++		return rr
++	case <-time.After(timeout):
++		t.Fatalf("timed out waiting for a delivered RPC")
++		return receivedRPC{}
++	}
++}
++
++// TestMessageControllerCaptureInjectRoundTrip drives one full
++// capture -> pending -> inject -> response-capture -> inject round trip
++// through the transport seam, including stream buffering for InstallSnapshot.
++func TestMessageControllerCaptureInjectRoundTrip(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++	_, t1 := NewInmemTransportWithTimeout(addr1, 5*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 5*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, ServerID("node1"))
++	w2 := NewControlledTransport(t2, ctl, ServerID("node2"))
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++
++	recv := make(chan receivedRPC, 32)
++	go respondLikeRaft(t, t2, recv)
++
++	// While disabled the wrapper is a pure delegate: the call completes
++	// through the real transport and nothing is captured.
++	var passthruResp AppendEntriesResponse
++	if err := w1.AppendEntries(ServerID("node2"), addr2,
++		&AppendEntriesRequest{Term: 1}, &passthruResp); err != nil {
++		t.Fatalf("passthrough append entries failed: %v", err)
++	}
++	if !passthruResp.Success {
++		t.Fatalf("passthrough response not copied: %+v", passthruResp)
++	}
++	if got := len(ctl.Pending()); got != 0 {
++		t.Fatalf("passthrough captured %d entries", got)
++	}
++	// The passthrough RPC itself crossed the real transport; consume and
++	// verify it before the controlled phase.
++	rr := waitReceived(t, recv, 5*time.Second)
++	passthru := rr.cmd.(*AppendEntriesRequest)
++	if passthru.Term != 1 || len(passthru.Entries) != 0 {
++		t.Fatalf("unexpected passthrough rpc: %+v", passthru)
++	}
++
++	ctl.SetControlled(true)
++
++	// Capture an AppendEntries request in the background, exactly like the
++	// leader's replication goroutine would.
++	req := &AppendEntriesRequest{
++		Term:              2,
++		PrevLogEntry:      4,
++		PrevLogTerm:       2,
++		LeaderCommitIndex: 4,
++		Entries: []*Log{
++			{Index: 5, Term: 2, Data: []byte("hello"), Extensions: []byte("ext")},
++		},
++	}
++	errCh := make(chan error, 1)
++	respCh := make(chan AppendEntriesResponse, 1)
++	go func() {
++		var resp AppendEntriesResponse
++		errCh <- w1.AppendEntries(ServerID("node2"), addr2, req, &resp)
++		respCh <- resp
++	}()
++
++	p := waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindAppendEntriesRequest
++	}, 5*time.Second)
++	if p[0].Source != ServerID("node1") || p[0].Target != ServerID("node2") {
++		t.Fatalf("unexpected routing: %+v", p[0])
++	}
++	if p[0].Message.AppendEntriesRequest == nil || len(p[0].Message.AppendEntriesRequest.Entries) != 1 {
++		t.Fatalf("typed content missing: %+v", p[0])
++	}
++	if got := p[0].Message.AppendEntriesRequest.Entries[0].Data; !bytes.Equal(got, []byte("hello")) {
++		t.Fatalf("captured payload mismatch: %q", got)
++	}
++
++	// Pending must return independent deep copies: mutating one snapshot must
++	// not affect the next, and must not affect what Inject delivers.
++	snap1 := ctl.Pending()
++	snap1[0].Message.AppendEntriesRequest.Entries[0].Data[0] = 'X'
++	snap1[0].Message.AppendEntriesRequest.Term = 999
++	snap2 := ctl.Pending()
++	if snap2[0].Message.AppendEntriesRequest.Entries[0].Data[0] != 'h' {
++		t.Fatalf("pending snapshots alias the controller copy")
++	}
++	if snap2[0].Message.AppendEntriesRequest.Term != 2 {
++		t.Fatalf("pending snapshots alias the controller copy (term)")
++	}
++
++	if err := ctl.Inject(p[0].Handle); err != nil {
++		t.Fatalf("inject request: %v", err)
++	}
++	// The delivered command must be the controller's private copy: it still
++	// carries the original data even though the test mutated a Pending view.
++	select {
++	case rr := <-recv:
++		delivered := rr.cmd.(*AppendEntriesRequest)
++		if got := delivered.Entries[0].Data; !bytes.Equal(got, []byte("hello")) {
++			t.Fatalf("delivered payload was aliased or mutated: %q", got)
++		}
++		if delivered.Term != 2 {
++			t.Fatalf("delivered payload was aliased or mutated (term): %d", delivered.Term)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("request never reached the target ingress")
++	}
++
++	// The response is separately captured with reversed routing and a new
++	// handle, and the original caller stays blocked until it is injected.
++	p = waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindAppendEntriesResponse
++	}, 5*time.Second)
++	if p[0].Source != ServerID("node2") || p[0].Target != ServerID("node1") {
++		t.Fatalf("response routing not reversed: %+v", p[0])
++	}
++	if p[0].Message.AppendEntriesResponse == nil || !p[0].Message.AppendEntriesResponse.Success {
++		t.Fatalf("response content missing: %+v", p[0])
++	}
++
++	select {
++	case err := <-errCh:
++		t.Fatalf("caller completed before the response was injected: %v", err)
++	default:
++	}
++
++	if err := ctl.Inject(p[0].Handle); err != nil {
++		t.Fatalf("inject response: %v", err)
++	}
++	select {
++	case err := <-errCh:
++		if err != nil {
++			t.Fatalf("append entries call failed: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("caller never completed after response injection")
++	}
++	if resp := <-respCh; !resp.Success {
++		t.Fatalf("response not copied to caller: %+v", resp)
++	}
++	if err := ctl.Inject(p[0].Handle); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("injected handle stayed valid: %v", err)
++	}
++
++	// InstallSnapshot round trip: the stream is buffered at capture and
++	// replayed from the controller's private copy at injection.
++	snapReq := &InstallSnapshotRequest{Term: 2, LastLogIndex: 10, LastLogTerm: 2, Size: 13}
++	snapErrCh := make(chan error, 1)
++	snapRespCh := make(chan InstallSnapshotResponse, 1)
++	go func() {
++		var resp InstallSnapshotResponse
++		snapErrCh <- w1.InstallSnapshot(ServerID("node2"), addr2, snapReq, &resp, bytes.NewReader([]byte("snapshot-data")))
++		snapRespCh <- resp
++	}()
++	p = waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindInstallSnapshotRequest
++	}, 5*time.Second)
++	if p[0].Message.InstallSnapshotRequest == nil {
++		t.Fatalf("snapshot request content missing")
++	}
++	if !bytes.Equal(p[0].Stream, []byte("snapshot-data")) {
++		t.Fatalf("pending snapshot omits the stream: %q", p[0].Stream)
++	}
++	// The Pending stream is an independent deep copy: mutating it must not
++	// affect what Inject replays from the controller's private buffer.
++	p[0].Stream[0] = 'X'
++	if err := ctl.Inject(p[0].Handle); err != nil {
++		t.Fatalf("inject snapshot request: %v", err)
++	}
++	select {
++	case rr := <-recv:
++		if !bytes.Equal(rr.snap, []byte("snapshot-data")) {
++			t.Fatalf("snapshot stream corrupted: %q", rr.snap)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("snapshot never reached the target ingress")
++	}
++	p = waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindInstallSnapshotResponse
++	}, 5*time.Second)
++	if err := ctl.Inject(p[0].Handle); err != nil {
++		t.Fatalf("inject snapshot response: %v", err)
++	}
++	select {
++	case err := <-snapErrCh:
++		if err != nil {
++			t.Fatalf("install snapshot call failed: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("snapshot caller never completed")
++	}
++	if resp := <-snapRespCh; !resp.Success {
++		t.Fatalf("snapshot response not copied to caller: %+v", resp)
++	}
++
++	// Pipeline round trip: each pipelined AppendEntries is captured and its
++	// AppendFuture completes only when the captured response entry is injected.
++	pipeline, err := w1.AppendEntriesPipeline(ServerID("node2"), addr2)
++	if err != nil {
++		t.Fatalf("open pipeline: %v", err)
++	}
++	defer pipeline.Close()
++	pipeFuture, err := pipeline.AppendEntries(
++		&AppendEntriesRequest{Term: 3, Entries: []*Log{{Index: 6, Term: 3, Data: []byte("pipe")}}},
++		new(AppendEntriesResponse),
++	)
++	if err != nil {
++		t.Fatalf("pipeline append: %v", err)
++	}
++	p = waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindAppendEntriesRequest
++	}, 5*time.Second)
++	if err := ctl.Inject(p[0].Handle); err != nil {
++		t.Fatalf("inject pipelined request: %v", err)
++	}
++	p = waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindAppendEntriesResponse
++	}, 5*time.Second)
++	if err := ctl.Inject(p[0].Handle); err != nil {
++		t.Fatalf("inject pipelined response: %v", err)
++	}
++	if err := pipeFuture.Error(); err != nil {
++		t.Fatalf("pipeline future failed: %v", err)
++	}
++	if !pipeFuture.Response().Success {
++		t.Fatalf("pipeline response not copied to future: %+v", pipeFuture.Response())
++	}
++
++	ctl.SetControlled(false)
++	w1.Close()
++	w2.Close()
++}
++
++// TestMessageControllerDropClearAndErrors covers Drop, Clear, and the
++// classification errors on invalid handles.
++func TestMessageControllerDropClearAndErrors(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++	_, t1 := NewInmemTransportWithTimeout(addr1, 2*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 2*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, ServerID("node1"))
++	w2 := NewControlledTransport(t2, ctl, ServerID("node2"))
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++	ctl.SetControlled(true)
++
++	capture := func() MessageHandle {
++		t.Helper()
++		errCh := make(chan error, 1)
++		go func() {
++			var resp AppendEntriesResponse
++			errCh <- w1.AppendEntries(ServerID("node2"), addr2, &AppendEntriesRequest{Term: 1}, &resp)
++		}()
++		p := waitPending(t, ctl, func(p []PendingMessage) bool { return len(p) == 1 }, 5*time.Second)
++		return p[0].Handle
++	}
++
++	h := capture()
++	if err := ctl.Drop(h); err != nil {
++		t.Fatalf("drop failed: %v", err)
++	}
++	if got := len(ctl.Pending()); got != 0 {
++		t.Fatalf("drop left %d entries", got)
++	}
++	if err := ctl.Drop(h); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("drop of removed handle: %v", err)
++	}
++	if err := ctl.Inject(h); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("inject of removed handle: %v", err)
++	}
++
++	h1 := capture()
++	h2 := capture()
++	ctl.Clear()
++	if got := len(ctl.Pending()); got != 0 {
++		t.Fatalf("clear left %d entries", got)
++	}
++	if err := ctl.Inject(h1); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("inject after clear: %v", err)
++	}
++	if err := ctl.Drop(h2); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("drop after clear: %v", err)
++	}
++}
++
++// TestMessageControllerInjectTargetUnavailable verifies that an unavailable
++// target preserves the entry and its handle, and that reconnecting restores
++// delivery.
++func TestMessageControllerInjectTargetUnavailable(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++	_, t1 := NewInmemTransportWithTimeout(addr1, 2*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 2*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, ServerID("node1"))
++	w2 := NewControlledTransport(t2, ctl, ServerID("node2"))
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++	ctl.SetControlled(true)
++
++	errCh := make(chan error, 1)
++	go func() {
++		var resp AppendEntriesResponse
++		errCh <- w1.AppendEntries(ServerID("node2"), addr2, &AppendEntriesRequest{Term: 1}, &resp)
++	}()
++	p := waitPending(t, ctl, func(p []PendingMessage) bool { return len(p) == 1 }, 5*time.Second)
++	h := p[0].Handle
++
++	w1.Disconnect(addr2)
++	if err := ctl.Inject(h); !errors.Is(err, ErrTargetUnavailable) {
++		t.Fatalf("expected ErrTargetUnavailable, got %v", err)
++	}
++	p = ctl.Pending()
++	if len(p) != 1 || p[0].Handle != h {
++		t.Fatalf("entry was not preserved after failed inject: %+v", p)
++	}
++
++	// Reconnect and deliver: acceptance removes the entry and invalidates the
++	// handle.
++	w1.Connect(addr2, w2)
++	if err := ctl.Inject(h); err != nil {
++		t.Fatalf("inject after reconnect: %v", err)
++	}
++	if got := len(ctl.Pending()); got != 0 {
++		t.Fatalf("accepted entry still pending: %+v", ctl.Pending())
++	}
++	if err := ctl.Inject(h); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("handle stayed valid after acceptance: %v", err)
++	}
++}
++
++// TestMessageControllerEndToEndRaft wires two real Raft nodes through wrapped
++// transports: with controlled mode on, no protocol message may be delivered
++// without Inject; once the test injects the captured traffic, the cluster
++// elects a leader and commits an application command through the same seam.
++func TestMessageControllerEndToEndRaft(t *testing.T) {
++	mkConf := func(id ServerID, hb, elect time.Duration) *Config {
++		conf := inmemConfig(t)
++		conf.HeartbeatTimeout = hb
++		conf.ElectionTimeout = elect
++		conf.LeaderLeaseTimeout = hb / 2
++		conf.CommitTimeout = 50 * time.Millisecond
++		conf.PreVoteDisabled = true
++		conf.LocalID = id
++		return conf
++	}
++	conf1 := mkConf(ServerID("node1"), 1*time.Second, 1*time.Second)
++	conf2 := mkConf(ServerID("node2"), 30*time.Second, 30*time.Second)
++
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++	_, t1 := NewInmemTransportWithTimeout(addr1, 5*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 5*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, conf1.LocalID)
++	w2 := NewControlledTransport(t2, ctl, conf2.LocalID)
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++
++	store1 := NewInmemStore()
++	store2 := NewInmemStore()
++	fsm1 := &MockFSM{}
++	fsm2 := &MockFSM{}
++	snaps1 := NewInmemSnapshotStore()
++	snaps2 := NewInmemSnapshotStore()
++
++	configuration := Configuration{Servers: []Server{
++		{Suffrage: Voter, ID: conf1.LocalID, Address: addr1},
++		{Suffrage: Voter, ID: conf2.LocalID, Address: addr2},
++	}}
++	if err := BootstrapCluster(conf1, store1, store1, snaps1, w1, configuration); err != nil {
++		t.Fatalf("bootstrap node1: %v", err)
++	}
++	if err := BootstrapCluster(conf2, store2, store2, snaps2, w2, configuration); err != nil {
++		t.Fatalf("bootstrap node2: %v", err)
++	}
++
++	// Install control before any Raft goroutine can do protocol work.
++	ctl.SetControlled(true)
++
++	r1, err := NewRaft(conf1, fsm1, store1, store1, snaps1, w1)
++	if err != nil {
++		t.Fatalf("NewRaft node1: %v", err)
++	}
++	r2, err := NewRaft(conf2, fsm2, store2, store2, snaps2, w2)
++	if err != nil {
++		t.Fatalf("NewRaft node2: %v", err)
++	}
++	defer func() {
++		_ = r1.Shutdown().Error()
++		_ = r2.Shutdown().Error()
++	}()
++
++	// Phase 1: nothing may progress without injection. The candidate's vote
++	// request must be captured and nothing may have been delivered.
++	waitPending(t, ctl, func(p []PendingMessage) bool {
++		for _, pm := range p {
++			if pm.Kind == MessageKindRequestVoteRequest {
++				return true
++			}
++		}
++		return false
++	}, 15*time.Second)
++	if r1.State() == Leader || r2.State() == Leader {
++		t.Fatalf("leader elected without any message injection")
++	}
++	if _, leaderID := r2.LeaderWithID(); leaderID != "" {
++		t.Fatalf("node2 knows a leader without any message injection: %s", leaderID)
++	}
++
++	// Phase 2: inject all captured traffic until node1 wins the election.
++	deadline := time.Now().Add(30 * time.Second)
++	for r1.State() != Leader {
++		if time.Now().After(deadline) {
++			t.Fatalf("node1 never became leader; state=%s pending=%+v", r1.State(), ctl.Pending())
++		}
++		pumpController(t, ctl)
++	}
++
++	// Phase 3: apply a command; the replication traffic flows through the same
++	// capture/inject seam.
++	future := r1.Apply([]byte("hello"), 5*time.Second)
++	applied := make(chan error, 1)
++	go func() { applied <- future.Error() }()
++	deadline = time.Now().Add(30 * time.Second)
++	for {
++		select {
++		case err := <-applied:
++			if err != nil {
++				t.Fatalf("apply failed: %v", err)
++			}
++			goto APPLIED
++		default:
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("apply never completed; state=%s fsm=%v", r1.State(), fsm1.Logs())
++		}
++		pumpController(t, ctl)
++	}
++APPLIED:
++	found := false
++	for _, l := range fsm1.Logs() {
++		if bytes.Equal(l, []byte("hello")) {
++			found = true
++		}
++	}
++	if !found {
++		t.Fatalf("command not applied to leader FSM: %v", fsm1.Logs())
++	}
++}
++
++// TestMessageControllerConcurrentInjectDeliversOnce verifies that two
++// concurrent Inject calls on the same handle deliver the message exactly once:
++// one call succeeds, the other is refused with ErrMessageNotPending, and the
++// target ingress receives a single request.
++func TestMessageControllerConcurrentInjectDeliversOnce(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++	_, t1 := NewInmemTransportWithTimeout(addr1, 2*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 2*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, ServerID("node1"))
++	w2 := NewControlledTransport(t2, ctl, ServerID("node2"))
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++	ctl.SetControlled(true)
++
++	recv := make(chan receivedRPC, 32)
++	go respondLikeRaft(t, t2, recv)
++
++	errCh := make(chan error, 1)
++	go func() {
++		var resp AppendEntriesResponse
++		errCh <- w1.AppendEntries(ServerID("node2"), addr2, &AppendEntriesRequest{Term: 1}, &resp)
++	}()
++	p := waitPending(t, ctl, func(p []PendingMessage) bool { return len(p) == 1 }, 5*time.Second)
++	h := p[0].Handle
++
++	results := make(chan error, 2)
++	for i := 0; i < 2; i++ {
++		go func() { results <- ctl.Inject(h) }()
++	}
++	var success, refused int
++	for i := 0; i < 2; i++ {
++		switch err := <-results; {
++		case err == nil:
++			success++
++		case errors.Is(err, ErrMessageNotPending):
++			refused++
++		default:
++			t.Fatalf("unexpected inject error: %v", err)
++		}
++	}
++	if success != 1 || refused != 1 {
++		t.Fatalf("expected exactly one success and one ErrMessageNotPending, got %d success %d refused", success, refused)
++	}
++
++	// The target ingress must see exactly one request.
++	deadline := time.Now().Add(5 * time.Second)
++	delivered := 0
++	for delivered == 0 && time.Now().Before(deadline) {
++		select {
++		case rr := <-recv:
++			if _, ok := rr.cmd.(*AppendEntriesRequest); ok {
++				delivered++
++			}
++		default:
++			time.Sleep(5 * time.Millisecond)
++		}
++	}
++	// Catch a duplicate delivery from the refused concurrent Inject.
++	dupDeadline := time.Now().Add(250 * time.Millisecond)
++	for time.Now().Before(dupDeadline) {
++		select {
++		case rr := <-recv:
++			if _, ok := rr.cmd.(*AppendEntriesRequest); ok {
++				delivered++
++			}
++		case <-time.After(5 * time.Millisecond):
++		}
++	}
++	if delivered != 1 {
++		t.Fatalf("duplicate delivery: target ingress received %d requests", delivered)
++	}
++
++	// The single response is captured once and completes the original caller.
++	p = waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindAppendEntriesResponse
++	}, 5*time.Second)
++	if err := ctl.Inject(p[0].Handle); err != nil {
++		t.Fatalf("inject response: %v", err)
++	}
++	select {
++	case err := <-errCh:
++		if err != nil {
++			t.Fatalf("append entries call failed: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("caller never completed after response injection")
++	}
++}
++
++// TestMessageControllerDropAndInjectPreserveOrder verifies that Drop and a
++// successful Inject remove exactly one entry and never reorder the remaining
++// pending entries: Pending always reflects controller acceptance order.
++func TestMessageControllerDropAndInjectPreserveOrder(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++	_, t1 := NewInmemTransportWithTimeout(addr1, 2*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 2*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, ServerID("node1"))
++	w2 := NewControlledTransport(t2, ctl, ServerID("node2"))
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++	ctl.SetControlled(true)
++
++	recv := make(chan receivedRPC, 32)
++	go respondLikeRaft(t, t2, recv)
++	t.Cleanup(func() {
++		ctl.SetControlled(false)
++		_ = w1.Close()
++		_ = w2.Close()
++	})
++
++	capture := func(term uint64) MessageHandle {
++		t.Helper()
++		go func() {
++			var resp AppendEntriesResponse
++			_ = w1.AppendEntries(ServerID("node2"), addr2, &AppendEntriesRequest{Term: term}, &resp)
++		}()
++		p := waitPending(t, ctl, func(p []PendingMessage) bool {
++			for _, pm := range p {
++				if pm.Message.AppendEntriesRequest != nil && pm.Message.AppendEntriesRequest.Term == term {
++					return true
++				}
++			}
++			return false
++		}, 5*time.Second)
++		for _, pm := range p {
++			if pm.Message.AppendEntriesRequest != nil && pm.Message.AppendEntriesRequest.Term == term {
++				return pm.Handle
++			}
++		}
++		t.Fatal("captured entry not found")
++		return MessageHandle{}
++	}
++
++	describe := func() []string {
++		var out []string
++		for _, pm := range ctl.Pending() {
++			switch {
++			case pm.Message.AppendEntriesRequest != nil:
++				out = append(out, fmt.Sprintf("req%d", pm.Message.AppendEntriesRequest.Term))
++			case pm.Message.AppendEntriesResponse != nil:
++				out = append(out, "resp")
++			default:
++				out = append(out, string(pm.Kind))
++			}
++		}
++		return out
++	}
++	expect := func(want ...string) {
++		t.Helper()
++		if got := describe(); !reflect.DeepEqual(got, want) {
++			t.Fatalf("pending order = %v, want %v", got, want)
++		}
++	}
++
++	h1 := capture(1)
++	h2 := capture(2)
++	h3 := capture(3)
++	expect("req1", "req2", "req3")
++
++	// Dropping a middle entry must not reorder the rest.
++	if err := ctl.Drop(h2); err != nil {
++		t.Fatalf("Drop: %v", err)
++	}
++	expect("req1", "req3")
++
++	// A successful Inject of the first remaining entry removes it without
++	// reordering; the response is appended after the still-pending req3 in
++	// acceptance order.
++	if err := ctl.Inject(h1); err != nil {
++		t.Fatalf("Inject: %v", err)
++	}
++	waitReceived(t, recv, 5*time.Second)
++	waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 2 && p[1].Kind == MessageKindAppendEntriesResponse
++	}, 5*time.Second)
++	expect("req3", "resp")
++
++	// Inject the remaining request; its response is appended after the first
++	// response, again in acceptance order.
++	if err := ctl.Inject(h3); err != nil {
++		t.Fatalf("Inject: %v", err)
++	}
++	waitReceived(t, recv, 5*time.Second)
++	waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 2 && p[0].Kind == MessageKindAppendEntriesResponse && p[1].Kind == MessageKindAppendEntriesResponse
++	}, 5*time.Second)
++	expect("resp", "resp")
++
++	// Deliver both responses so the blocked callers resolve.
++	for _, pm := range ctl.Pending() {
++		if err := ctl.Inject(pm.Handle); err != nil {
++			t.Fatalf("Inject response: %v", err)
++		}
++	}
++	expect()
++}
++
++// TestMessageControllerClosedOwnerRebind verifies that Inject of an entry
++// whose owning transport was closed fails deterministically with the entry
++// preserved (it never races a permanently-ready closed channel), and that
++// re-binding the entry to a fresh wrapper of the same node (what
++// LifecycleController.Restart does) makes the same handle injectable again
++// through the normal ingress of the target.
++func TestMessageControllerClosedOwnerRebind(t *testing.T) {
++	addr1 := ServerAddress("addr1")
++	addr2 := ServerAddress("addr2")
++	_, t1 := NewInmemTransportWithTimeout(addr1, 2*time.Second)
++	_, t2 := NewInmemTransportWithTimeout(addr2, 2*time.Second)
++	ctl := NewMessageController()
++	w1 := NewControlledTransport(t1, ctl, ServerID("node1"))
++	w2 := NewControlledTransport(t2, ctl, ServerID("node2"))
++	w1.Connect(addr2, w2)
++	w2.Connect(addr1, w1)
++	ctl.SetControlled(true)
++
++	recv := make(chan receivedRPC, 32)
++	go respondLikeRaft(t, t2, recv)
++	t.Cleanup(func() {
++		ctl.SetControlled(false)
++		_ = w2.Close()
++	})
++
++	callerDone := make(chan error, 1)
++	go func() {
++		var resp AppendEntriesResponse
++		callerDone <- w1.AppendEntries(ServerID("node2"), addr2, &AppendEntriesRequest{Term: 7}, &resp)
++	}()
++	p := waitPending(t, ctl, func(p []PendingMessage) bool { return len(p) == 1 }, 5*time.Second)
++	h := p[0].Handle
++
++	// Close the owning transport the way Stop/Crash does; the captured entry
++	// stays pending and the blocked original caller is unblocked with a
++	// transport-shutdown error (the old runtime is gone).
++	if err := w1.Close(); err != nil {
++		t.Fatalf("Close: %v", err)
++	}
++	select {
++	case err := <-callerDone:
++		if err == nil {
++			t.Fatalf("caller completed without error after transport close")
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatalf("caller never unblocked after transport close")
++	}
++	p = ctl.Pending()
++	if len(p) != 1 || p[0].Handle != h {
++		t.Fatalf("closed-owner entry was lost: %+v", p)
++	}
++
++	// Inject is now deterministic: it fails with ErrMessageNotAccepted and
++	// preserves the entry on every attempt.
++	for i := 0; i < 5; i++ {
++		if err := ctl.Inject(h); !errors.Is(err, ErrMessageNotAccepted) {
++			t.Fatalf("closed-owner inject %d: got %v, want ErrMessageNotAccepted", i, err)
++		}
++	}
++	p = ctl.Pending()
++	if len(p) != 1 || p[0].Handle != h {
++		t.Fatalf("closed-owner inject did not preserve the entry: %+v", p)
++	}
++
++	// Re-bind the entry to a fresh wrapper of the same node (what
++	// LifecycleController.Restart does), restore the route, and deliver.
++	w1b := NewControlledTransport(t1, ctl, ServerID("node1"))
++	ctl.rebindOwner(w1, w1b)
++	w1b.Connect(addr2, w2)
++	if err := ctl.Inject(h); err != nil {
++		t.Fatalf("inject after rebind: %v", err)
++	}
++	waitReceived(t, recv, 5*time.Second)
++	waitPending(t, ctl, func(p []PendingMessage) bool {
++		return len(p) == 1 && p[0].Kind == MessageKindAppendEntriesResponse
++	}, 5*time.Second)
++	if err := ctl.Inject(ctl.Pending()[0].Handle); err != nil {
++		t.Fatalf("inject response: %v", err)
++	}
++	if err := ctl.Inject(h); !errors.Is(err, ErrMessageNotPending) {
++		t.Fatalf("handle stayed valid after rebind delivery: %v", err)
++	}
++	_ = w1b.Close()
++}
+diff --git a/raft.go b/raft.go
+index df5cea3..1d09db4 100644
+--- a/raft.go
++++ b/raft.go
+@@ -160,11 +160,18 @@ func (r *Raft) runFollower() {
+ 	leaderAddr, leaderID := r.LeaderWithID()
+ 	r.logger.Info("entering follower state", "follower", r, "leader-address", leaderAddr, "leader-id", leaderID)
+ 	metrics.IncrCounter([]string{"raft", "state", "follower"}, 1)
+-	heartbeatTimer := randomTimeout(r.config().HeartbeatTimeout)
++	heartbeatTimer := r.randomTimeoutFor(RandomChoiceHeartbeatTimeout, r.config().HeartbeatTimeout)
+ 
+ 	for r.getState() == Follower {
+ 		r.mainThreadSaturation.sleeping()
+ 
++		// Lifecycle pause gate (default-disabled test hook, see
++		// LifecycleController): block while the node is paused so no
++		// message, timer action, or protocol output is processed.
++		if !r.waitWhilePaused() {
++			return
++		}
++
+ 		select {
+ 		case rpc := <-r.rpcCh:
+ 			r.mainThreadSaturation.working()
+@@ -208,17 +215,22 @@ func (r *Raft) runFollower() {
+ 			//  Ignore since we are not the leader
+ 
+ 		case <-r.followerNotifyCh:
+-			heartbeatTimer = time.After(0)
++			heartbeatTimer = r.clock.After(0)
++
++		case <-r.pauseNotifyCh:
++			// Lifecycle pause boundary: re-check the gate at the top of
++			// the loop.
++			continue
+ 
+ 		case <-heartbeatTimer:
+ 			r.mainThreadSaturation.working()
+ 			// Restart the heartbeat timer
+ 			hbTimeout := r.config().HeartbeatTimeout
+-			heartbeatTimer = randomTimeout(hbTimeout)
++			heartbeatTimer = r.randomTimeoutFor(RandomChoiceHeartbeatTimeout, hbTimeout)
+ 
+ 			// Check if we have had a successful contact
+ 			lastContact := r.LastContact()
+-			if time.Since(lastContact) < hbTimeout {
++			if r.clock.Now().Sub(lastContact) < hbTimeout {
+ 				continue
+ 			}
+ 
+@@ -307,7 +319,7 @@ func (r *Raft) runCandidate() {
+ 	defer func() { r.candidateFromLeadershipTransfer.Store(false) }()
+ 
+ 	electionTimeout := r.config().ElectionTimeout
+-	electionTimer := randomTimeout(electionTimeout)
++	electionTimer := r.randomTimeoutFor(RandomChoiceElectionTimeout, electionTimeout)
+ 
+ 	// Tally the votes, need a simple majority
+ 	preVoteGrantedVotes := 0
+@@ -319,6 +331,12 @@ func (r *Raft) runCandidate() {
+ 	for r.getState() == Candidate {
+ 		r.mainThreadSaturation.sleeping()
+ 
++		// Lifecycle pause gate (default-disabled test hook, see
++		// LifecycleController): block while the node is paused.
++		if !r.waitWhilePaused() {
++			return
++		}
++
+ 		select {
+ 		case rpc := <-r.rpcCh:
+ 			r.mainThreadSaturation.working()
+@@ -350,7 +368,7 @@ func (r *Raft) runCandidate() {
+ 					"tally", preVoteGrantedVotes, "refused", preVoteRefusedVotes, "votesNeeded", votesNeeded)
+ 				preVoteGrantedVotes = 0
+ 				preVoteRefusedVotes = 0
+-				electionTimer = randomTimeout(electionTimeout)
++				electionTimer = r.randomTimeoutFor(RandomChoiceElectionTimeout, electionTimeout)
+ 				prevoteCh = nil
+ 				voteCh = r.electSelf()
+ 			}
+@@ -423,9 +441,14 @@ func (r *Raft) runCandidate() {
+ 		case <-r.followerNotifyCh:
+ 			if electionTimeout != r.config().ElectionTimeout {
+ 				electionTimeout = r.config().ElectionTimeout
+-				electionTimer = randomTimeout(electionTimeout)
++				electionTimer = r.randomTimeoutFor(RandomChoiceElectionTimeout, electionTimeout)
+ 			}
+ 
++		case <-r.pauseNotifyCh:
++			// Lifecycle pause boundary: re-check the gate at the top of
++			// the loop.
++			continue
++
+ 		case <-electionTimer:
+ 			r.mainThreadSaturation.working()
+ 			// Election failed! Restart the election. We simply return,
+@@ -496,7 +519,9 @@ func (r *Raft) runLeader() {
+ 
+ 	// Run a background go-routine to emit metrics on log age
+ 	stopCh := make(chan struct{})
+-	go emitLogStoreMetrics(r.logs, []string{"raft", "leader"}, oldestLogGaugeInterval, stopCh)
++	// Tracked with auxGo so LifecycleController.Stop/Crash wait for it: it
++	// exits when runLeader's deferred close of stopCh runs on shutdown.
++	r.auxGo(func() { emitLogStoreMetrics(r.logs, []string{"raft", "leader"}, oldestLogGaugeInterval, stopCh) })
+ 
+ 	// Cleanup state on step down
+ 	defer func() {
+@@ -602,7 +627,8 @@ func (r *Raft) startStopReplication() {
+ 				triggerDeferErrorCh: make(chan *deferError, 1),
+ 				currentTerm:         r.getCurrentTerm(),
+ 				nextIndex:           lastIdx + 1,
+-				lastContact:         time.Now(),
++				clock:               r.clock,
++				lastContact:         r.clock.Now(),
+ 				notify:              make(map[*verifyFuture]struct{}),
+ 				notifyCh:            make(chan struct{}, 1),
+ 				stepDown:            r.leaderState.stepDown,
+@@ -674,11 +700,17 @@ func (r *Raft) leaderLoop() {
+ 	stepDown := false
+ 	// This is only used for the first lease check, we reload lease below
+ 	// based on the current config value.
+-	lease := time.After(r.config().LeaderLeaseTimeout)
++	lease := r.clock.After(r.config().LeaderLeaseTimeout)
+ 
+ 	for r.getState() == Leader {
+ 		r.mainThreadSaturation.sleeping()
+ 
++		// Lifecycle pause gate (default-disabled test hook, see
++		// LifecycleController): block while the node is paused.
++		if !r.waitWhilePaused() {
++			return
++		}
++
+ 		select {
+ 		case rpc := <-r.rpcCh:
+ 			r.mainThreadSaturation.working()
+@@ -722,10 +754,13 @@ func (r *Raft) leaderLoop() {
+ 			// It may be safe to modify things such that setLeadershipTransferInProgress
+ 			// is set to false before calling future.Respond, but that still needs
+ 			// to be tested and this situation mirrors what callers already had to deal with.
+-			go func() {
++			// Tracked with auxGo so LifecycleController.Stop/Crash wait for it;
++			// every wait below is aborted when leaderLoop returns (leftLeaderLoop)
++			// or when the transport closes during shutdown.
++			r.auxGo(func() {
+ 				defer r.setLeadershipTransferInProgress(false)
+ 				select {
+-				case <-time.After(r.config().ElectionTimeout):
++				case <-r.clock.After(r.config().ElectionTimeout):
+ 					close(stopCh)
+ 					err := fmt.Errorf("leadership transfer timeout")
+ 					r.logger.Debug(err.Error())
+@@ -746,7 +781,7 @@ func (r *Raft) leaderLoop() {
+ 						// leadership transfer as done and unblocking applies in
+ 						// the leaderLoop.
+ 						select {
+-						case <-time.After(r.config().ElectionTimeout):
++						case <-r.clock.After(r.config().ElectionTimeout):
+ 							err := fmt.Errorf("leadership transfer timeout")
+ 							r.logger.Debug(err.Error())
+ 							future.respond(err)
+@@ -756,7 +791,7 @@ func (r *Raft) leaderLoop() {
+ 						}
+ 					}
+ 				}
+-			}()
++			})
+ 
+ 			// leaderState.replState is accessed here before
+ 			// starting leadership transfer asynchronously because
+@@ -780,7 +815,9 @@ func (r *Raft) leaderLoop() {
+ 				continue
+ 			}
+ 			r.setLeadershipTransferInProgress(true)
+-			go r.leadershipTransfer(*id, *address, state, stopCh, doneCh)
++			// Tracked with auxGo: the transfer is aborted on shutdown (see
++			// leadershipTransfer), so Stop/Crash can wait for it to finish.
++			r.auxGo(func() { r.leadershipTransfer(*id, *address, state, stopCh, doneCh) })
+ 
+ 		case <-r.leaderState.commitCh:
+ 			r.mainThreadSaturation.working()
+@@ -944,7 +981,7 @@ func (r *Raft) leaderLoop() {
+ 			}
+ 
+ 			// Renew the lease timer
+-			lease = time.After(checkInterval)
++			lease = r.clock.After(checkInterval)
+ 
+ 		case <-r.leaderNotifyCh:
+ 			for _, repl := range r.leaderState.replState {
+@@ -954,6 +991,11 @@ func (r *Raft) leaderLoop() {
+ 		case <-r.followerNotifyCh:
+ 			//  Ignore since we are not a follower
+ 
++		case <-r.pauseNotifyCh:
++			// Lifecycle pause boundary: re-check the gate at the top of
++			// the loop.
++			continue
++
+ 		case <-r.shutdownCh:
+ 			return
+ 		}
+@@ -999,7 +1041,20 @@ func (r *Raft) leadershipTransfer(id ServerID, address ServerAddress, repl *foll
+ 	for atomic.LoadUint64(&repl.nextIndex) <= r.getLastIndex() {
+ 		err := &deferError{}
+ 		err.init()
+-		repl.triggerDeferErrorCh <- err
++		// Abort on stop or shutdown: the replicate goroutine may have exited
++		// already (stopCh closed on step-down or shutdown), in which case
++		// this send would block forever and LifecycleController.Stop/Crash
++		// would never complete. These cases are only reachable while the
++		// transfer is being abandoned, so they change no protocol semantics.
++		select {
++		case repl.triggerDeferErrorCh <- err:
++		case <-stopCh:
++			doneCh <- nil
++			return
++		case <-r.shutdownCh:
++			doneCh <- fmt.Errorf("raft: shutdown during leadership transfer")
++			return
++		}
+ 		select {
+ 		case err := <-err.errCh:
+ 			if err != nil {
+@@ -1009,6 +1064,9 @@ func (r *Raft) leadershipTransfer(id ServerID, address ServerAddress, repl *foll
+ 		case <-stopCh:
+ 			doneCh <- nil
+ 			return
++		case <-r.shutdownCh:
++			doneCh <- fmt.Errorf("raft: shutdown during leadership transfer")
++			return
+ 		}
+ 	}
+ 
+@@ -1044,7 +1102,7 @@ func (r *Raft) checkLeaderLease() time.Duration {
+ 
+ 	// Check each follower
+ 	var maxDiff time.Duration
+-	now := time.Now()
++	now := r.clock.Now()
+ 	for _, server := range r.configurations.latest.Servers {
+ 		if server.Suffrage == Voter {
+ 			if server.ID == r.localID {
+@@ -1955,7 +2013,7 @@ func (r *Raft) installSnapshot(rpc RPC, req *InstallSnapshotRequest) {
+ // setLastContact is used to set the last contact time to now
+ func (r *Raft) setLastContact() {
+ 	r.lastContactLock.Lock()
+-	r.lastContact = time.Now()
++	r.lastContact = r.clock.Now()
+ 	r.lastContactLock.Unlock()
+ }
+ 
+diff --git a/random_controller.go b/random_controller.go
+new file mode 100644
+index 0000000..8530ba6
+--- /dev/null
++++ b/random_controller.go
+@@ -0,0 +1,114 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"math/rand"
++	"sync"
++	"time"
++)
++
++// RandomChoice is one recorded hidden, non-cryptographic protocol draw made by
++// a controlled node. Name is a stable semantic label, Owner is the concrete
++// ServerID of the node that performed the draw, and Value is the final
++// semantic result: the selected timer duration, already within the protocol's
++// legal domain [minVal, 2*minVal).
++type RandomChoice struct {
++	// Name is the stable semantic name of the choice.
++	Name string
++	// Owner is the ServerID of the node that made the draw.
++	Owner ServerID
++	// Value is the selected duration in the target's legal domain.
++	Value time.Duration
++}
++
++// Stable semantic names for the protocol draws recorded by RandomController.
++const (
++	// RandomChoiceElectionTimeout is the candidate election timer jitter draw.
++	RandomChoiceElectionTimeout = "election_timeout"
++	// RandomChoiceHeartbeatTimeout is the follower heartbeat timer jitter draw.
++	RandomChoiceHeartbeatTimeout = "heartbeat_timeout"
++	// RandomChoiceCommitTimeout is the leader commit/replicate timer jitter draw.
++	RandomChoiceCommitTimeout = "commit_timeout"
++	// RandomChoiceHeartbeatInterval is the leader heartbeat interval jitter draw.
++	RandomChoiceHeartbeatInterval = "heartbeat_interval"
++	// RandomChoiceSnapshotInterval is the snapshot loop timer jitter draw.
++	RandomChoiceSnapshotInterval = "snapshot_interval"
++)
++
++// RandomController makes the hidden non-cryptographic protocol draws of one
++// Raft node reproducible and observable. Each controller is dedicated to a
++// single owner (a concrete ServerID) and owns its own deterministic source:
++// the same seed and the same draw order reproduce the same sequence, and
++// every draw consumes the next value from that source so repeated decisions
++// keep varying. The target's legal domain and its production algorithm are
++// unchanged.
++//
++// A RandomController is inert until it is installed: set Config.Random on the
++// node's Config before calling NewRaft so every in-scope draw of that node is
++// routed through this controller from the start. When no controller is
++// installed the node keeps using the package's normal global random source
++// and production behavior is unchanged.
++type RandomController struct {
++	mu      sync.Mutex
++	seed    int64
++	owner   ServerID
++	rng     *rand.Rand
++	choices []RandomChoice
++}
++
++// NewRandomController creates a deterministic controller for the node
++// identified by owner, seeded with seed. Install it through Config.Random
++// before NewRaft starts the node's goroutines.
++func NewRandomController(seed int64, owner ServerID) *RandomController {
++	return &RandomController{
++		seed:  seed,
++		owner: owner,
++		rng:   rand.New(rand.NewSource(seed)),
++	}
++}
++
++// Choices returns an ordered, deep-copied history of every draw made so far.
++// The returned slice and its elements never alias the controller's internal
++// history: mutating the result cannot affect later calls.
++func (c *RandomController) Choices() []RandomChoice {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	out := make([]RandomChoice, len(c.choices))
++	copy(out, c.choices)
++	return out
++}
++
++// draw performs one protocol draw for the named choice using the same
++// algorithm as production (a uniform offset in [0, minVal)) and records the
++// final selected duration. It returns the offset so the caller can arm the
++// timer exactly as before.
++func (c *RandomController) draw(name string, minVal time.Duration) time.Duration {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	extra := time.Duration(c.rng.Int63()) % minVal
++	c.choices = append(c.choices, RandomChoice{
++		Name:  name,
++		Owner: c.owner,
++		Value: minVal + extra,
++	})
++	return extra
++}
++
++// randomTimeoutFor arms one protocol timer, routing the hidden jitter draw
++// through the node's RandomController when one is installed. Without a
++// controller the behavior is identical to the package-level randomTimeout
++// (the global source), so production defaults are unchanged.
++func (r *Raft) randomTimeoutFor(name string, minVal time.Duration) <-chan time.Time {
++	if minVal == 0 {
++		return nil
++	}
++	var extra time.Duration
++	if rc := r.random; rc != nil {
++		extra = rc.draw(name, minVal)
++	} else {
++		extra = time.Duration(rand.Int63()) % minVal
++	}
++	return r.clock.After(minVal + extra)
++}
+diff --git a/random_controller_test.go b/random_controller_test.go
+new file mode 100644
+index 0000000..bf55658
+--- /dev/null
++++ b/random_controller_test.go
+@@ -0,0 +1,135 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"testing"
++	"time"
++)
++
++// TestRandomControllerDeterminism verifies that the same seed and draw order
++// reproduce the same sequence, that every value stays inside the target's
++// legal domain [minVal, 2*minVal), that repeated decisions keep varying, and
++// that Choices returns deep copies of the recorded history.
++func TestRandomControllerDeterminism(t *testing.T) {
++	mk := func() *RandomController { return NewRandomController(7, ServerID("node-a")) }
++	a, b := mk(), mk()
++	names := []string{
++		RandomChoiceElectionTimeout,
++		RandomChoiceHeartbeatTimeout,
++		RandomChoiceCommitTimeout,
++		RandomChoiceHeartbeatInterval,
++		RandomChoiceSnapshotInterval,
++	}
++	for i := 0; i < 100; i++ {
++		name := names[i%len(names)]
++		minVal := time.Duration(10+i%90) * time.Millisecond
++		ea := a.draw(name, minVal)
++		eb := b.draw(name, minVal)
++		if ea != eb {
++			t.Fatalf("draw %d diverged between identical seeds: %v != %v", i, ea, eb)
++		}
++		if ea < 0 || ea >= minVal {
++			t.Fatalf("draw %d jitter %v outside legal domain [0, %v)", i, ea, minVal)
++		}
++	}
++
++	ca, cb := a.Choices(), b.Choices()
++	if len(ca) != 100 || len(cb) != 100 {
++		t.Fatalf("expected 100 recorded choices, got %d and %d", len(ca), len(cb))
++	}
++	seenHeartbeat := map[time.Duration]bool{}
++	for i := range ca {
++		if ca[i] != cb[i] {
++			t.Fatalf("choice %d diverged between identical seeds: %+v != %+v", i, ca[i], cb[i])
++		}
++		if ca[i].Owner != ServerID("node-a") {
++			t.Fatalf("choice %d owner = %q, want node-a", i, ca[i].Owner)
++		}
++		if ca[i].Name != names[i%len(names)] {
++			t.Fatalf("choice %d name = %q, want %q", i, ca[i].Name, names[i%len(names)])
++		}
++		minVal := time.Duration(10+i%90) * time.Millisecond
++		if ca[i].Value < minVal || ca[i].Value >= 2*minVal {
++			t.Fatalf("choice %d value %v outside legal domain [%v, %v)", i, ca[i].Value, minVal, 2*minVal)
++		}
++		if ca[i].Name == RandomChoiceHeartbeatTimeout {
++			seenHeartbeat[ca[i].Value] = true
++		}
++	}
++	if len(seenHeartbeat) < 2 {
++		t.Fatalf("expected repeated heartbeat decisions to keep varying, got %v", seenHeartbeat)
++	}
++
++	// Choices returns a deep copy: mutating the result is invisible.
++	ca[0].Name = "mutated"
++	ca[0].Value = 0
++	if got := a.Choices()[0]; got.Name == "mutated" || got.Value == 0 {
++		t.Fatalf("Choices returned an aliased history: %+v", got)
++	}
++}
++
++// TestRandomControllerNodeDraws verifies that a controller installed through
++// Config.Random before NewRaft routes every in-scope protocol draw of the
++// node through the controller and records it with the node's owner.
++func TestRandomControllerNodeDraws(t *testing.T) {
++	conf := DefaultConfig()
++	conf.HeartbeatTimeout = 50 * time.Millisecond
++	conf.ElectionTimeout = 50 * time.Millisecond
++	conf.CommitTimeout = 5 * time.Millisecond
++	conf.LeaderLeaseTimeout = 25 * time.Millisecond
++	conf.SnapshotInterval = 20 * time.Millisecond
++	conf.LocalID = ServerID("node-1")
++	conf.Logger = newTestLogger(t)
++
++	rc := NewRandomController(11, conf.LocalID)
++	conf.Random = rc
++
++	store := NewInmemStore()
++	snap := NewInmemSnapshotStore()
++	_, trans := NewInmemTransport(ServerAddress("10.0.0.1:0"))
++	r, err := NewRaft(conf, &MockFSM{}, store, store, snap, trans)
++	if err != nil {
++		t.Fatalf("NewRaft failed: %v", err)
++	}
++	defer func() { _ = r.Shutdown().Error() }()
++
++	minBy := map[string]time.Duration{
++		RandomChoiceElectionTimeout:   conf.ElectionTimeout,
++		RandomChoiceHeartbeatTimeout:  conf.HeartbeatTimeout,
++		RandomChoiceCommitTimeout:     conf.CommitTimeout,
++		RandomChoiceSnapshotInterval:  conf.SnapshotInterval,
++		RandomChoiceHeartbeatInterval: conf.HeartbeatTimeout / 10,
++	}
++
++	deadline := time.Now().Add(5 * time.Second)
++	var choices []RandomChoice
++	for time.Now().Before(deadline) {
++		choices = rc.Choices()
++		if len(choices) >= 3 {
++			break
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	if len(choices) < 3 {
++		t.Fatalf("expected at least 3 recorded draws, got %d", len(choices))
++	}
++	seen := map[string]bool{}
++	for _, c := range choices {
++		minVal, ok := minBy[c.Name]
++		if !ok {
++			t.Fatalf("unexpected choice name %q in %+v", c.Name, c)
++		}
++		if c.Owner != conf.LocalID {
++			t.Fatalf("choice %+v owned by %q, want %q", c, c.Owner, conf.LocalID)
++		}
++		if c.Value < minVal || c.Value >= 2*minVal {
++			t.Fatalf("choice %+v value %v outside legal domain [%v, %v)", c, c.Value, minVal, 2*minVal)
++		}
++		seen[c.Name] = true
++	}
++	if !seen[RandomChoiceHeartbeatTimeout] {
++		t.Fatalf("expected a follower heartbeat draw, choices: %+v", choices)
++	}
++}
+diff --git a/replication.go b/replication.go
+index ea84630..b3657ee 100644
+--- a/replication.go
++++ b/replication.go
+@@ -73,6 +73,11 @@ type followerReplication struct {
+ 	// lastContactLock protects 'lastContact'.
+ 	lastContactLock sync.RWMutex
+ 
++	// clock is the time source of the leader that owns this replication
++	// goroutine, set at creation so backoff and last-contact timestamps use
++	// the same clock as the rest of the node's protocol loops.
++	clock Clock
++
+ 	// failures counts the number of failed RPCs since the last success, which is
+ 	// used to apply backoff.
+ 	failures uint64
+@@ -128,7 +133,7 @@ func (s *followerReplication) LastContact() time.Time {
+ // setLastContact sets the last contact to the current time.
+ func (s *followerReplication) setLastContact() {
+ 	s.lastContactLock.Lock()
+-	s.lastContact = time.Now()
++	s.lastContact = s.clock.Now()
+ 	s.lastContactLock.Unlock()
+ }
+ 
+@@ -143,6 +148,12 @@ func (r *Raft) replicate(s *followerReplication) {
+ RPC:
+ 	shouldStop := false
+ 	for !shouldStop {
++		// Lifecycle pause gate (default-disabled test hook, see
++		// LifecycleController): while paused, no replication work is done and
++		// no protocol output is emitted.
++		if !r.waitWhilePaused() {
++			return
++		}
+ 		select {
+ 		case maxIndex := <-s.stopCh:
+ 			// Make a best effort to replicate up to this index
+@@ -166,7 +177,7 @@ RPC:
+ 		// raft commits stop flowing naturally. The actual heartbeats
+ 		// can't do this to keep them unblocked by disk IO on the
+ 		// follower. See https://github.com/hashicorp/raft/issues/282.
+-		case <-randomTimeout(r.config().CommitTimeout):
++		case <-r.randomTimeoutFor(RandomChoiceCommitTimeout, r.config().CommitTimeout):
+ 			lastLogIdx, _ := r.getLastLog()
+ 			shouldStop = r.replicateTo(s, lastLogIdx)
+ 		}
+@@ -207,10 +218,16 @@ func (r *Raft) replicateTo(s *followerReplication, lastIndex uint64) (shouldStop
+ 	var peer Server
+ 
+ START:
++	// Lifecycle pause gate: while paused, do not send any protocol output
++	// (AppendEntries, snapshots) even if the loop above was entered before
++	// the pause took effect.
++	if !r.waitWhilePaused() {
++		return true
++	}
+ 	// Prevent an excessive retry rate on errors
+ 	if s.failures > 0 {
+ 		select {
+-		case <-time.After(backoff(failureWait, s.failures, maxFailureScale)):
++		case <-s.clock.After(backoff(failureWait, s.failures, maxFailureScale)):
+ 		case <-r.shutdownCh:
+ 		}
+ 	}
+@@ -396,10 +413,15 @@ func (r *Raft) heartbeat(s *followerReplication, stopCh chan struct{}) {
+ 
+ 	var resp AppendEntriesResponse
+ 	for {
++		// Lifecycle pause gate: while paused, no heartbeat AppendEntries are
++		// emitted.
++		if !r.waitWhilePaused() {
++			return
++		}
+ 		// Wait for the next heartbeat interval or forced notify
+ 		select {
+ 		case <-s.notifyCh:
+-		case <-randomTimeout(r.config().HeartbeatTimeout / 10):
++		case <-r.randomTimeoutFor(RandomChoiceHeartbeatInterval, r.config().HeartbeatTimeout/10):
+ 		case <-stopCh:
+ 			return
+ 		}
+@@ -416,7 +438,7 @@ func (r *Raft) heartbeat(s *followerReplication, stopCh chan struct{}) {
+ 			r.observe(FailedHeartbeatObservation{PeerID: peer.ID, LastContact: s.LastContact()})
+ 			failures++
+ 			select {
+-			case <-time.After(nextBackoffTime):
++			case <-s.clock.After(nextBackoffTime):
+ 			case <-stopCh:
+ 				return
+ 			}
+@@ -472,6 +494,11 @@ func (r *Raft) pipelineReplicate(s *followerReplication) error {
+ 	shouldStop := false
+ SEND:
+ 	for !shouldStop {
++		// Lifecycle pause gate: while paused, no pipelined AppendEntries are
++		// emitted.
++		if !r.waitWhilePaused() {
++			break SEND
++		}
+ 		select {
+ 		case <-finishCh:
+ 			break SEND
+@@ -492,7 +519,7 @@ SEND:
+ 		case <-s.triggerCh:
+ 			lastLogIdx, _ := r.getLastLog()
+ 			shouldStop = r.pipelineSend(s, pipeline, &nextIndex, lastLogIdx)
+-		case <-randomTimeout(r.config().CommitTimeout):
++		case <-r.randomTimeoutFor(RandomChoiceCommitTimeout, r.config().CommitTimeout):
+ 			lastLogIdx, _ := r.getLastLog()
+ 			shouldStop = r.pipelineSend(s, pipeline, &nextIndex, lastLogIdx)
+ 		}
+diff --git a/snapshot.go b/snapshot.go
+index 3f9d315..a27bb2e 100644
+--- a/snapshot.go
++++ b/snapshot.go
+@@ -71,8 +71,14 @@ type SnapshotSink interface {
+ // main goroutines, so that snapshots do not block normal operation.
+ func (r *Raft) runSnapshots() {
+ 	for {
++		// Lifecycle pause gate (default-disabled test hook, see
++		// LifecycleController): while paused, no snapshot timer action or
++		// user-triggered snapshot is processed.
++		if !r.waitWhilePaused() {
++			return
++		}
+ 		select {
+-		case <-randomTimeout(r.config().SnapshotInterval):
++		case <-r.randomTimeoutFor(RandomChoiceSnapshotInterval, r.config().SnapshotInterval):
+ 			// Check if we should snapshot
+ 			if !r.shouldSnapshot() {
+ 				continue
+diff --git a/state.go b/state.go
+index edbccae..2dc5e08 100644
+--- a/state.go
++++ b/state.go
+@@ -72,6 +72,13 @@ type raftState struct {
+ 	// Tracks running goroutines
+ 	routinesGroup sync.WaitGroup
+ 
++	// auxWG tracks the auxiliary plain-go goroutines of a node that are not
++	// part of routinesGroup (the log-store metrics emitter, the leadership
++	// transfer goroutine, and its timeout watcher). LifecycleController.Stop
++	// and Crash wait for them so that no execution context of a discarded
++	// runtime survives after the operation returns.
++	auxWG sync.WaitGroup
++
+ 	// The current state
+ 	state RaftState
+ }
+@@ -150,10 +157,28 @@ func (r *raftState) goFunc(f func()) {
+ 	}()
+ }
+ 
++// auxGo starts an auxiliary goroutine that is tracked separately from
++// routinesGroup. The goroutine must exit when the node shuts down: every
++// blocking point it can reach (transport calls, timer waits, channel sends)
++// is aborted by the shutdown signal, the closed transport, or the explicit
++// shutdown cases added at those points.
++func (r *raftState) auxGo(f func()) {
++	r.auxWG.Add(1)
++	go func() {
++		defer r.auxWG.Done()
++		f()
++	}()
++}
++
+ func (r *raftState) waitShutdown() {
+ 	r.routinesGroup.Wait()
+ }
+ 
++// waitAux waits for every auxiliary goroutine started with auxGo to exit.
++func (r *raftState) waitAux() {
++	r.auxWG.Wait()
++}
++
+ // getLastIndex returns the last index in stable storage.
+ // Either from the last log or from the last snapshot.
+ func (r *raftState) getLastIndex() uint64 {
+diff --git a/time_controller.go b/time_controller.go
+new file mode 100644
+index 0000000..b5e41bb
+--- /dev/null
++++ b/time_controller.go
+@@ -0,0 +1,268 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"container/heap"
++	"errors"
++	"sync"
++	"time"
++)
++
++// Clock is the time source used by a Raft node's protocol loops. A node uses
++// the real wall clock unless a Clock is installed through Config.Clock before
++// NewRaft starts the node's goroutines.
++type Clock interface {
++	// Now returns the current time of this clock.
++	Now() time.Time
++
++	// After waits for the duration to elapse and then sends the current time
++	// on the returned channel. It is equivalent to time.After for the real
++	// clock. Each returned channel fires at most once, at the first boundary
++	// at which the clock has reached the requested deadline.
++	After(d time.Duration) <-chan time.Time
++}
++
++// realClock is the default Clock: it delegates to the wall clock so that
++// production behavior is unchanged when no controller is installed.
++type realClock struct{}
++
++func (realClock) Now() time.Time { return time.Now() }
++
++func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
++
++// nodeClock attributes every timer armed through it to one Raft node. NewRaft
++// wraps a TimeController-owned virtual clock with a nodeClock when it installs
++// Config.Clock, so the wrapper is invisible to consumers: Now and After behave
++// exactly as on the underlying shared clock. The attribution lets the shared
++// virtual clock exclude nodes that must not receive time steps: timers of a
++// paused node are held until the node resumes, and timers of a stopped or
++// crashed runtime are discarded when they come due instead of being delivered.
++type nodeClock struct {
++	vc *virtualClock
++	r  *Raft
++}
++
++func (n *nodeClock) Now() time.Time { return n.vc.Now() }
++
++func (n *nodeClock) After(d time.Duration) <-chan time.Time {
++	return n.vc.after(d, n)
++}
++
++// TimeController is a system-level controller for protocol time. It owns one
++// shared virtual clock with a fixed step unit. Every node whose Config.Clock
++// is set to the controller's shared clock before NewRaft is part of the
++// controlled system: in controlled mode protocol time does not progress on its
++// own, and TimeController.Advance is the only way to move it.
++//
++// Wiring: create the controller first, install its clock in each controlled
++// node's Config, then construct the nodes:
++//
++//	tc := raft.NewTimeController(10 * time.Millisecond)
++//	conf.Clock = tc.Clock() // must be set before NewRaft starts goroutines
++//	r, _ := raft.NewRaft(conf, fsm, store, store, snaps, trans)
++//	_ = tc.Register(r)      // optional bookkeeping of the controlled node
++//
++// One Advance step advances the shared virtual clock by one unit for every
++// node sharing the clock, then submits every timer whose deadline is reached
++// at that boundary through the node's normal timer channels. Advance(n) is
++// equivalent to n separate Advance(1) calls: timers re-armed in reaction to
++// earlier steps fire at later steps, and no timer is skipped or fired twice.
++// Advance returns once the due events have been submitted; it does not wait
++// for the events to be processed, for resulting messages or state
++// transitions, or for commits. Step delivery is lifecycle-aware: a timer
++// belonging to a paused node is held (it fires only after the node resumes,
++// on a later Advance), and a timer belonging to a stopped or crashed runtime
++// is discarded when it comes due, so paused, stopped, and crashed nodes do
++// not receive steps. A timer armed directly on the shared clock (without a
++// node) is never gated and fires exactly like before.
++//
++// When no TimeController is installed (Config.Clock is nil) nodes keep using
++// the real wall clock and production behavior is unchanged.
++type TimeController struct {
++	clock *virtualClock
++
++	mu    sync.Mutex
++	nodes map[ServerID]*Raft
++}
++
++// NewTimeController creates a TimeController whose shared virtual clock
++// advances in unit-sized steps. unit must be positive; it is the target-
++// defined duration of one Advance step. Nodes created later with the
++// controller's clock installed via Config.Clock are controlled automatically;
++// already-created nodes may be passed here or registered later with Register.
++func NewTimeController(unit time.Duration, nodes ...*Raft) *TimeController {
++	if unit <= 0 {
++		panic("raft: NewTimeController requires a positive step unit")
++	}
++	tc := &TimeController{
++		clock: newVirtualClock(unit),
++		nodes: make(map[ServerID]*Raft),
++	}
++	for _, n := range nodes {
++		_ = tc.Register(n)
++	}
++	return tc
++}
++
++// Clock returns the controller's shared virtual clock. Install it in each
++// controlled node's Config.Clock before calling NewRaft so that control is in
++// place before the node can start protocol goroutines, timers, or callbacks.
++func (tc *TimeController) Clock() Clock { return tc.clock }
++
++// Register records node as a controlled node of this controller. It is
++// required only for bookkeeping (for example when a node is restarted and a
++// fresh runtime is bound to the same controller); time control itself comes
++// from the shared clock installed via Config.Clock. Register returns an error
++// if node is nil or if the node's ServerID is already registered.
++func (tc *TimeController) Register(node *Raft) error {
++	if node == nil {
++		return errors.New("raft: cannot register a nil node with TimeController")
++	}
++	tc.mu.Lock()
++	defer tc.mu.Unlock()
++	id := node.localID
++	if _, ok := tc.nodes[id]; ok {
++		return errors.New("raft: node " + string(id) + " is already registered with TimeController")
++	}
++	tc.nodes[id] = node
++	return nil
++}
++
++// Advance advances the shared virtual clock by steps units, one unit at a
++// time. After each unit the clock submits every timer whose deadline has been
++// reached at that boundary, in deadline order (and, for equal deadlines, in
++// the order the timers were armed), through the normal timer channels. A
++// timer that belongs to a paused node is held and re-evaluated at later
++// boundaries, and a timer that belongs to a stopped or crashed runtime is
++// discarded when it comes due, so paused, stopped, and crashed nodes do not
++// receive steps; the shared clock itself advances for every node sharing it.
++// Advance never waits for the submitted events to be processed.
++func (tc *TimeController) Advance(steps uint64) error {
++	tc.clock.advance(steps)
++	return nil
++}
++
++// virtualClock is the shared, manually advanced clock owned by a
++// TimeController. It starts at a fixed epoch (time.Unix(0, 0)) so that
++// reproducible tests observe deterministic LastContact and timer values.
++type virtualClock struct {
++	mu     sync.Mutex
++	now    time.Time
++	unit   time.Duration
++	timers virtualTimerHeap
++	seq    uint64
++}
++
++func newVirtualClock(unit time.Duration) *virtualClock {
++	return &virtualClock{now: time.Unix(0, 0), unit: unit}
++}
++
++func (c *virtualClock) Now() time.Time {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return c.now
++}
++
++// After arms a timer that fires at the first step boundary at which the
++// clock has reached now+d. A non-positive duration arms at the current
++// boundary, so it fires on the next Advance step. The returned channel is
++// buffered and receives exactly one value.
++func (c *virtualClock) After(d time.Duration) <-chan time.Time {
++	return c.after(d, nil)
++}
++
++// after arms a timer and optionally attributes it to the given node clock.
++// An unattributed timer (nc == nil) is never gated by lifecycle state.
++func (c *virtualClock) after(d time.Duration, nc *nodeClock) <-chan time.Time {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	ch := make(chan time.Time, 1)
++	t := &virtualTimer{deadline: c.now.Add(d), seq: c.seq, ch: ch, nc: nc}
++	c.seq++
++	heap.Push(&c.timers, t)
++	return ch
++}
++
++// advance moves the clock forward by steps units. Each unit is a separate
++// boundary: the clock moves one unit, then all timers due at that boundary
++// are submitted (popped and delivered). Timers armed concurrently by node
++// goroutines while advance runs are included from the step at which their
++// deadline is reached. A due timer that belongs to a paused node is held and
++// re-evaluated at later boundaries (it fires only once the node resumes); a
++// due timer that belongs to a stopped or crashed runtime is discarded so no
++// stale timer of a discarded runtime is ever delivered.
++func (c *virtualClock) advance(steps uint64) {
++	for i := uint64(0); i < steps; i++ {
++		c.mu.Lock()
++		c.now = c.now.Add(c.unit)
++		var fire []*virtualTimer
++		var held []*virtualTimer
++		for c.timers.Len() > 0 {
++			t := c.timers[0]
++			if t.deadline.After(c.now) {
++				break
++			}
++			heap.Pop(&c.timers)
++			if t.nc == nil {
++				fire = append(fire, t)
++				continue
++			}
++			switch {
++			case t.nc.r.getState() == Shutdown:
++				// The owning runtime is stopped or crashed: discard the
++				// stale timer. A restarted runtime arms fresh timers through
++				// its own node clock.
++			case t.nc.r.paused.Load():
++				// Paused nodes do not receive steps: hold the timer and
++				// re-evaluate it at a later boundary.
++				held = append(held, t)
++			default:
++				fire = append(fire, t)
++			}
++		}
++		for _, t := range held {
++			heap.Push(&c.timers, t)
++		}
++		c.mu.Unlock()
++
++		// Deliver outside the lock: each channel is buffered and fires
++		// exactly once, so these sends never block.
++		for _, t := range fire {
++			t.ch <- t.deadline
++		}
++	}
++}
++
++// virtualTimer is one pending After request in the shared virtual clock.
++type virtualTimer struct {
++	deadline time.Time
++	seq      uint64
++	ch       chan time.Time
++	nc       *nodeClock // non-nil when the timer is attributed to one node
++}
++
++// virtualTimerHeap orders pending timers by (deadline, arm order).
++type virtualTimerHeap []*virtualTimer
++
++func (h virtualTimerHeap) Len() int { return len(h) }
++
++func (h virtualTimerHeap) Less(i, j int) bool {
++	if h[i].deadline.Equal(h[j].deadline) {
++		return h[i].seq < h[j].seq
++	}
++	return h[i].deadline.Before(h[j].deadline)
++}
++
++func (h virtualTimerHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
++
++func (h *virtualTimerHeap) Push(x interface{}) { *h = append(*h, x.(*virtualTimer)) }
++
++func (h *virtualTimerHeap) Pop() interface{} {
++	old := *h
++	n := len(old)
++	x := old[n-1]
++	*h = old[:n-1]
++	return x
++}
+diff --git a/time_controller_test.go b/time_controller_test.go
+new file mode 100644
+index 0000000..b10f7ab
+--- /dev/null
++++ b/time_controller_test.go
+@@ -0,0 +1,229 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package raft
++
++import (
++	"testing"
++	"time"
++)
++
++// controlledTestNode builds one bootstrapped single-voter node whose protocol
++// time is fully controlled by a TimeController with the given step unit. The
++// configured timeouts are tiny so that any real-time progress would be
++// observable within milliseconds; only Advance may move protocol time.
++func controlledTestNode(t *testing.T, unit time.Duration) (*TimeController, *Raft) {
++	t.Helper()
++	conf := DefaultConfig()
++	conf.HeartbeatTimeout = 10 * time.Millisecond
++	conf.ElectionTimeout = 10 * time.Millisecond
++	conf.CommitTimeout = 5 * time.Millisecond
++	conf.LeaderLeaseTimeout = 5 * time.Millisecond
++	conf.SnapshotInterval = 5 * time.Millisecond
++	conf.LocalID = ServerID("node-1")
++	conf.Logger = newTestLogger(t)
++
++	tc := NewTimeController(unit)
++	conf.Clock = tc.Clock()
++
++	store := NewInmemStore()
++	snaps := NewInmemSnapshotStore()
++	addr, trans := NewInmemTransport(ServerAddress("10.0.0.1:0"))
++	if err := BootstrapCluster(conf, store, store, snaps, trans, Configuration{
++		Servers: []Server{{Suffrage: Voter, ID: conf.LocalID, Address: addr}},
++	}); err != nil {
++		t.Fatalf("BootstrapCluster failed: %v", err)
++	}
++	r, err := NewRaft(conf, &MockFSM{}, store, store, snaps, trans)
++	if err != nil {
++		t.Fatalf("NewRaft failed: %v", err)
++	}
++	t.Cleanup(func() { _ = r.Shutdown().Error() })
++	return tc, r
++}
++
++// TestTimeControllerNoProgressWithoutAdvance verifies that in controlled mode
++// protocol time does not progress on its own: with timeouts of a few
++// milliseconds the node would start an election within tens of milliseconds of
++// real time, but without Advance it must remain a follower.
++func TestTimeControllerNoProgressWithoutAdvance(t *testing.T) {
++	tc, r := controlledTestNode(t, time.Millisecond)
++	_ = tc
++
++	time.Sleep(200 * time.Millisecond)
++	if got := r.State(); got != Follower {
++		t.Fatalf("expected Follower without Advance, got %v", got)
++	}
++}
++
++// TestTimeControllerAdvanceDrivesElection verifies that Advance is the only
++// way protocol time moves: stepping past the heartbeat and election timeouts
++// (each up to 2x the configured value because of jitter) lets the node run an
++// election and become leader.
++func TestTimeControllerAdvanceDrivesElection(t *testing.T) {
++	tc, r := controlledTestNode(t, time.Millisecond)
++
++	deadline := time.Now().Add(5 * time.Second)
++	for r.State() != Leader && time.Now().Before(deadline) {
++		if err := tc.Advance(25); err != nil {
++			t.Fatalf("Advance failed: %v", err)
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++	if got := r.State(); got != Leader {
++		t.Fatalf("expected Leader after Advance, got %v", got)
++	}
++}
++
++// TestTimeControllerClockSteps verifies the step boundaries of the shared
++// virtual clock: timers fire exactly at the step at which the clock reaches
++// their deadline, in arm order, and each timer fires exactly once.
++func TestTimeControllerClockSteps(t *testing.T) {
++	tc := NewTimeController(10 * time.Millisecond)
++	clk := tc.Clock()
++
++	ch3 := clk.After(30 * time.Millisecond) // due at step 3
++	ch7 := clk.After(70 * time.Millisecond) // due at step 7
++
++	if err := tc.Advance(2); err != nil {
++		t.Fatalf("Advance failed: %v", err)
++	}
++	assertTimerNotFired(t, ch3)
++	assertTimerNotFired(t, ch7)
++
++	if err := tc.Advance(1); err != nil { // step 3 boundary
++		t.Fatalf("Advance failed: %v", err)
++	}
++	assertTimerFired(t, ch3)
++	assertTimerNotFired(t, ch7)
++
++	if err := tc.Advance(4); err != nil { // steps 4..7
++		t.Fatalf("Advance failed: %v", err)
++	}
++	assertTimerFired(t, ch7)
++
++	// Timers fire exactly once: further steps do not refire them.
++	if err := tc.Advance(1); err != nil {
++		t.Fatalf("Advance failed: %v", err)
++	}
++	assertTimerNotFired(t, ch3)
++	assertTimerNotFired(t, ch7)
++}
++
++// TestTimeControllerReArmedTimer verifies that a timer re-armed in reaction to
++// an earlier step fires at a later step boundary, exactly as it would across
++// separate Advance(1) calls.
++func TestTimeControllerReArmedTimer(t *testing.T) {
++	tc := NewTimeController(10 * time.Millisecond)
++	clk := tc.Clock()
++
++	first := clk.After(20 * time.Millisecond) // fires at step 2
++	rearmed := make(chan struct{})
++	go func() {
++		<-first
++		second := clk.After(20 * time.Millisecond) // deadline: now+20ms
++		<-second
++		close(rearmed)
++	}()
++
++	if err := tc.Advance(2); err != nil {
++		t.Fatalf("Advance failed: %v", err)
++	}
++
++	deadline := time.Now().Add(2 * time.Second)
++	for {
++		select {
++		case <-rearmed:
++			return
++		default:
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("re-armed timer never fired")
++		}
++		if err := tc.Advance(1); err != nil {
++			t.Fatalf("Advance failed: %v", err)
++		}
++		time.Sleep(time.Millisecond)
++	}
++}
++
++// TestTimeControllerRegister verifies the optional node registry rejects nil
++// and duplicate registrations.
++func TestTimeControllerRegister(t *testing.T) {
++	tc := NewTimeController(time.Millisecond)
++	if err := tc.Register(nil); err == nil {
++		t.Fatalf("expected error registering nil node")
++	}
++	if err := tc.Register(&Raft{localID: ServerID("node-1")}); err != nil {
++		t.Fatalf("unexpected registration error: %v", err)
++	}
++	if err := tc.Register(&Raft{localID: ServerID("node-1")}); err == nil {
++		t.Fatalf("expected duplicate registration error")
++	}
++}
++
++// TestTimeControllerSkipsPausedAndStoppedNodes verifies the lifecycle-aware
++// step exclusion: while a node is paused, Advance delivers no steps to it
++// (its due timers are held, so no timer action or election can start), and
++// after Resume the held timers fire on later Advances and drive the election.
++// It also verifies that Advance after Stop discards the stale timers of the
++// discarded runtime without delivering them or hanging.
++func TestTimeControllerSkipsPausedAndStoppedNodes(t *testing.T) {
++	tc, r := controlledTestNode(t, time.Millisecond)
++	lc := NewLifecycleController(r)
++
++	if err := lc.Pause(ServerID("node-1")); err != nil {
++		t.Fatalf("Pause failed: %v", err)
++	}
++	// Advance far past the heartbeat and election timeouts: a paused node
++	// must not receive any of these steps.
++	if err := tc.Advance(500); err != nil {
++		t.Fatalf("Advance failed: %v", err)
++	}
++	if got := r.State(); got != Follower {
++		t.Fatalf("paused node received steps: expected Follower, got %v", got)
++	}
++
++	if err := lc.Resume(ServerID("node-1")); err != nil {
++		t.Fatalf("Resume failed: %v", err)
++	}
++	// The held heartbeat timer fires on later Advances and starts the
++	// election, which completes once the election timer is stepped to.
++	deadline := time.Now().Add(5 * time.Second)
++	for r.State() != Leader && time.Now().Before(deadline) {
++		if err := tc.Advance(25); err != nil {
++			t.Fatalf("Advance failed: %v", err)
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++	if got := r.State(); got != Leader {
++		t.Fatalf("expected Leader after resume and Advance, got %v", got)
++	}
++
++	// After Stop the runtime is discarded: Advance drops its stale timers
++	// instead of delivering them, and must not hang or panic.
++	if err := lc.Stop(ServerID("node-1")); err != nil {
++		t.Fatalf("Stop failed: %v", err)
++	}
++	if err := tc.Advance(100); err != nil {
++		t.Fatalf("Advance after Stop failed: %v", err)
++	}
++}
++
++func assertTimerFired(t *testing.T, ch <-chan time.Time) {
++	t.Helper()
++	select {
++	case <-ch:
++	default:
++		t.Fatalf("timer did not fire")
++	}
++}
++
++func assertTimerNotFired(t *testing.T, ch <-chan time.Time) {
++	t.Helper()
++	select {
++	case <-ch:
++		t.Fatalf("timer fired unexpectedly")
++	default:
++	}
++}

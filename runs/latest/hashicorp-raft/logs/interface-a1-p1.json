@@ -1,0 +1,423 @@
+{
+  "message_capture": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": {
+      "file": "controlled_transport.go",
+      "symbol": "ControlledTransport",
+      "meaning": "Outbound Transport calls (AppendEntries, RequestVote, RequestPreVote, InstallSnapshot, TimeoutNow, AppendEntriesPipeline) are intercepted before the real InmemTransport makeRPC; responses are intercepted at the controller's respCh watcher after the target ingress."
+    },
+    "pending_store": {
+      "file": "message_controller.go",
+      "symbol": "MessageController",
+      "meaning": "Ordered pending slice plus byHandle map guarded by mu; each entry holds the private deep copy, buffered stream, routing address, and response continuation."
+    },
+    "public_entrypoints": [
+      {
+        "file": "message_controller.go",
+        "symbol": "NewMessageController",
+        "meaning": "Constructor of the shared, thread-safe MessageController; controlled mode is disabled by default so production behavior is unchanged."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "MessageController.SetControlled",
+        "meaning": "Enables/disables capture; when disabled, wrapped transports delegate every call."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "MessageController.Pending",
+        "meaning": "Returns a fresh deep snapshot of all captured messages in stable controller acceptance order."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "MessageController.Drop",
+        "meaning": "Removes one pending entry without delivering it; invalidates its handle."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "MessageController.Clear",
+        "meaning": "Removes every pending entry without delivering any."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "PendingMessage",
+        "meaning": "Public view: Handle, Source/Target ServerID, Kind, and typed MessagePayload content."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "MessageHandle",
+        "meaning": "Struct backed by an unexported uint64 identity; stable while pending, never reused."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "MessageKind",
+        "meaning": "String-based kind classification of the ten request/response message families."
+      },
+      {
+        "file": "controlled_transport.go",
+        "symbol": "NewControlledTransport",
+        "meaning": "Wraps one InmemTransport with the local ServerID and the shared controller; install as the node's Transport before NewRaft."
+      },
+      {
+        "file": "controlled_transport.go",
+        "symbol": "ControlledTransport",
+        "meaning": "Transport/WithPreVote/WithPeers/WithClose (LoopbackTransport) wrapper that intercepts outbound AppendEntries, RequestVote, RequestPreVote, InstallSnapshot, TimeoutNow, and AppendEntriesPipeline."
+      }
+    ],
+    "copy_strategy": "Deep copy at capture (typed payloads including nested Entries logs and byte slices; InstallSnapshot streams buffered fully into memory) and a fresh deep copy at every Pending call; Inject delivers only the controller's private copy; streams replay from the private buffer via bytes.NewReader.",
+    "production_mode": "Unchanged: without a controller, or while SetControlled(false), ControlledTransport delegates every call to the wrapped InmemTransport; NewMessageController starts disabled.",
+    "test_mode": "SetControlled(true) before NewRaft starts goroutines; tests drive Pending/Drop/Clear/Inject; focused same-package tests in message_controller_test.go (round trip, drop/clear/errors, target unavailable, two-node end-to-end election and commit).",
+    "instance_reference": "One MessageController per test cluster; each node's ControlledTransport binds to it. A MessageHandle identifies one concrete entry and remains stable while pending; identities are never reused after removal.",
+    "target_binding_strategy": "The captured target address is resolved at Inject through the owning wrapper's base InmemTransport peers map, the same routing table InmemTransport.makeRPC uses; ServerIDs come from the transport call arguments (target id) and the wrapper's local ID (source).",
+    "cache_effects": "Capture appends one entry per outbound call (broadcast expands per target in acceptance order). Drop removes one entry, Clear removes all; neither affects the relative order of the rest. Successful Inject removes the request entry and later records the protocol response as a new pending entry; copy or stream-buffer failures are returned to the caller and register nothing.",
+    "covered_paths": [
+      "append_entries: leader replicate/heartbeat -> ControlledTransport.AppendEntries -> captured pending entry; Inject -> target consumerCh -> processRPC -> appendEntries -> Respond -> response captured as new entry -> response Inject completes the original caller",
+      "request_vote: electSelf -> ControlledTransport.RequestVote -> one captured entry per target voter (broadcast expands per target)",
+      "request_prevote: preElectSelf -> ControlledTransport.RequestPreVote -> captured per target",
+      "install_snapshot: sendLatestSnapshot -> ControlledTransport.InstallSnapshot buffers the stream at capture; delivery replays the controller's private buffer",
+      "timeout_now: leadershipTransfer -> ControlledTransport.TimeoutNow -> captured",
+      "append_entries_pipeline: pipelineReplicate -> ControlledTransport.AppendEntriesPipeline -> controlledPipeline.AppendEntries captures each request; the AppendFuture completes only when the captured response entry is injected"
+    ],
+    "uncovered_paths": [],
+    "implementation_approach": [
+      "Transport wrapper installed as each node's Transport before NewRaft; pure delegate while SetControlled(false), so production defaults are untouched.",
+      "Capture at the outbound transport call with deep-copied typed payloads (RPCHeader/Leader/Candidate/Peers/Configuration byte slices and Entries []*Log with Data/Extensions); InstallSnapshot streams are fully buffered into replayable memory at capture.",
+      "Synchronous callers, channels, and futures are preserved: each entry carries a private response continuation; responses are separately captured as new pending entries with reversed Source/Target and a fresh handle.",
+      "Same-package reuse of InmemTransport routing (peers map, consumerCh, timeout) so capture and injection share the normal protocol ingress."
+    ],
+    "usage_examples": [
+      "// Requires: t1, t2 *raft.InmemTransport; addr1, addr2 raft.ServerAddress\nctl := raft.NewMessageController()\nw1 := raft.NewControlledTransport(t1, ctl, raft.ServerID(\"node1\"))\nw2 := raft.NewControlledTransport(t2, ctl, raft.ServerID(\"node2\"))\nw1.Connect(addr2, w2)\nw2.Connect(addr1, w1)\nctl.SetControlled(true)",
+      "// Requires: ctl *raft.MessageController\npending := ctl.Pending()\nfor _, pm := range pending {\n    if pm.Kind == raft.MessageKindAppendEntriesRequest {\n        _ = pm.Source\n        _ = pm.Target\n        _ = pm.Message.AppendEntriesRequest.Term\n    }\n}",
+      "// Requires: ctl *raft.MessageController; h raft.MessageHandle\nif err := ctl.Drop(h); err != nil { /* ErrMessageNotPending */ }\nctl.Clear()"
+    ],
+    "notes": [
+      "Source of a captured request is the wrapper's ServerID; Target comes from the transport call's id argument (the target ServerID), exactly as Raft invokes the Transport interface.",
+      "InmemTransport.SetHeartbeatHandler is a no-op (inmem_transport.go:74), so heartbeats arrive on the consumer channel and are captured like any other AppendEntries.",
+      "A controlled call blocks until its captured response entry is injected, bounded by the underlying transport timeout (10x for InstallSnapshot/TimeoutNow), mirroring InmemTransport.makeRPC; this also prevents Raft.Shutdown from deadlocking on held exchanges.",
+      "Real TCP/network transports, external durable stores, and raft-compat/fuzzy/bench are outside the system boundary and are never wrapped.",
+      "Handles are monotonic and never reused; Pending/Drop/Clear/Inject never advance time; entries are never silently evicted, retargeted, or reordered.",
+      "No Take, mutable cache exposure, message mutation, redirection, duplication, fabrication, selection policy, acknowledgements, commit waiting, or quiescence waiting is provided."
+    ]
+  },
+  "message_injection": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": {
+      "file": "controlled_transport.go",
+      "symbol": "ControlledTransport",
+      "meaning": "Injection re-enters the same wrapper-owned seam: the entry recorded at the outbound Transport call is delivered into the real target's consumer channel."
+    },
+    "pending_store": {
+      "file": "message_controller.go",
+      "symbol": "MessageController",
+      "meaning": "The same ordered pending slice and byHandle map used by capture; Inject updates this same instance (same end-to-end path)."
+    },
+    "public_entrypoints": [
+      {
+        "file": "message_controller.go",
+        "symbol": "MessageController.Inject",
+        "meaning": "Delivers one pending entry through its captured target's normal input boundary and updates the same cache; classification errors ErrMessageNotPending, ErrTargetUnavailable, ErrMessageNotAccepted."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "ErrMessageNotPending",
+        "meaning": "errors.Is-classifiable sentinel for handles that are not currently pending."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "ErrTargetUnavailable",
+        "meaning": "errors.Is-classifiable sentinel when the captured target is not reachable through the normal routing table."
+      },
+      {
+        "file": "message_controller.go",
+        "symbol": "ErrMessageNotAccepted",
+        "meaning": "errors.Is-classifiable sentinel when the target's input boundary did not accept the message (enqueue timeout or closed transport)."
+      }
+    ],
+    "copy_strategy": "Inject delivers only the controller's private deep copy, never a Pending snapshot; InstallSnapshot streams replay from the private buffer; each Pending call still returns independent fresh copies.",
+    "production_mode": "Unchanged: injection only exists on controller-owned entries; with the controller disabled or absent, transports behave exactly as before.",
+    "test_mode": "Covered by message_controller_test.go: round trip (request inject, response capture and inject), drop/clear/error classification, target-unavailable preservation, and the two-node end-to-end Raft election/commit driven purely by Inject.",
+    "instance_reference": "One controller instance owns the cache; capture and injection operate on the same instance and the same declared end-to-end path per message.",
+    "target_binding_strategy": "The captured ServerAddress is resolved against the owning wrapper's base InmemTransport peers map at Inject time (identifier arithmetic alone is never used); the resolved peer's consumerCh is the normal request ingress for that direction.",
+    "cache_effects": "Successful Inject removes the request entry and invalidates its handle, then records the protocol response as a new pending entry. Invalid handle, unavailable target, or explicit non-acceptance return an error and preserve the entry and handle. Later protocol failure never restores an accepted entry.",
+    "covered_paths": [
+      "append_entries: Inject(request) -> resolve peer from owner.base.peers -> peer.consumerCh (normal ingress) -> Raft.processRPC -> appendEntries -> Respond -> response captured -> Inject(response) -> original caller completes",
+      "request_vote: Inject(RequestVoteRequest entry) -> requestVote ingress -> RequestVoteResponse captured and forwarded on Inject",
+      "request_prevote: Inject(RequestPreVoteRequest entry) -> requestPreVote ingress -> RequestPreVoteResponse captured and forwarded on Inject",
+      "install_snapshot: Inject(InstallSnapshotRequest entry) -> installSnapshot ingress with replayed stream -> InstallSnapshotResponse captured and forwarded on Inject",
+      "timeout_now: Inject(TimeoutNowRequest entry) -> timeoutNow ingress -> TimeoutNowResponse captured and forwarded on Inject",
+      "append_entries_pipeline: Inject of a pipelined request entry -> target ingress -> response captured -> Inject completes the AppendFuture"
+    ],
+    "uncovered_paths": [],
+    "implementation_approach": [
+      "Inject resolves the captured target through the owner's base InmemTransport peers map and enqueues the controller's private copy into the target consumerCh, the same ingress InmemTransport.makeRPC uses, bounded by the base transport send timeout.",
+      "Response entries inject by forwarding the stored RPCResponse to the original caller's continuation (waitCh), unblocking the synchronous transport call or completing the pipeline AppendFuture; responses always come from the real target handler, never fabricated.",
+      "Confirmed acceptance removes the entry and invalidates its handle; invalid handle, unavailable target, or explicit non-acceptance preserve the entry."
+    ],
+    "usage_examples": [
+      "// Requires: ctl *raft.MessageController; h raft.MessageHandle\nif err := ctl.Inject(h); err != nil {\n    if errors.Is(err, raft.ErrTargetUnavailable) { /* target disconnected */ }\n    if errors.Is(err, raft.ErrMessageNotAccepted) { /* enqueue refused */ }\n}",
+      "// Requires: ctl *raft.MessageController\nfor _, pm := range ctl.Pending() {\n    if pm.Kind == raft.MessageKindRequestVoteRequest {\n        if err := ctl.Inject(pm.Handle); err != nil { /* classify */ }\n    }\n}"
+    ],
+    "notes": [
+      "Acceptance is defined as successful enqueue into the target's consumerCh, matching InmemTransport semantics; Inject does not wait for dequeue, state transition, response, commit, or quiescence.",
+      "The target cannot distinguish acceptance from timeout at the enqueue layer, so an accepted entry is never restored, preventing duplicate delivery; later protocol failure does not restore it.",
+      "ErrTargetUnavailable is returned when the peer is disconnected (absent from the routing table); ErrMessageNotAccepted when the enqueue times out or the owning transport closed; both preserve the entry and handle.",
+      "A dropped response leaves its caller blocked until the transport-level wait resolves, mirroring a lost response on the real transport.",
+      "The response entry for a delivered request is captured asynchronously; the response watcher goroutine lives at most as long as the owning transport."
+    ]
+  },
+  "time_control": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": null,
+    "pending_store": null,
+    "public_entrypoints": [
+      {
+        "file": "time_controller.go",
+        "symbol": "TimeController",
+        "meaning": "System-level controller owning one shared virtual clock with a fixed step unit; in controlled mode Advance is the only way protocol time progresses."
+      },
+      {
+        "file": "time_controller.go",
+        "symbol": "NewTimeController",
+        "meaning": "NewTimeController(unit time.Duration, nodes ...*Raft) *TimeController creates the controller and its shared virtual clock; unit is the target-defined duration of one Advance step; panics on a non-positive unit. Nodes created later are wired through Config.Clock."
+      },
+      {
+        "file": "time_controller.go",
+        "symbol": "TimeController.Advance",
+        "meaning": "Advance(steps uint64) error advances the shared clock one unit at a time; after each unit every timer whose deadline is reached at that boundary is submitted through the node's normal timer channels in (deadline, arm-order). Advance(n) equals n separate Advance(1) calls including re-armed timers; returns after due events are submitted, not after processing."
+      },
+      {
+        "file": "time_controller.go",
+        "symbol": "TimeController.Clock",
+        "meaning": "Clock() Clock returns the shared virtual clock to install in each controlled node's Config.Clock before NewRaft starts the node's goroutines."
+      },
+      {
+        "file": "time_controller.go",
+        "symbol": "TimeController.Register",
+        "meaning": "Register(node *Raft) error records a controlled node (ServerID-keyed; rejects nil and duplicates) for bookkeeping and restart re-binding; time control itself comes from the shared clock."
+      },
+      {
+        "file": "time_controller.go",
+        "symbol": "Clock",
+        "meaning": "Clock interface with Now() time.Time and After(d time.Duration) <-chan time.Time; realClock is the default (delegates to time.Now/time.After), virtualClock is the controller's shared clock."
+      },
+      {
+        "file": "config.go",
+        "symbol": "Config.Clock",
+        "meaning": "Config field installing a Clock (e.g. TimeController.Clock()) on a node before NewRaft; nil (default) keeps the real wall clock and production behavior."
+      }
+    ],
+    "copy_strategy": "No payload copying: timer channels carry the virtual deadline time.Time value and are delivered exactly once; nothing aliases node state.",
+    "production_mode": "Config.Clock nil (default): NewRaft installs realClock, so all routed sites behave exactly as upstream (time.Now/time.After); production behavior is unchanged and the TimeController is inert.",
+    "test_mode": "Config.Clock = tc.Clock() installed before NewRaft: protocol time is fully controlled; only TimeController.Advance progresses it. Timeouts should be chosen as multiples of the step unit.",
+    "instance_reference": "One shared virtualClock per TimeController, created in NewTimeController and referenced by every node whose Config.Clock was set to tc.Clock(); the reference is stable for the controller's lifetime. The optional node registry maps concrete ServerID to *Raft and is stable until Register is called again.",
+    "target_binding_strategy": null,
+    "cache_effects": "No message cache. The virtual clock's pending-timer heap is the only store: timers are removed from the heap exactly when they fire at their step boundary, so an entry can never fire twice, be silently dropped, or be reordered relative to equal-deadline timers (arm order preserved).",
+    "covered_paths": [
+      "node_follower_loop: heartbeatTimer arm and re-arm via Raft.randomTimeoutFor (raft.go:163,217) and followerNotifyCh reset (raft.go:211) now use r.clock.After; the election trigger check uses r.clock.Now().Sub(lastContact) (raft.go:221)",
+      "node_candidate_loop: electionTimer arms and re-arms (raft.go:310,353,426) via randomTimeoutFor -> r.clock.After",
+      "node_leader_loop: leader lease timer (raft.go:678,948) and checkLeaderLease time read (raft.go:1048) use r.clock.After/r.clock.Now; leadership-transfer ElectionTimeout waits (raft.go:729,750) use r.clock.After",
+      "node_replication_goroutines: commit and heartbeat-interval timers (replication.go:169,402,495) via randomTimeoutFor; failure backoff (replication.go:218) and heartbeat backoff (replication.go:424) via s.clock.After",
+      "node_snapshot_loop: snapshot interval timer (snapshot.go:75) via randomTimeoutFor -> r.clock.After",
+      "last_contact_timestamps: Raft.setLastContact (raft.go:1958), replication lastContact init (raft.go:605) and followerReplication.setLastContact (replication.go:136) use the node clock so lease and heartbeat checks stay consistent",
+      "production_default: Config.Clock nil -> NewRaft installs realClock (api.go NewRaft), so every routed site behaves exactly as before (time.After/time.Now)"
+    ],
+    "uncovered_paths": [
+      "inmem_transport_delivery_timeouts (inmem_transport.go:185,196,279,323) and controlled_transport/message_controller wrapper timeouts remain wall-clock based: they are RPC delivery deadlines, not protocol timers; they never gate protocol state transitions and in loopback tests complete immediately, so virtualization would require changing transport construction without protocol benefit",
+      "caller_side_deadlines (Apply/AddVoter/etc. timeouts api.go:847,879,1076; requestConfigChange raft.go:118) stay real per the capability spec (caller-side deadlines excluded)",
+      "metrics_and_logging_timestamps (dispatchLogs raft.go:1245, MeasureSince sites, emitLogStoreMetrics log.go:180-192, Log.AppendedAt) stay real per spec (metrics only)",
+      "per_node_step_skipping: the shared-clock model advances all nodes sharing the clock together; stopped/crashed nodes have no live protocol goroutines so their timers are inert, and per-node drift/advancement is out of v0 scope",
+      "pause_semantics: no pause mechanism exists in the target and lifecycle_control is not in this round; paused-node step exclusion is therefore N/A here"
+    ],
+    "implementation_approach": [
+      "config_dependency_injection: public Config.Clock field consumed by NewRaft before goroutines start",
+      "core_hook: no-op-by-default routing of all protocol timer/time-check sites through the injected Clock (disclosed, semantics-preserving)",
+      "facade_wrapper: TimeController facade over a shared virtual clock implementing the Clock interface",
+      "accessor: TimeController.Clock() for pre-NewRaft wiring; TimeController.Register for node bookkeeping",
+      "target_language_tests: focused tests for no-auto-progress, Advance-driven election, step boundaries/order/single-fire, re-armed timers, and Register"
+    ],
+    "usage_examples": [
+      "// Requires: conf *raft.Config (LocalID set), fsm raft.FSM, store *raft.InmemStore, snaps *raft.InmemSnapshotStore, trans *raft.InmemTransport\ntc := raft.NewTimeController(10 * time.Millisecond) // one Advance step = 10ms\nconf.Clock = tc.Clock()                             // wire before NewRaft\nr, err := raft.NewRaft(conf, fsm, store, store, snaps, trans)\nif err != nil { /* handle */ }\nif err := tc.Advance(25); err != nil { /* handle */ } // fire due heartbeat/election timers\nstate := r.State() // Leader once Advance has driven the election",
+      "// Requires: confs []*raft.Config, fsms []raft.FSM, stores []*raft.InmemStore, snaps []*raft.InmemSnapshotStore, trans []*raft.InmemTransport\ntc := raft.NewTimeController(time.Millisecond) // every node shares one virtual clock\nfor i := range confs {\n    confs[i].Clock = tc.Clock() // complete control before any goroutine starts\n}\n// ... raft.NewRaft(confs[i], ...) for each node, then optionally tc.Register(node) ...\nif err := tc.Advance(100); err != nil { /* handle */ } // advance all running nodes together"
+    ],
+    "notes": [
+      "Implementation is a facade over a shared virtual clock plus narrow no-op-by-default core hooks: every protocol-relevant timer/time-check site (raft.go, replication.go, random_controller.go randomTimeoutFor) was routed through the node's Clock, which defaults to the real wall clock; no protocol, persistence, state-transition, or ordering semantics changed, and production defaults are preserved.",
+      "Installation boundary satisfied: NewTimeController is constructed first, its Clock() is set on each node's Config.Clock, and NewRaft stores it before launching goroutines (api.go:628-630); there is no uncontrolled time window and no same-package test switch.",
+      "Step semantics: one step advances the shared clock by one unit for every node sharing it, then submits all timers due at that boundary in (deadline, arm-order); Advance(n) is a loop of identical single-step boundaries, so timers re-armed in reaction to earlier steps fire at later steps and no timer is skipped or refired.",
+      "The virtual clock starts at time.Unix(0,0) for reproducibility; LastContact() and observed timer values are virtual times and must not be compared against the wall clock.",
+      "After(0) (followerNotifyCh heartbeat reset) arms at the current boundary and fires on the next Advance step, consistent with 'protocol time does not progress without Advance'.",
+      "Advance returns once due events have been submitted through the normal timer channels; it does not wait for their processing, resulting messages, state transitions, or commits (per completion contract).",
+      "Thread safety: virtualClock serializes Now/After/advance with a mutex; timer channels are buffered and each timer fires exactly once, so delivery never blocks; concurrent Advance and node re-arms are safe.",
+      "Stopped/crashed nodes: the shared clock still advances, but their goroutines are gone so leftover timers are inert; restart re-binding is supported by Register and Config.Clock wiring (lifecycle round will add Restart re-registration).",
+      "RandomController integration: randomTimeoutFor draws the jitter then arms the timer through r.clock.After, so draws remain recorded while their firing is time-controlled; the production package-level randomTimeout is unchanged.",
+      "NewTimeController panics on a non-positive unit; Advance(steps) returns nil for valid input (0 steps is a no-op)."
+    ]
+  },
+  "randomness_control": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": {
+      "file": "random_controller.go",
+      "symbol": "Raft.randomTimeoutFor",
+      "meaning": "Single interception point for every in-scope hidden non-cryptographic draw: follower heartbeat, candidate election, leader commit/replicate, heartbeat interval, and snapshot interval jitter. When the node has a controller installed it performs and records the draw; otherwise it is byte-identical to the original package-level randomTimeout."
+    },
+    "pending_store": {
+      "file": "random_controller.go",
+      "symbol": "RandomController.choices",
+      "meaning": "Ordered recorded history of final semantic draw results (RandomChoice values), guarded by RandomController.mu so draws from concurrent protocol goroutines are serialized in draw order."
+    },
+    "public_entrypoints": [
+      {
+        "file": "random_controller.go",
+        "symbol": "NewRandomController",
+        "meaning": "Externally callable constructor: NewRandomController(seed int64, owner ServerID) *RandomController creates a deterministic, per-owner controller to be installed through Config.Random before NewRaft starts the node's goroutines."
+      },
+      {
+        "file": "random_controller.go",
+        "symbol": "RandomController.Choices",
+        "meaning": "Thread-safe, side-effect-free accessor returning the ordered, deep-copied history of recorded protocol draws ([]RandomChoice with Name, Owner ServerID, Value time.Duration)."
+      }
+    ],
+    "copy_strategy": "RandomChoice is a plain value type (string name, ServerID owner, time.Duration value); Choices() allocates a fresh slice and copies the elements, so the returned history never aliases the controller's internal history and mutating it cannot affect later calls. Each recorded Value is the final semantic duration minVal+extra (in [minVal, 2*minVal)), not raw random bits; the internal draw consumes one value from the seeded source per decision.",
+    "production_mode": "Default production behavior unchanged: when Config.Random is nil, Raft.randomTimeoutFor uses the same global math/rand draw and the same time.After arming as the original randomTimeout, so no controller is consulted and no history is recorded. Controlled mode: Config.Random set before NewRaft; all in-scope draws are routed through the controller while the target's legal domain [minVal, 2*minVal), timer arming, and production algorithm are preserved.",
+    "test_mode": "In-package focused tests only: TestRandomControllerDeterminism (same seed and draw order reproduce identical sequences, jitter and values stay inside the legal domain, repeated decisions vary, Choices returns deep copies) and TestRandomControllerNodeDraws (a Config-installed controller on a real NewRaft node records follower heartbeat and snapshot draws with the correct Owner, stable names, and in-domain values).",
+    "instance_reference": "One controller per node: the consumer creates it with NewRandomController(seed, ServerID) and installs it via Config.Random; NewRaft binds it to the node's unexported Raft.random field before goroutine launch, and every draw of that node routes through that same instance for the node's lifetime. A restart (fresh NewRaft with the same Config.Random) re-binds the same controller instance and its history, so the reference is stable and reusable across lifecycle changes.",
+    "target_binding_strategy": "Not a message-target capability; ownership binding is explicit and concrete instead. Each controller is constructed for one target-native owner (ServerID) and every recorded RandomChoice carries that Owner field; the node hook resolves its own controller from the Raft instance bound at construction, so a choice is always unambiguously attributable to its node.",
+    "cache_effects": "Every protocol draw appends one RandomChoice to the ordered history and advances the deterministic source; Choices() is side-effect-free; there is no eviction, Drop, or Clear, and the history only grows. Repeated decisions always consume the next value from the same source, so values keep varying (verified by test); a new controller with a new seed starts a fresh empty history. Installation itself records nothing.",
+    "covered_paths": [
+      "node_follower_loop",
+      "node_candidate_loop",
+      "node_replication_goroutines",
+      "node_snapshot_loop"
+    ],
+    "uncovered_paths": [],
+    "implementation_approach": [
+      "dependency injection: new public Config.Random *RandomController field, consumed by NewRaft and bound to Raft.random before the node's goroutines start (api.go)",
+      "core hook (default-disabled, semantics-preserving): new method Raft.randomTimeoutFor(name, minVal) replaces the 8 randomTimeout call sites (raft.go x5: follower heartbeat x2, candidate election x3; replication.go x3: commit timeout x2, heartbeat interval x1; snapshot.go x1), with the no-controller path identical to the original",
+      "constructor: NewRandomController(seed int64, owner ServerID) *RandomController",
+      "typed accessor: RandomController.Choices() []RandomChoice returning deep-copied final semantic values",
+      "stable semantic name constants: RandomChoiceElectionTimeout, RandomChoiceHeartbeatTimeout, RandomChoiceCommitTimeout, RandomChoiceHeartbeatInterval, RandomChoiceSnapshotInterval"
+    ],
+    "usage_examples": [
+      "// Requires: seed int64; nodeID raft.ServerID; fsm raft.FSM; logs raft.LogStore; stable raft.StableStore; snaps raft.SnapshotStore; trans raft.Transport\nrc := raft.NewRandomController(seed, nodeID)\nconf := raft.DefaultConfig()\nconf.LocalID = nodeID\nconf.Random = rc\nr, err := raft.NewRaft(conf, fsm, logs, stable, snaps, trans)\nif err != nil { return err }",
+      "// Requires: rc *raft.RandomController\nchoices := rc.Choices()\nfor _, c := range choices {\n    if c.Name == raft.RandomChoiceElectionTimeout && c.Owner == raft.ServerID(\"node1\") {\n        _ = c.Value // selected election timeout in [conf.ElectionTimeout, 2*conf.ElectionTimeout)\n    }\n}",
+      "// Requires: seed int64; nodeID raft.ServerID\nrc1 := raft.NewRandomController(seed, nodeID)\nrc2 := raft.NewRandomController(seed, nodeID)\n// The same draw order (identical protocol runs) on rc1 and rc2 yields identical Choices()."
+    ],
+    "notes": [
+      "All four Agent 1 execution paths are routed through the same controller-owned hook; the capability has a single ownership/completion model (constructor + Config install + node hook), so no separate facade route applies.",
+      "The randomTimeoutFor replacement is a disclosed core_hook: it touches raft.go, replication.go, and snapshot.go but is no-op-by-default and preserves the original algorithm, legal domain, timer arming, and production defaults; no protocol, persistence, state-transition, or ordering semantics changed, so INVASIVE_REDISCOVERED does not apply.",
+      "RandomChoice.Value uses time.Duration, the concrete target-native type of the selected timer durations (TargetRandomValue type slot); RandomChoice.Owner uses ServerID, the target's concrete node-ID type.",
+      "Determinism guarantee: same seed and same draw order per controller reproduce the same sequence; draw order across separate goroutines of one node is whatever the protocol makes (serialized by the controller mutex). Crypto randomness (generateUUID/newSeed in util.go) and the fuzzy/ subdirectory generators are excluded as out of scope.",
+      "Installation boundary is satisfied externally: Config.Random is bound in NewRaft before the goroutines at api.go start, so an external consumer has no uncontrolled first draw; the package-level randomTimeout remains only for util_test.go and is no longer used by production code.",
+      "Restart re-binds the same controller: a fresh NewRaft with the same Config.Random keeps the recorded history and deterministic source usable across lifecycle changes.",
+      "Public surface also includes Config.Random (public wiring field) and the RandomChoice type and five choice-name constants; no other target file behavior was modified."
+    ]
+  },
+  "lifecycle_control": {
+    "implemented": true,
+    "rediscovered_status": null,
+    "capture_boundary": null,
+    "pending_store": null,
+    "public_entrypoints": [
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "NewLifecycleController",
+        "meaning": "Externally callable constructor; optionally pre-registers running nodes (variadic *Raft)."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Pause",
+        "meaning": "Pause(node ServerID) error: blocks the node's main protocol loops through the default-disabled pause gate; waits until the main loop acknowledges the pause boundary."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Resume",
+        "meaning": "Resume(node ServerID) error: unblocks the same runtime after Pause."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Stop",
+        "meaning": "Stop(node ServerID) error: normal shutdown via Raft.Shutdown() + shutdownFuture.Error(); discards the runtime binding, records LifecycleStopped."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Crash",
+        "meaning": "Crash(node ServerID) error: abrupt stop via the target's not-graceful Shutdown primitive (no extra protocol-state flush); discards the runtime binding, records LifecycleCrashed, retains durable stores."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Restart",
+        "meaning": "Restart(node ServerID) error: rebuilds a fresh runtime through NewRaft with the registered identity, config, FSM, and durable stores; replaces the binding; only valid from stopped or crashed."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Register",
+        "meaning": "Register(node *Raft) error: binds a node and captures construction parameters (Config copy, FSM, LogStore, StableStore, SnapshotStore, Transport) needed by Restart; re-registering replaces the binding."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Raft",
+        "meaning": "Raft(id ServerID) *Raft: returns the currently bound runtime (nil after Stop/Crash, fresh runtime after Restart)."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleController.Status",
+        "meaning": "Status(id ServerID) (LifecycleStatus, error): recorded lifecycle state (running, paused, stopped, crashed)."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "ErrLifecycleUnsupported",
+        "meaning": "Exported sentinel error, classifiable with errors.Is, for an operation that cannot be implemented without core semantic changes."
+      },
+      {
+        "file": "lifecycle_control.go",
+        "symbol": "LifecycleStatus",
+        "meaning": "Typed status enum with String(); concrete node identity is ServerID."
+      }
+    ],
+    "copy_strategy": "Register captures a value copy of the node's Config (no slices or maps; Clock and Random controller references are preserved so determinism survives Restart) plus references to the caller-owned FSM, LogStore, StableStore, SnapshotStore, and Transport; Restart rebuilds from these without aliasing the live runtime.",
+    "production_mode": "Unchanged when no controller is installed: nodes run exactly as before. The pause gate is inert (paused=false, only an atomic load per main-loop iteration), and Stop/Crash/Restart are reachable only through the LifecycleController. The controller is inactive by default; registration never alters node behavior.",
+    "test_mode": "Focused tests in lifecycle_control_test.go: pause blocks protocol progress (single node stays Follower with commit index 0 while paused and reaches Leader after Resume), pause blocks Apply on a leader until Resume, Stop+Restart yields a fresh runtime that re-elects itself while the old runtime stays Shutdown, Crash+Restart preserves term and durable log, error paths and register-replace semantics, ErrLifecycleUnsupported errors.Is classification, and a 3-node Stop/Restart/rejoin test with transport re-Connect.",
+    "instance_reference": "One registry entry per concrete ServerID; entries remain stable across lifecycle operations; the runtime binding is replaced on Restart and nil after Stop/Crash.",
+    "target_binding_strategy": "Restart resolves the registered ServerID entry and validates its recorded status (stopped or crashed) before rebuilding; the fresh runtime is bound to the same identity, configuration, and durable stores, and the old runtime binding is replaced.",
+    "cache_effects": "Node registry keyed by ServerID: Register binds or replaces an entry; Stop and Crash discard the runtime binding (Raft(id) returns nil) while retaining construction parameters; Restart re-binds the fresh runtime; Status records the lifecycle state; all operations on unknown IDs return errors and leave the registry unchanged.",
+    "covered_paths": [
+      "normal_stop: LifecycleController.Stop(node) -> Raft.Shutdown() (api.go) -> shutdownCh closed -> shutdownFuture.Error() waits routinesGroup and closes WithClose transports -> runtime binding discarded -> status LifecycleStopped",
+      "crash: LifecycleController.Crash(node) -> Raft.Shutdown() as abrupt stop without protocol-state flush -> all tracked goroutines joined before return -> runtime binding discarded -> caller-owned durable stores (term/log/snapshot/config) retained -> status LifecycleCrashed",
+      "restart: LifecycleController.Restart(node) -> NewRaft with registered conf/fsm/logs/stable/snaps/trans -> restoreSnapshot and configuration log replay (normal recovery) -> fresh runtime bound and old runtime replaced; stopped-vs-crashed recorded; fresh ControlledTransport wrapper in controlled deployments",
+      "pause_resume: LifecycleController.Pause/Resume(node) -> default-disabled pause gate (core_hook) in runFollower/runCandidate/leaderLoop -> paused loops block before selecting (no RPC handling, no protocol timer action, no leadership/commit/apply decisions) -> Resume continues the same runtime and volatile state"
+    ],
+    "uncovered_paths": [
+      "replication_goroutine_pause: per-peer replication goroutines (replication.go replicate/heartbeat) and the FSM applier (runFSM) are not gated by Pause; gating them would require restructuring those select loops, so the v1 gate covers the three main protocol loops only (disclosed core-hook scope; in fully controlled deployments those goroutines are governed by the Time/Random/Message controllers)",
+      "strict_crash_context: an in-flight leadership transfer at crash time may leave untracked goroutines (raft.go leadershipTransfer, transfer-timeout closure, emitLogStoreMetrics) blocked in transport calls for up to the transport timeout; they never mutate durable storage or the FSM (metrics emission and transfer completion only), and converting them to tracked goroutines could make Crash block indefinitely in controlled mode",
+      "time_controller_step_exclusion: TimeController.Advance is shared-clock based and cannot skip the clock bookkeeping of paused/stopped/crashed nodes; stopped/crashed nodes have no live loops (their timers are inert), and paused loops consume buffered timer events only after Resume; per-node step exclusion requires a TimeController change outside this selected capability"
+    ],
+    "implementation_approach": [
+      "facade over Raft.Shutdown()/shutdownFuture for Stop and Crash (the target's own normal/abrupt stop primitive, documented as not graceful, so no extra protocol-state flush)",
+      "facade over NewRaft for Restart using construction parameters captured at Register (identity, Config value copy, FSM, LogStore, StableStore, SnapshotStore, Transport)",
+      "default-disabled core hook: pause-gate fields on Raft plus waitWhilePaused checks and pauseNotifyCh boundary cases inserted in runFollower, runCandidate, and leaderLoop",
+      "synchronous pause boundary: Pause wakes the idle main loop through pauseNotifyCh and waits for its acknowledgment on pausedAckCh, so a paused node is quiescent when Pause returns and events enqueued after Pause are never processed",
+      "controlled-transport integration: Restart creates a fresh ControlledTransport wrapper over the same underlying InmemTransport and MessageController so message capture/injection ownership remains usable",
+      "typed accessors Raft(id) and Status(id) so consumers can reach the fresh runtime and recorded lifecycle state"
+    ],
+    "usage_examples": [
+      "// Requires: conf *raft.Config, fsm raft.FSM, store *raft.InmemStore, snaps *raft.InmemSnapshotStore, trans *raft.InmemTransport\nlc := raft.NewLifecycleController()\nr, err := raft.NewRaft(conf, fsm, store, store, snaps, trans)\nif err != nil { /* handle */ }\nif err := lc.Register(r); err != nil { /* handle */ }\nif err := lc.Pause(\"node-1\"); err != nil { /* handle */ }\nif err := lc.Resume(\"node-1\"); err != nil { /* handle */ }\nif err := lc.Stop(\"node-1\"); err != nil { /* handle */ }\nif err := lc.Restart(\"node-1\"); err != nil { /* handle */ }\nr2 := lc.Raft(\"node-1\")\nif r2 == nil { /* restart failed or node unknown */ }\nif err := lc.Crash(\"node-1\"); err != nil { /* handle */ }\nif err := lc.Restart(\"node-1\"); err != nil { /* handle */ }\nst, err := lc.Status(\"node-1\")\nif err == nil && st == raft.LifecycleRunning { /* fresh runtime is bound and running */ }",
+      "// Requires: leader *raft.Raft, id raft.ServerID, lc *raft.LifecycleController, transA *raft.InmemTransport, transB *raft.InmemTransport\nif err := lc.Stop(id); err != nil { /* handle */ }\nif err := lc.Restart(id); err != nil { /* handle */ }\ntransA.Connect(transB.LocalAddr(), transB) // restore in-memory routes wiped by shutdown\n transB.Connect(transA.LocalAddr(), transA)"
+    ],
+    "notes": [
+      "Pause: core_hook - narrow default-disabled pause gate (waitWhilePaused checks plus pauseNotifyCh boundary cases) in runFollower/runCandidate/leaderLoop; semantics-preserving while unused; Pause waits for the main loop to acknowledge the boundary so the node is quiescent when it returns; an operation already in flight at Pause time completes first",
+      "Resume: core_hook - closes the pause channel of the same gate and drains stale boundary signals",
+      "Stop: facade_only - wraps the target's normal shutdown (Raft.Shutdown, api.go) and waits for all tracked protocol goroutines; records LifecycleStopped and discards the runtime binding",
+      "Crash: facade_only - uses the same target primitive because Raft.Shutdown is documented as not graceful (no extra protocol-state flush); records LifecycleCrashed; durable state is retained and the fresh runtime recovers it",
+      "Restart: facade_only - rebuilds via NewRaft with the registered construction parameters (target's normal recovery path); records whether the node was stopped or crashed; post-restart catch-up is left to the protocol and test",
+      "After Stop/Crash the target's shutdownFuture closes WithClose transports (InmemTransport.Close -> DisconnectAll wipes in-memory routes), so consumers must re-Connect in-memory routes after Restart (shown in the rejoin test and usage example)",
+      "Pause does not gate per-peer replication goroutines, the FSM applier, or snapshot loops; in fully controlled deployments those are governed by the Time/Random/Message controllers",
+      "TimeController bookkeeping entries (nodes map) may reference a discarded runtime after Restart; TimeController.Advance is clock-driven so behavior is unaffected, and the fresh runtime keeps the registered Config.Clock/Config.Random so deterministic control ownership is retained",
+      "Messages already pending in a MessageController survive lifecycle changes untouched (the LifecycleController never clears them); entries captured by a closed ControlledTransport fail injection with ErrMessageNotAccepted and are preserved",
+      "ErrLifecycleUnsupported is exported and errors.Is-classifiable; no lifecycle operation in this target required core semantic changes, so no method currently returns it",
+      "The 3-node rejoin test commits an entry only after the follower's Restart, so the follower's log catch-up cannot be satisfied vacuously"
+    ]
+  },
+  "observation": null
+}

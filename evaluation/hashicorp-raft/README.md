@@ -70,4 +70,4 @@ consensus-seam patch \
 
 该项目清单不包含人工 ground truth、transform allowlist、capability checks 或
 隐藏测试。`patch` 结束后已经得到候选代码、接口报告、使用说明和 Reviewer
-结论；需要进一步验证时，再根据真实生成接口准备可选的 post-hoc checks。
+结论；需要进一步验证时，可以应用候选补丁并由使用者运行自己的测试。

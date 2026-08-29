@@ -78,7 +78,18 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
 
         result = self._complete(
             json.dumps(payload, indent=2, sort_keys=True),
-            tools=transformer_tools(worktree, self.backend),
+            tools=transformer_tools(
+                worktree,
+                self.backend,
+                readable_roots=tuple(
+                    worktree / root.relative_to(project.repository)
+                    for root in project.readable_roots
+                ),
+                writable_roots=tuple(
+                    worktree / root.relative_to(project.repository)
+                    for root in project.scope_roots
+                ),
+            ),
             post_validate=validate_selected,
             invocation_id=invocation_id,
         )

@@ -8,56 +8,43 @@
           "file": "api.go",
           "symbol": "Raft.Apply",
           "line": 819,
-          "reason": "Public proposal entrypoint: Apply builds a LogCommand logFuture and enqueues it on applyCh; ApplyLog (api.go:826) is the log-shaped variant."
+          "reason": "Public proposal entrypoint: enqueues a LogCommand via applyCh and returns an ApplyFuture whose Error() completes on commit and Response() returns the FSM result (see api.go:826-852 ApplyLog)."
         },
         {
           "file": "api.go",
           "symbol": "Raft.AddVoter",
           "line": 946,
-          "reason": "Public membership-change entrypoint; AddNonvoter (964), RemoveServer (980), DemoteVoter (997) all funnel through requestConfigChange to configurationChangeCh."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "leaderLoop",
-          "line": 905,
-          "reason": "Leader loop consumes applyCh, group-commits, and calls dispatchLogs (raft.go:1244) which appends to the LogStore and drives commitment."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "leaderLoop",
-          "line": 892,
-          "reason": "configurationChangeChIfStable case appends LogConfiguration entries and completes the IndexFuture on commit."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "Raft.processRPC",
-          "line": 1390,
-          "reason": "Peer protocol ingress (RequestVote/AppendEntries/InstallSnapshot/TimeoutNow) is handled here from rpcCh (api.go:561: trans.Consumer()), a boundary distinct from the application entrypoints."
+          "reason": "Public membership-change entrypoint returning IndexFuture; AddNonvoter (api.go:964), RemoveServer (api.go:980), DemoteVoter (api.go:997) follow the same configurationChangeRequest path (raft.go:115 requestConfigChange)."
         }
       ],
-      "boundary": null,
+      "boundary": "Public Raft API and protocol state loops, Transport abstraction, InmemTransport, observer and future mechanisms, module-provided in-memory stores and snapshots, and package-provided in-process testing support are inside; real TCP/network transports, external durable stores, application FSM semantics, process supervision, and the raft-compat/fuzzy/bench subdirectories are outside.",
       "gap": null,
-      "reason": null,
+      "reason": "All required workload entrypoints (proposals and membership changes) exist as public, typed, future-based APIs with documented completion semantics; protocol ingress, timers, lifecycle, and observation surfaces are excluded as required.",
       "limitations": [
-        "Barrier, VerifyLeader, Snapshot, Restore, BootstrapCluster, LeadershipTransfer, and the deprecated AddPeer/RemovePeer are control or maintenance operations and are excluded from the workload scope.",
-        "Application reads are not replicated protocol operations in this library; FSM read semantics are application-owned and outside the boundary.",
-        "A proposal or membership change submitted to a non-leader fails with ErrNotLeader (raft.go:176-196); the library does not forward client requests to the leader."
+        "Deprecated protocol<3 entrypoints AddPeer/RemovePeer (api.go:908, api.go:926) also exist but are deprecated and return ErrUnsupportedProtocol for ProtocolVersion >= 3.",
+        "LeadershipTransfer/LeadershipTransferToServer (api.go:1261/1276), Barrier (api.go:859), VerifyLeader (api.go:883), BootstrapCluster (api.go:769), Restore (api.go:1056), Snapshot (api.go:1030), GetConfiguration (api.go:897) and ReloadConfig (api.go:717) are intentionally excluded per spec (administration, barrier, bootstrap, restore, status/configuration query).",
+        "Apply requires the node to be leader; preconditions and error paths (ErrNotLeader, ErrLeadershipLost, ErrEnqueueTimeout, ErrRaftShutdown) are documented at api.go:804-818."
       ],
-      "suggested_direction": null,
       "entrypoints": [
-        "Raft.Apply / Raft.ApplyLog",
-        "Raft.AddVoter / Raft.AddNonvoter / Raft.RemoveServer / Raft.DemoteVoter"
+        "Raft.Apply",
+        "Raft.ApplyLog",
+        "Raft.AddVoter",
+        "Raft.AddNonvoter",
+        "Raft.RemoveServer",
+        "Raft.DemoteVoter"
       ],
       "usage_examples": [
-        "// Requires: r *raft.Raft\nfuture := r.Apply([]byte(\"set-x=1\"), 10*time.Second)\nif err := future.Error(); err != nil { /* handle */ }\nfmt.Println(future.Response())",
-        "// Requires: leader *raft.Raft\nf := leader.AddVoter(raft.ServerID(\"node-2\"), raft.ServerAddress(\"10.0.0.2:8300\"), 0, 10*time.Second)\nif err := f.Error(); err != nil { /* handle */ }\nfmt.Println(f.Index())"
+        "// Requires: r *raft.Raft (leader)\nfuture := r.Apply([]byte(\"set x 1\"), 5*time.Second)\nif err := future.Error(); err != nil { /* ErrNotLeader, ErrLeadershipLost, ErrEnqueueTimeout */ }\nidx := future.Index()\nresp := future.Response()",
+        "// Requires: r *raft.Raft (leader)\nf := r.AddVoter(\"node2\", \"10.0.0.2:8300\", 0, 5*time.Second)\nif err := f.Error(); err != nil { /* ErrNotLeader, ErrLeadershipLost */ }\nlogIndex := f.Index()"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "Both application workload classes are directly callable public methods returning typed futures (ApplyFuture, IndexFuture); no target code is required to submit proposals or membership changes.",
-      "suggested_changes": [],
+      "test_support_reason": "The unmodified public API already exposes all ordinary workload entrypoints with typed futures and documented completion semantics; this discovery-only capability needs no target change.",
+      "suggested_changes": [
+        "No target code change required; optionally add a doc example to the package docs for Apply and AddVoter in-process test usage."
+      ],
       "execution_paths": [
-        "proposal: Raft.Apply/ApplyLog -> applyCh -> leaderLoop (applyCh case) -> dispatchLogs -> LogStore append + commitment -> FSM apply -> ApplyFuture completes",
-        "membership change: AddVoter/AddNonvoter/RemoveServer/DemoteVoter -> configurationChangeCh -> leaderLoop (configurationChangeChIfStable) -> LogConfiguration append/commit -> IndexFuture completes"
+        "proposal: Raft.Apply/ApplyLog -> applyCh -> leader dispatchLogs -> replicate to quorum -> commit -> runFSM fsm.Apply -> ApplyFuture.Error/Response",
+        "membership_change: Raft.AddVoter/AddNonvoter/RemoveServer/DemoteVoter -> requestConfigChange -> configurationChangeCh -> appendConfigurationEntry -> committed configuration -> IndexFuture"
       ],
       "obligations": {
         "protocol_ingress_excluded": {
@@ -67,143 +54,163 @@
               "file": "raft.go",
               "symbol": "Raft.processRPC",
               "line": 1390,
-              "reason": "All peer protocol RPCs are dispatched here."
+              "reason": "All inbound protocol messages are handled inside the node; they are not public workload surfaces."
             }
           ],
-          "reason": "Peer messages enter exclusively through Transport.Consumer() -> processRPC (raft.go:1390); Apply/AddVoter use applyCh/configurationChangeCh, not the RPC boundary."
+          "reason": "Peer RPC ingress is internal only: rpcCh comes from trans.Consumer() (api.go:561) and is dispatched by processRPC (raft.go:1390). No RequestVote/AppendEntries/InstallSnapshot/TimeoutNow message is listed as a workload entrypoint."
         },
         "timer_and_internal_events_excluded": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "raft.go",
-              "symbol": "runFollower",
-              "line": 163,
-              "reason": "Timer and internal channels are handled in the same loops but are not workload entrypoints."
+              "file": "util.go",
+              "symbol": "randomTimeout",
+              "line": 34,
+              "reason": "Timer generation is internal; excluded from workload documentation."
             }
           ],
-          "reason": "Election/heartbeat timers (raft.go:163, 310), verifyCh, bootstrapCh, userRestoreCh, and leadershipTransferCh are internal select cases; they are not application-work entrypoints."
+          "reason": "Protocol timers (randomTimeout/time.After at raft.go:163, 310, 677; replication.go:169; snapshot.go:75) and internal channels (applyCh, verifyCh, userRestoreCh) are not listed as workload entrypoints."
         },
         "workload_entrypoint": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "api.go",
-              "symbol": "Raft.Apply",
-              "line": 819,
-              "reason": "Proposal entrypoint."
+              "symbol": "Raft.ApplyLog",
+              "line": 826,
+              "reason": "Shows the exact enqueue-to-future completion path used by Apply."
             },
             {
-              "file": "api.go",
-              "symbol": "Raft.AddVoter",
-              "line": 946,
-              "reason": "Membership-change entrypoint."
+              "file": "raft.go",
+              "symbol": "Raft.requestConfigChange",
+              "line": 115,
+              "reason": "Shows the membership-change enqueue path with timeout/ErrEnqueueTimeout/ErrRaftShutdown semantics."
             }
           ],
-          "reason": "Application-originated proposals (Apply/ApplyLog, api.go:819/826) and replicated membership changes (AddVoter/AddNonvoter/RemoveServer/DemoteVoter, api.go:946-1007) are identified entrypoints."
+          "reason": "Apply/ApplyLog are the ordinary transaction/proposal entrypoints; AddVoter/AddNonvoter/RemoveServer/DemoteVoter are the replicated membership-change entrypoints; both are documented with concrete types, preconditions (leader required), completion (future Error/Index/Response), and the recommended in-process route."
         }
       }
     },
     "lifecycle_control": {
-      "status": "SUPPORTED",
+      "status": "PATCHABLE",
       "evidence": [
         {
           "file": "api.go",
           "symbol": "Raft.Shutdown",
           "line": 1012,
-          "reason": "Stops protocol activity: closes shutdownCh, sets Shutdown state, returns shutdownFuture."
+          "reason": "Normal shutdown boundary: closes shutdownCh, sets Shutdown state, returns a future; documented as not graceful (no extra flush), matching the crash boundary requirement."
         },
         {
           "file": "future.go",
-          "symbol": "shutdownFuture.Error",
-          "line": 171,
-          "reason": "Blocks on r.waitShutdown() (state.go:153) until all raft goroutines exit, then closes the transport if WithClose."
+          "symbol": "shutdownFuture",
+          "line": 167,
+          "reason": "Error() calls waitShutdown() (state.go:153 routinesGroup.Wait) and closes the transport when it implements WithClose; gives Stop/Crash their termination semantics."
         },
         {
           "file": "api.go",
           "symbol": "NewRaft",
           "line": 500,
-          "reason": "Restart boundary: a new Raft instance is constructed from the same LogStore/StableStore/SnapshotStore/Transport, restoring term, logs, and snapshots (api.go:509-625, restoreSnapshot api.go:631)."
+          "reason": "Recovery/restart boundary: restores current term, last log, snapshot, and configuration log entries (api.go:588-608); the same stores make Restart-after-Stop/Crash possible."
         }
       ],
-      "boundary": null,
-      "gap": null,
-      "reason": null,
+      "boundary": "Same system boundary: the Raft instance, its goroutines and state, the Transport (InmemTransport in boundary), observer/future mechanisms, and module in-memory stores/snapshots.",
+      "gap": "Pause/Resume are entirely absent and require a core hook; Crash has no primitive and strict 'no abandoned execution context' requires handling untracked goroutines and transport rewiring; no controller surface exists.",
+      "reason": "Stop, Crash, and Restart can be built as facades over existing public Shutdown/NewRaft behavior, and Pause/Resume needs only a narrow no-op-by-default core hook; nothing requires changing protocol, persistence, state-transition, or ordering semantics, so the capability is PATCHABLE.",
       "limitations": [
-        "The cycle is honest stop + reconstruction: Shutdown is terminal for that instance and the restored node is a NEW instance over the same stores; there is no pause/resume and no crash/persistence simulation.",
-        "InmemTransport.Disconnect/DisconnectAll/Connect (inmem_transport.go:214-251) only remove network routes while the node keeps running its protocol loops; a partition alone is not lifecycle unavailability.",
-        "shutdownFuture.Error() closes the transport when it implements WithClose (future.go:176-178), so the transport must be recreated or reconnected for the next cycle."
+        "Pause implemented via controllers only works while Message/Time controllers are installed; for uncontrolled nodes a core pause gate is required (disclosed core_hook).",
+        "Crash-as-Shutdown closes the transport (future.go:176-178); Restart must reconnect InmemTransport peers (InmemTransport.Close -> DisconnectAll, inmem_transport.go:254-257).",
+        "Plain-go goroutines (raft.go:499, 725, 783) are not joined by waitShutdown; a strict Crash must verify they exited before returning.",
+        "Restart does not implement protocol catch-up beyond what NewRaft's normal recovery provides (per contract, catch-up is out of seam scope)."
       ],
-      "suggested_direction": null,
       "entrypoints": [
         "Raft.Shutdown",
-        "shutdownFuture.Error",
         "NewRaft"
       ],
-      "usage_examples": [
-        "// Requires: r *raft.Raft, conf *raft.Config, fsm raft.FSM, logs raft.LogStore, stable raft.StableStore, snaps raft.SnapshotStore, trans raft.Transport\n// Shutdown is terminal for the instance; the test reconnects/recreates the transport for the next cycle.\nif err := r.Shutdown().Error(); err != nil { /* handle */ }\nr2, err := raft.NewRaft(conf, fsm, logs, stable, snaps, trans)\nif err != nil { /* handle */ }\nfmt.Println(r2.State())"
+      "usage_examples": [],
+      "existing_test_interface_complete": false,
+      "test_support_reason": "Only Raft.Shutdown()/NewRaft exist; there is no LifecycleController, no Pause/Resume, no Crash primitive, and no ErrLifecycleUnsupported, so the fixed five-operation surface must be added.",
+      "suggested_changes": [
+        "Add LifecycleController, NewLifecycleController(...) with Pause(node), Resume(node), Stop(node), Crash(node), Restart(node) error and ErrLifecycleUnsupported in a new file; Stop/Crash/Restart are facades over Raft.Shutdown()/NewRaft (facade_only), with Crash additionally joining untracked goroutines and Restart rewiring transports and re-registering the node with Message/Time/Random controllers.",
+        "Add a narrow no-op-by-default paused flag (core_hook) consulted by runFollower/runCandidate/leaderLoop and the replication goroutines so Pause blocks message handling and timer actions without changing protocol semantics.",
+        "Crash(node) discards the instance (volatile state) and retains only durable store contents; Restart(node) records whether the node was stopped or crashed and constructs a fresh runtime with NewRaft on the same identity/stores."
       ],
-      "existing_test_interface_complete": true,
-      "test_support_reason": "Shutdown plus reconstruction over the caller-owned stores composes directly into a full availability cycle; the testing contract explicitly allows a directly usable composition and no convenience wrapper is required.",
-      "suggested_changes": [],
       "execution_paths": [
-        "stop: Raft.Shutdown() closes shutdownCh, sets state Shutdown; shutdownFuture.Error() waits on waitShutdown for all protocol goroutines to exit and closes the transport if it implements WithClose",
-        "restore: NewRaft(conf, fsm, logs, stable, snaps, trans) reconstructs the logical node over the same caller-owned stores, replaying snapshot/log/stable state via restoreSnapshot"
+        "normal_stop: LifecycleController.Stop(node) -> Raft.Shutdown() (api.go:1012) -> shutdownCh closed -> shutdownFuture.Error() waits routinesGroup (future.go:171-179) -> WithClose transport closed",
+        "crash: LifecycleController.Crash(node) -> Raft.Shutdown() as abrupt stop without protocol-state flush, drop instance; durable stores (LogStore/StableStore/SnapshotStore) retain durable state",
+        "restart: LifecycleController.Restart(node) -> NewRaft(conf, fsm, logs, stable, snaps, trans) (api.go:500) -> restoreSnapshot (api.go:631) and processConfigurationLogEntry replay",
+        "pause_resume: LifecycleController.Pause/Resume(node) -> new narrow no-op-by-default pause gate in runFollower/runCandidate/leaderLoop selects (core_hook, proposed)"
       ],
       "obligations": {
-        "stop_boundary": {
+        "crash_boundary": {
+          "status": "PARTIAL",
+          "evidence": [
+            {
+              "file": "raft.go",
+              "symbol": "Raft.runLeader",
+              "line": 499,
+              "reason": "emitLogStoreMetrics is launched with plain go, not goFunc, so waitShutdown does not join it."
+            }
+          ],
+          "reason": "Raft.Shutdown() can back a Crash facade (abrupt, no protocol-state flush; volatile leaderState/inflight futures are discarded), but there is no crash primitive: goroutines started with plain go (emitLogStoreMetrics raft.go:499, leadershipTransfer raft.go:783, transfer timeout raft.go:725) are not tracked by routinesGroup, and shutdownFuture closes the transport (future.go:176), so the controller must verify termination and rewire transports on restart."
+        },
+        "normal_stop_boundary": {
           "status": "SATISFIED",
           "evidence": [
             {
-              "file": "api.go",
-              "symbol": "Raft.Shutdown",
-              "line": 1012,
-              "reason": "Node becomes unavailable: all background loops exit on shutdownCh."
+              "file": "future.go",
+              "symbol": "shutdownFuture.Error",
+              "line": 171,
+              "reason": "Blocks until all routinesGroup goroutines exit and closes WithClose transports."
             }
           ],
-          "reason": "Shutdown() (api.go:1012-1025) closes shutdownCh and sets Shutdown; the returned future's Error() waits for the routines group (future.go:171-180, state.go:153-155)."
+          "reason": "Shutdown() (api.go:1012) is the normal shutdown: it sets state Shutdown, closes shutdownCh, and shutdownFuture.Error() waits for tracked goroutines and closes the transport; caller-owned stores retain post-stop state for a later restart."
+        },
+        "pause_resume_boundary": {
+          "status": "MISSING",
+          "evidence": [],
+          "reason": "No pause/resume mechanism exists anywhere in the target: there is no flag gating the protocol select loops (raft.go:168-254, 322-438, 682-959) and no controller surface. Pause/Resume requires either a narrow no-op-by-default pause gate (core_hook) in those loops or coordination through the Message/Time controllers in controlled deployments."
+        },
+        "persistent_volatile_semantics_defined": {
+          "status": "SATISFIED",
+          "evidence": [
+            {
+              "file": "raft.go",
+              "symbol": "keyCurrentTerm",
+              "line": 26,
+              "reason": "Durable keys written to StableStore define the persistent portion of node state."
+            },
+            {
+              "file": "state.go",
+              "symbol": "raftState",
+              "line": 47,
+              "reason": "Volatile protocol counters (currentTerm cache, commitIndex, lastApplied) live in the instance and die with it."
+            }
+          ],
+          "reason": "The target persists currentTerm/votedFor/log/snapshot through StableStore/LogStore/SnapshotStore (keys at raft.go:26-30; BootstrapCluster writes at api.go:261-282), while volatile state lives in the instance (leaderState raft.go:89-97, raftState state.go:47-77). Stores are caller-owned: InmemStore is documented test-only (inmem_store.go:11-13), FileSnapshotStore is disk-backed."
         },
         "restart_or_recovery_boundary": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "api.go",
-              "symbol": "NewRaft",
-              "line": 500,
-              "reason": "Reconstruction entrypoint."
-            },
-            {
-              "file": "api.go",
               "symbol": "Raft.restoreSnapshot",
               "line": 631,
-              "reason": "Snapshot state is restored on construction."
+              "reason": "Recovery path that rebuilds a fresh runtime's state from durable snapshots."
             }
           ],
-          "reason": "The same logical node participates again by constructing a new instance with NewRaft over the same stores; restoreSnapshot replays snapshot state and NewRaft replays configuration entries from the log (api.go:597-608)."
+          "reason": "NewRaft is the normal recovery constructor: it restores snapshots (restoreSnapshot api.go:631-675), replays configuration log entries (api.go:597-608), and re-reads term/log from stores; GetConfiguration already demonstrates the construct-with-same-stores pattern (api.go:445-458)."
         },
-        "persistent_volatile_semantics_defined": {
+        "state_ownership_defined": {
           "status": "SATISFIED",
           "evidence": [
             {
               "file": "inmem_store.go",
               "symbol": "InmemStore",
               "line": 11,
-              "reason": "In-memory LogStore/StableStore for tests."
+              "reason": "Doc comment defines ownership and non-production semantics of the in-memory store."
             }
           ],
-          "reason": "Persistence semantics are defined by the LogStore/StableStore/SnapshotStore interfaces; module-provided InmemStore and InmemSnapshotStore are explicitly in-memory test implementations (inmem_store.go:11-32, inmem_snapshot.go:13-34)."
-        },
-        "state_ownership_defined": {
-          "status": "SATISFIED",
-          "evidence": [
-            {
-              "file": "api.go",
-              "symbol": "NewRaft",
-              "line": 500,
-              "reason": "Stores are constructor parameters, so ownership is caller-side."
-            }
-          ],
-          "reason": "All raft state (current term, voted-for, log, snapshot) is owned by the caller-provided stores passed into NewRaft; the module never creates or owns durable state."
+          "reason": "Raft owns protocol state (raftState, configurations, leaderState); FSM, LogStore, StableStore, SnapshotStore, and Transport are caller-provided and caller-owned; InmemStore explicitly states it is only for unit tests (inmem_store.go:11-13)."
         }
       }
     },
@@ -212,62 +219,59 @@
       "evidence": [
         {
           "file": "transport.go",
-          "symbol": "RPC",
-          "line": 18,
-          "reason": "Public message type with Command, Reader (stream for InstallSnapshot), and RespChan; RPC.Respond (transport.go:25) is the response completion mechanism."
-        },
-        {
-          "file": "transport.go",
           "symbol": "Transport",
           "line": 31,
-          "reason": "Public Transport interface whose Consumer() channel is the protocol input boundary; a harness-side implementation can own that channel and withhold delivery."
-        },
-        {
-          "file": "api.go",
-          "symbol": "NewRaft",
-          "line": 561,
-          "reason": "rpcCh is bound to trans.Consumer(); the raft main loop is the exclusive consumer, so a test cannot drain InmemTransport's channel without racing the protocol consumer."
+          "reason": "Every in-boundary cross-node message crosses this interface (Consumer, AppendEntries, RequestVote, InstallSnapshot, TimeoutNow, AppendEntriesPipeline), so a controller-wrapping transport can intercept all logical messages without touching raft.go."
         },
         {
           "file": "inmem_transport.go",
           "symbol": "InmemTransport",
-          "line": 58,
-          "reason": "consumerCh is a buffered(16) internal channel auto-delivered to raft; no enumerate/take/drop/clear API exists and internals are unexported."
+          "line": 40,
+          "reason": "In-boundary loopback transport: consumerCh (line 42) is the target input boundary; makeRPC pushes RPC into peer.consumerCh (lines 183-188) and waits on RespChan (lines 191-198); pipelines enqueue to peer.consumerCh (line 344)."
         },
         {
-          "file": "inmem_transport.go",
-          "symbol": "InmemTransport.SetHeartbeatHandler",
-          "line": 74,
-          "reason": "No-op on this transport, so heartbeats flow through the same append_entries consumer path and cannot be diverted to a handler."
+          "file": "raft.go",
+          "symbol": "Raft.processRPC",
+          "line": 1390,
+          "reason": "Inbound dispatch from rpcCh for all five message families, including heartbeat fast path via trans.SetHeartbeatHandler (raft.go:616, InmemTransport ignores it at inmem_transport.go:74)."
         }
       ],
-      "boundary": null,
-      "gap": "No path has an existing test-visible capture cache with take/drop/clear semantics; capture requires a harness transport that retains inbound RPCs (and their RespChan responses) before delivery and owns continuation by withholding them until a test action.",
-      "reason": null,
+      "boundary": "Same system boundary: logical cross-node messages inside the boundary flow exclusively through the Transport abstraction (InmemTransport in boundary); real TCP transports are outside.",
+      "gap": "The complete controller surface (MessageController, MessageHandle, MessageKind, PendingMessage, NewMessageController, Pending, Drop, Clear, thread-safe cache, deep-copy rules) and its transport wrapper do not exist.",
+      "reason": "All in-boundary cross-node messages pass through the Transport abstraction, so a controller + wrapper transport installed before NewRaft satisfies capture-before-delivery without changing protocol, persistence, state-transition, or ordering semantics; production behavior is unchanged when the wrapper is not configured (it delegates), making this PATCHABLE.",
       "limitations": [
-        "Real network transports (net_transport.go, tcp_transport.go) are outside the system boundary.",
-        "InstallSnapshot carries a streaming io.Reader (RPC.Reader); the harness must retain or copy the stream while the message is captured.",
-        "The module's in-process test support (testing.go) provides MockFSM/InmemStore/InmemSnapshotStore but no message-control cache.",
-        "A capture cache implemented with the InmemTransport itself is impossible without target changes because the consumer channel is internal and raft is its exclusive consumer."
+        "No common message struct exists; RPC.Command is interface{} (transport.go:19), so the patch must add a typed variant carrier (TargetMessage) over *AppendEntriesRequest/Response, *RequestVoteRequest/Response, *RequestPreVoteRequest/Response, *InstallSnapshotRequest/Response, *TimeoutNowRequest/Response (commands.go) to avoid bare any.",
+        "Requests carry nested pointers (Entries []*Log) and InstallSnapshot carries a stream (RPC.Reader), so producer->controller and controller->Pending deep copies plus replayable stream storage must be added by the patch.",
+        "Sender-side InmemTransport timeouts (inmem_transport.go:185, 196, 279, 323) arm real timers while a response is held; the wrapper should capture at the outbound call so the real transport is not invoked until Inject, and/or transport timeouts must be virtualized by the TimeController.",
+        "InmemTransport.SetHeartbeatHandler is a no-op (inmem_transport.go:74), so heartbeat AppendEntries arrive via Consumer and are captured; NetTransport heartbeats are out of boundary.",
+        "Self-votes (raft.go:2020-2035) are local and correctly excluded as non-cross-node.",
+        "Broadcast naturally expands per target: electSelf loops per voter (raft.go:2015-2040) and replication is one goroutine per peer (startStopReplication raft.go:582-645)."
       ],
-      "suggested_direction": "Build a harness-side controlled Transport implementing the public Transport interface; no core-loop changes.",
       "entrypoints": [
-        "Transport interface methods and Consumer() channel (existing primitives)",
-        "Harness-defined controlled transport: Enumerate/Take/Drop/Clear/Deliver (proposed, no target core changes)"
+        "Transport.Consumer",
+        "Transport.AppendEntries",
+        "Transport.RequestVote",
+        "Transport.RequestPreVote",
+        "Transport.InstallSnapshot",
+        "Transport.TimeoutNow",
+        "Transport.AppendEntriesPipeline",
+        "InmemTransport.Connect"
       ],
       "usage_examples": [],
       "existing_test_interface_complete": false,
-      "test_support_reason": "No controlled capture cache exists for any path: InmemTransport.consumerCh is consumed exclusively by the raft loop selected on r.rpcCh (api.go:561), and the transport internals are unexported, so a test cannot enumerate, take, drop, or clear messages without racing the protocol consumer. The RPC type and Transport interface are complete building blocks, but no target API provides the cache, so capture must be built as a harness-side transport.",
+      "test_support_reason": "There is no MessageController, MessageHandle, MessageKind, PendingMessage, or capture seam anywhere in the module (search for Controller returns nothing); the test consumer would have to hand-write all interception, so the fixed surface must be added.",
       "suggested_changes": [
-        "Implement a test-side Transport (harness extension; the pattern is proven by the module's own fuzzy/transport.go, outside the boundary): expose a test-owned inbound RPC queue, return it from Consumer(), withhold delivery to raft and withhold RespChan responses, and provide Enumerate/Take/Drop/Clear/Deliver operations.",
-        "Alternatively add a small package-level controlled transport as a new file implementing the existing Transport interface; no core-loop changes are required.",
-        "Capture responses at the same transport boundary before returning them to the blocked sender (InmemTransport makeRPC waits on respCh at inmem_transport.go:191-198), and release them on test action so the original completion mechanism is preserved."
+        "Add MessageController, MessageHandle (struct backed by unexported uint64), MessageKind (underlying string), PendingMessage{Handle, Source ServerID, Target ServerID, Kind, Message}, NewMessageController, Pending() []PendingMessage, Drop(handle) error, Clear(), plus a Transport wrapper installed as the Transport passed to NewRaft (before goroutines start at api.go:622-624).",
+        "Capture outbound requests at the wrapper (AppendEntries/RequestVote/RequestPreVote/InstallSnapshot/TimeoutNow/pipeline) with per-target Source/Target from the wrapper's configured ServerID/ServerAddress; keep the caller blocked on its original response continuation, and replace RespChan with a controller channel so responses are recorded as new pending entries (reversed Source/Target, new handle) and only forwarded to the original caller on that entry's Inject.",
+        "Add a typed TargetMessage variant wrapper over the ten command types and deep-copy nested slices/maps/pointers; buffer InstallSnapshot Readers into independently replayable memory/temp-file storage released when the entry leaves.",
+        "The cache must be thread-safe, keep acceptance order, and never silently evict; Drop/Clear/Inject leave other entries' order untouched."
       ],
       "execution_paths": [
-        "append_entries (incl. heartbeat and pipelined AppendEntries): leader replicate/heartbeat -> Transport.AppendEntries -> target inbound queue -> raft rpcCh -> processRPC -> appendEntries (raft.go:1397-1398, 1440)",
-        "request_vote (incl. pre-vote): candidate electSelf/preElectSelf -> Transport.RequestVote/RequestPreVote -> raft rpcCh -> processRPC -> requestVote (raft.go:1399-1402, 1603)",
-        "install_snapshot: leader snapshot push -> Transport.InstallSnapshot -> raft rpcCh -> processRPC -> installSnapshot (raft.go:1403-1404, 1814)",
-        "timeout_now: leadership transfer -> Transport.TimeoutNow -> raft rpcCh -> processRPC -> timeoutNow (raft.go:1405-1406, 2209)"
+        "append_entries: leader replicate/heartbeat/pipeline -> Transport.AppendEntries / AppendEntriesPipeline (replication.go:231, 412, 446-508) -> target consumerCh -> rpcCh -> Raft.processRPC -> appendEntries (raft.go:1440) -> RPC.Respond -> RespChan",
+        "request_vote: electSelf -> Transport.RequestVote (raft.go:2001) -> target requestVote handler -> RequestVoteResponse",
+        "request_prevote: preElectSelf -> Transport.RequestPreVote via WithPreVote (raft.go:2080) -> requestPreVote handler -> RequestPreVoteResponse",
+        "install_snapshot: sendSnapshot -> Transport.InstallSnapshot with stream Reader (raft.go sendSnapshot) -> installSnapshot handler -> InstallSnapshotResponse",
+        "timeout_now: leadershipTransfer -> Transport.TimeoutNow (raft.go:990 leadershipTransfer) -> timeoutNow handler -> TimeoutNowResponse"
       ],
       "obligations": {}
     },
@@ -275,56 +279,38 @@
       "status": "PATCHABLE",
       "evidence": [
         {
+          "file": "inmem_transport.go",
+          "symbol": "InmemTransport.makeRPC",
+          "line": 166,
+          "reason": "Normal ingress resolution: peers map keyed by ServerAddress (line 44) with enqueue into peer.consumerCh; injection must use this same routing so a request reaches its request ingress rather than fabricated completion."
+        },
+        {
           "file": "transport.go",
           "symbol": "RPC.Respond",
           "line": 25,
-          "reason": "The response completion mechanism: the follower's handler calls rpc.Respond and the sender's transport receives it on RespChan (inmem_transport.go:191-198), which the harness transport can hold and release."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "Raft.processRPC",
-          "line": 1390,
-          "reason": "Normal protocol input boundary: any RPC delivered on the Consumer() channel is dispatched by type to appendEntries/requestVote/requestPreVote/installSnapshot/timeoutNow."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "Raft.processRPC",
-          "line": 1397,
-          "reason": "Type dispatch confirms direction is preserved: a captured request is handled by its own handler, and only the handler's response is returned on RespChan."
-        },
-        {
-          "file": "inmem_transport.go",
-          "symbol": "InmemTransport.makeRPC",
-          "line": 191,
-          "reason": "Sender-side completion waits on respCh; injection of a captured response means releasing it to this waiting consumer."
+          "reason": "Responses flow back on RPC.RespChan; the wrapper keeps the original continuation live by holding it until the response entry is injected."
         }
       ],
-      "boundary": null,
-      "gap": "Complete injection requires the same cache instance and path as capture: Take the selected cached RPC (or a combined Deliver call) and forward it into the target's Consumer() channel; no such interface exists today.",
-      "reason": null,
+      "boundary": "Same system boundary: injection resolves real in-boundary targets (InmemTransport peers) and uses the normal Consumer-channel ingress; TCP transports are outside.",
+      "gap": "Inject(handle MessageHandle) error with ErrMessageNotPending, ErrTargetUnavailable, ErrMessageNotAccepted, handle invalidation on confirmed acceptance, and entry preservation on failure do not exist.",
+      "reason": "Injection can be implemented on the same controller-owned wrapper transport using the target's normal consumer-channel ingress without changing protocol semantics; classification errors and entry-preservation are additive, so the capability is PATCHABLE.",
       "limitations": [
-        "Injection through the InmemTransport itself is impossible for a running raft because its consumer channel is unexported and raft is the exclusive consumer.",
-        "TimeoutNow/InstallSnapshot streams and leadership-transfer responses must be handled by the harness transport like any other RPC; no target API exists for them either.",
-        "Real TCP/network transports are outside the boundary."
+        "Acceptance is defined as successful enqueue into the target's consumerCh (inmem_transport.go:183-188); the target cannot distinguish acceptance from timeout at that layer, so the patch must use enqueue success as the acceptance signal and never restore an entry after acceptance to avoid duplicate delivery.",
+        "If the test blocks a request before the real transport call (outbound capture), injection must perform the real call with a fresh RespChan and capture the response as a new pending entry; the original caller's synchronous future stays blocked until that response entry is injected (no orphaned callers).",
+        "Handle validity: stable while pending; invalid after Drop, Clear, or successful Inject; the patch must not reuse identities."
       ],
-      "suggested_direction": "Same harness-side controlled Transport as message_capture, with Take-plus-forward (separated) or Deliver (combined) operations on the shared cache.",
-      "entrypoints": [
-        "Harness-defined controlled transport Deliver/input operations (proposed, combined single-call or separated Take-plus-input)"
-      ],
+      "entrypoints": [],
       "usage_examples": [],
       "existing_test_interface_complete": false,
-      "test_support_reason": "There is no existing API to deliver a concrete message into a running node's protocol input: rpcCh is bound to trans.Consumer() and InmemTransport exposes no ingress method, so injection is only possible through a test-owned transport that forwards the selected RPC into the Consumer() channel. Fabricating messages without the capture cache is only a primitive, not complete injection.",
+      "test_support_reason": "No Inject exists; the primitive surfaces (transport calls, consumer channel, RespChan) require the test consumer to hand-write interception and forwarding, which the fixed controller surface must provide.",
       "suggested_changes": [
-        "Separated form: cache.Take(selected) returns the RPC (Command + RespChan + Reader) and the test pushes it into that target's Consumer() channel; the test already owns the target mapping.",
-        "Combined form: transport.Deliver(target, rpc) locates/validates the target node transport and performs the forward, updating cache state in the same call (no transactional atomicity implied).",
-        "Declare cache effects explicitly: successful delivery removes the entry and returns the handler's response to the blocked sender; synchronous rejection (rpc.Respond(nil, err), raft.go:1391-1394) also removes it with the error propagated; unconfirmed asynchronous delivery leaves retry/requeue/duplication as tester policy.",
-        "Preserve direction and completion: inject the captured request through processRPC for its own message type; a response is injected only when the selected cached instance is that response, released to the waiting sender's respCh."
+        "Add Inject(handle MessageHandle) error on MessageController plus errors ErrMessageNotPending, ErrTargetUnavailable, ErrMessageNotAccepted (errors.Is-classifiable).",
+        "Inject resolves the real captured target through the wrapper's routing (InmemTransport.peers by ServerAddress), enqueues the controller's private deep copy into the target consumerCh, and on confirmed acceptance removes the entry and invalidates the handle; any error preserves the entry and handle.",
+        "Inject succeeds on enqueue acceptance and does not wait for dequeue, state transition, response, commit, or quiescence; later protocol failure does not restore the entry."
       ],
       "execution_paths": [
-        "append_entries (incl. heartbeat and pipelined AppendEntries): captured AppendEntriesRequest forwarded into target's Consumer() channel -> processRPC -> appendEntries; response released via RespChan to the waiting leader",
-        "request_vote (incl. pre-vote): captured RequestVote/RequestPreVote forwarded -> processRPC -> requestVote; response released via RespChan to the waiting candidate",
-        "install_snapshot: captured InstallSnapshotRequest (with Reader stream) forwarded -> processRPC -> installSnapshot",
-        "timeout_now: captured TimeoutNowRequest forwarded -> processRPC -> timeoutNow (raft.go:2209-2214)"
+        "append_entries: Inject -> resolve captured target peer -> enqueue RPC (original Command/Reader + controller RespChan) into target consumerCh (normal ingress, inmem_transport.go:183-188) -> Raft.processRPC -> response -> controller records response entry -> response Inject forwards to original RespChan",
+        "request_vote / request_prevote / install_snapshot / timeout_now: same controller-owned instance and same end-to-end path as capture, per message family"
       ],
       "obligations": {}
     },
@@ -333,54 +319,61 @@
       "evidence": [
         {
           "file": "api.go",
-          "symbol": "Raft.Stats",
-          "line": 1160,
-          "reason": "Exposes role, term, commit_index, applied_index, last_log_index/term, last_snapshot_index/term, latest_configuration, num_peers, last_contact as a string map derived from atomic state."
+          "symbol": "Raft.State",
+          "line": 1102,
+          "reason": "Thread-safe atomic read of RaftState (state.go:79-87), side-effect-free, no time advancement."
         },
         {
           "file": "api.go",
-          "symbol": "Raft.State",
-          "line": 1102,
-          "reason": "Role accessor backed by raftState atomic (state.go:79-87)."
+          "symbol": "Raft.Stats",
+          "line": 1160,
+          "reason": "Builds a fresh map each call with state, term, last_log_index, commit_index, applied_index, latest_configuration etc.; no aliasing of internal state."
         },
         {
           "file": "api.go",
           "symbol": "Raft.GetConfiguration",
           "line": 897,
-          "reason": "Configuration path returning a ConfigurationFuture; Configuration() (future.go:263) returns a clone stored via setLatestConfiguration (raft.go:2217-2221) and Configuration.Clone (configuration.go:83-86), so it does not alias internal state."
-        },
-        {
-          "file": "inmem_store.go",
-          "symbol": "InmemStore",
-          "line": 35,
-          "reason": "Caller-owned store gives log range (FirstIndex/LastIndex/GetLog) and stable state (GetUint64 for CurrentTerm/LastVoteTerm/LastVoteCand) to the test that passed the store into NewRaft."
+          "reason": "Returns a ConfigurationFuture whose Configuration() is a deep clone (configurations.Clone, configuration.go:164-167; served at raft.go:200-201), so the snapshot is safe to mutate."
         }
       ],
-      "boundary": null,
+      "boundary": "Same system boundary: public Raft state views, observer mechanism, and typed getters.",
       "gap": null,
-      "reason": null,
+      "reason": "The unmodified target already provides safe, typed, side-effect-free state views with deep-copied configuration and a documented observer channel, satisfying the complete observation contract without adding code.",
       "limitations": [
-        "InmemStore.GetLog copies the Log struct but shares the Data/Extensions byte slices with the stored entry (inmem_store.go:56); callers should treat log payloads as read-only (shallow-copy caveat).",
-        "Stats values are formatted strings derived at call time; leader notifications also exist via LeaderCh/NotifyCh but are not needed for the minimum interface.",
-        "LogCache (log_cache.go) and FileSnapshotStore are additional primitives; FSM application state is application-owned and outside the boundary."
+        "No simultaneous cross-node snapshot: each getter is individually consistent but a test reading several nodes or several getters may observe temporally inconsistent values; disclose per-node snapshot semantics.",
+        "Stats() returns strings and mixes committed indices with fsm_pending; it is safe but less typed than State()/CurrentTerm()/CommitIndex().",
+        "Raft.LastContact returns a wall-clock time and is meaningful only for followers.",
+        "GetConfiguration may reflect an uncommitted latest configuration (api.go:895-903); completion meaning must be documented by the test."
       ],
-      "suggested_direction": null,
       "entrypoints": [
-        "Raft.State / Raft.Stats / Raft.CurrentTerm / Raft.CommitIndex / Raft.AppliedIndex / Raft.LastIndex / Raft.LastContact / Raft.LeaderWithID",
-        "Raft.GetConfiguration (ConfigurationFuture)",
-        "InmemStore.FirstIndex/LastIndex/GetLog/GetUint64 and InmemSnapshotStore.List (caller-owned stores)"
+        "Raft.State",
+        "Raft.Stats",
+        "Raft.LeaderWithID",
+        "Raft.LastContact",
+        "Raft.CurrentTerm",
+        "Raft.LastIndex",
+        "Raft.CommitIndex",
+        "Raft.AppliedIndex",
+        "Raft.GetConfiguration",
+        "Raft.LeaderCh",
+        "Raft.RegisterObserver",
+        "Raft.DeregisterObserver",
+        "Observer.GetNumObserved",
+        "Observer.GetNumDropped"
       ],
       "usage_examples": [
-        "// Requires: r *raft.Raft\nfmt.Println(r.State(), r.CurrentTerm(), r.CommitIndex(), r.AppliedIndex(), r.Stats()[\"state\"])",
-        "// Requires: r *raft.Raft\nfuture := r.GetConfiguration()\nif err := future.Error(); err != nil { /* handle */ }\nfmt.Println(future.Configuration().Servers, future.Index())"
+        "// Requires: r *raft.Raft\nstate := r.State() // Follower | Candidate | Leader | Shutdown\nleaderAddr, leaderID := r.LeaderWithID()\nstats := r.Stats() // map[string]string\ncf := r.GetConfiguration()\nif err := cf.Error(); err == nil { cfg := cf.Configuration() }"
       ],
       "existing_test_interface_complete": true,
-      "test_support_reason": "Raft exposes target-native accessors for role, term, commit/applied index, last log, leader, and configuration, and the log/stable/snapshot state is readable through the caller-owned store objects. Together these cover the minimum claimed state (role, term, commit_index, applied_index, log_range) with no new target code; the returned values are strings, scalars, or deep-copied configurations.",
-      "suggested_changes": [],
+      "test_support_reason": "The existing typed getters and observer mechanism fully cover role, term, commit/applied index, configuration, leadership, and last-contact observation with thread-safe reads and cloned configuration snapshots; no new Observe() accessor is needed.",
+      "suggested_changes": [
+        "No target change required; tests should use State/Stats/GetConfiguration/LeaderWithID and the Observer API directly and treat each read as an independent per-node snapshot."
+      ],
       "execution_paths": [
-        "node status: synchronous accessors on *Raft backed by raftState atomics (state/term/commit/applied/last-log/last-contact/leader)",
-        "configuration: GetConfiguration() -> configurationsFuture.Configuration()/Index() (async future completion surface)",
-        "caller-owned stores: log range and stable term/voted-for read through the InmemStore the test passed to NewRaft; snapshots through InmemSnapshotStore.List"
+        "per_node_state_view: Raft.State (atomic, state.go:79-87) / Stats() map (api.go:1160) / CurrentTerm / LastIndex / CommitIndex / AppliedIndex",
+        "leadership_view: Raft.LeaderWithID (api.go:796) / Raft.LeaderCh (api.go:1117)",
+        "configuration_view: Raft.GetConfiguration -> configurationsFuture with cloned configuration (raft.go:200-201, configuration.go:164-167)",
+        "event_view: RegisterObserver/NewObserver -> Observation channel with typed Data (observer.go:11-21, 87-94)"
       ],
       "obligations": {}
     },
@@ -391,101 +384,96 @@
           "file": "util.go",
           "symbol": "randomTimeout",
           "line": 34,
-          "reason": "All protocol-relevant randomness flows through randomTimeout, which draws from the package-global math/rand (rand.Int63, util.go:38) and returns time.After(minVal+extra)."
-        },
-        {
-          "file": "util.go",
-          "symbol": "init",
-          "line": 18,
-          "reason": "The global generator is seeded once from crypto/rand; there is no per-node or per-instance injection point."
+          "reason": "The single hidden non-cryptographic choice site: global math/rand (util.go:18-21 seeds once from crypto) picks a uniform offset in [0,minVal) that determines when election/heartbeat/commit/snapshot timers fire, affecting protocol state and test timing."
         },
         {
           "file": "raft.go",
-          "symbol": "runFollower",
-          "line": 163,
-          "reason": "Heartbeat/election timer staggering uses randomTimeout in the main loops (also raft.go:217, 310, 353, 426)."
-        },
-        {
-          "file": "replication.go",
-          "symbol": "Raft.replicate",
-          "line": 169,
-          "reason": "Commit and heartbeat staggering in replication loops also use randomTimeout (replication.go:402, 495)."
-        },
-        {
-          "file": "snapshot.go",
-          "symbol": "runSnapshots",
-          "line": 75,
-          "reason": "Snapshot-interval staggering uses randomTimeout."
+          "symbol": "Raft.runCandidate",
+          "line": 310,
+          "reason": "electionTimer := randomTimeout(electionTimeout): the randomized election timeout is the protocol-brief randomness item and drives candidate timing."
         }
       ],
-      "boundary": null,
-      "gap": "No per-node/per-instance RNG injection point exists; all protocol-relevant random draws (election, heartbeat, commit, snapshot staggering) share the single global generator.",
-      "reason": null,
+      "boundary": "Same system boundary: the package's hidden non-cryptographic draws (global math/rand in randomTimeout) used by protocol loops; crypto/rand UUIDs and fuzzy/ subdirectory test generators are outside scope.",
+      "gap": "No RandomController/RandomChoice/NewRandomController/Choices exist; the draw site has no node context (package-level function) and no recording, and there is no public installation point before the first draw (first draw occurs when NewRaft's goroutines reach runFollower/runCandidate).",
+      "reason": "The only in-scope hidden randomness is randomTimeout's global math/rand draw; it can be made per-node, seeded, recorded, and installed before the first draw via a no-op-by-default core hook without changing protocol semantics or production defaults, so the capability is PATCHABLE.",
       "limitations": [
-        "NewInmemAddr/generateUUID (inmem_transport.go:15-17, util.go:58-71) use crypto/rand for addresses; these are setup IDs, not protocol decisions, and are excluded from the capability scope.",
-        "Randomness control alone does not make elections fully deterministic: wall-clock timing (time.After) still governs when timers fire, so pairing with time control is required for full determinism."
+        "randomTimeout is called from raft.go, replication.go, snapshot.go with no per-node RNG; per-node control requires a no-op-by-default core hook routing draws through the node (e.g., a Random source field on Config or Raft), disclosed as a core hook.",
+        "Installation must happen via constructor/Config before NewRaft launches goroutines (api.go:622-624); the unexported skipStartup (config.go:243-244) is not an external installation point.",
+        "Choices must record stable semantic names (election_timeout, heartbeat_timeout, commit_timeout, heartbeat_interval, snapshot_interval) with typed time.Duration values and per-node ownership (ServerID) or a one-owner controller.",
+        "Excluded: crypto/rand UUID generation (util.go:59-71), newSeed (util.go:25-31), and fuzzy/ subdirectory test generators (out of boundary)."
       ],
-      "suggested_direction": "Add an optional injected *rand.Rand in Config threaded through randomTimeout, with global-rand fallback.",
-      "entrypoints": [
-        "Config.Rand *rand.Rand (proposed injectable per-node source)"
-      ],
-      "usage_examples": [],
-      "existing_test_interface_complete": false,
-      "test_support_reason": "randomTimeout draws from the package-global math/rand seeded once in init() (util.go:18-21, 34-40); there is no config knob, injected source, or hook. A test calling rand.Seed cannot pin choices per node because concurrent raft goroutines (several nodes' main loops, replication loops, snapshot loop) race for values from the shared generator, so reproducible per-instance assignment is impossible as exposed.",
-      "suggested_changes": [
-        "Add an optional Rand *rand.Rand field to Config; add a r.randomTimeout(d) helper that uses r.config().Rand when set and falls back to the global rand when nil, preserving the production default unchanged.",
-        "Replace the randomTimeout call sites (raft.go:163, 217, 310, 353, 426; replication.go:169, 402, 495; snapshot.go:75) with the helper.",
-        "Tests inject per-node sources, e.g. rand.New(rand.NewSource(seed)), via Config for each node so the same seed reproduces the same per-node choices."
-      ],
-      "execution_paths": [],
-      "obligations": {}
-    },
-    "time_control": {
-      "status": "INVASIVE",
-      "evidence": [
-        {
-          "file": "util.go",
-          "symbol": "randomTimeout",
-          "line": 34,
-          "reason": "Election/heartbeat/commit/snapshot timers are created with time.After (util.go:39); no Clock or Tick abstraction exists anywhere in the module."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "runFollower",
-          "line": 163,
-          "reason": "Follower heartbeat timer (also election timer raft.go:310, leader lease raft.go:677/947, time.Since last-contact check raft.go:221) uses real wall-clock time."
-        },
-        {
-          "file": "replication.go",
-          "symbol": "Raft.heartbeat",
-          "line": 402,
-          "reason": "Heartbeat interval and commit staggering use randomTimeout; backoff waits use time.After (replication.go:213, 419) and last-contact uses time.Now (replication.go:131)."
-        },
-        {
-          "file": "snapshot.go",
-          "symbol": "runSnapshots",
-          "line": 75,
-          "reason": "Snapshot-interval timer uses randomTimeout over the real clock."
-        }
-      ],
-      "boundary": null,
-      "gap": "Protocol-visible time cannot be advanced deterministically; election and heartbeat firing depend on the real wall clock, so tests can only shrink the configured timeouts and wait in wall-clock time.",
-      "reason": null,
-      "limitations": [
-        "Caller-side deadlines (Apply/AddVoter/Barrier timeouts, api.go:829-831, 861-863) are caller-side API deadlines, not protocol-time paths.",
-        "Transport RPC timeouts (inmem_transport.go:185, 196) are transport-side and outside the protocol loops.",
-        "AppendedAt (log.go:96-107) is explicitly informational and not used for coordination, so it is not a protocol-time path."
-      ],
-      "suggested_direction": "Inject a clock abstraction through the core timing loops (raft.go, replication.go, snapshot.go); considered INVASIVE for v0.1 per the dispersed wall-clock guidance.",
       "entrypoints": [],
       "usage_examples": [],
       "existing_test_interface_complete": false,
-      "test_support_reason": "No Clock or Tick abstraction exists anywhere in the module; all protocol timing is dispersed wall-clock use (randomTimeout -> time.After for election/heartbeat/commit/snapshot staggering, leader-lease timers, replication backoff, time.Now last-contact tracking). There is no single seam a test can advance deterministically.",
+      "test_support_reason": "randomTimeout uses the package-global math/rand with no per-node source, no seed API, no choice history, and no owner attribution; the declared test consumer cannot reproduce or observe the draws, so the fixed RandomController surface must be added.",
       "suggested_changes": [
-        "Introduce an injectable clock (e.g. Config.Clock exposing Now/After/Timer) and route the protocol timers in raft.go, replication.go, snapshot.go, and log.go through it; this is a core restructuring across the state loops, hence INVASIVE for v0.1.",
-        "Short of that, tests may only scale timeouts (HeartbeatTimeout/ElectionTimeout/CommitTimeout, config.go:149-161) and wait in wall-clock time; this controls scale, not determinism."
+        "Add RandomController, NewRandomController(seed int64, ...), RandomChoice{Name string, Value TargetRandomValue}, and Choices() []RandomChoice in a new file.",
+        "Add a no-op-by-default core hook: replace the global-rand use in randomTimeout (util.go:34-40) with a per-node seeded source installed via a new Config field read before NewRaft starts goroutines; same seed and draw order then reproduce election/heartbeat/commit/snapshot interval choices while the default keeps the global rand production behavior.",
+        "Record every draw as a deep-copied RandomChoice attributed to its node (concrete ServerID), with Value typed as time.Duration (the selected timeout), not raw bits; repeated decisions draw the next value from the same source."
       ],
-      "execution_paths": [],
+      "execution_paths": [
+        "node_follower_loop: randomTimeout(HeartbeatTimeout) heartbeatTimer draws (raft.go:163, 217)",
+        "node_candidate_loop: randomTimeout(ElectionTimeout) electionTimer draws (raft.go:310, 353, 426)",
+        "node_replication_goroutines: randomTimeout(CommitTimeout) and randomTimeout(HeartbeatTimeout/10) draws (replication.go:169, 402, 495)",
+        "node_snapshot_loop: randomTimeout(SnapshotInterval) draw (snapshot.go:75)"
+      ],
+      "obligations": {}
+    },
+    "time_control": {
+      "status": "PATCHABLE",
+      "evidence": [
+        {
+          "file": "raft.go",
+          "symbol": "Raft.runFollower",
+          "line": 163,
+          "reason": "Follower heartbeat timer is a protocol time source: heartbeatTimer = randomTimeout(HeartbeatTimeout), with time.Since(lastContact) (line 220-223) deciding the transition to Candidate."
+        },
+        {
+          "file": "raft.go",
+          "symbol": "Raft.runCandidate",
+          "line": 310,
+          "reason": "Election timer (randomTimeout) drives candidate re-election; part of the protocol timing paths."
+        },
+        {
+          "file": "raft.go",
+          "symbol": "Raft.leaderLoop",
+          "line": 677,
+          "reason": "Leader lease timer (time.After(LeaderLeaseTimeout), renewed at line 947) and checkLeaderLease time.Now (line 1047) gate stepping down; all are protocol-relevant clock reads."
+        },
+        {
+          "file": "config.go",
+          "symbol": "Config.skipStartup",
+          "line": 243,
+          "reason": "The only startup-suppression switch is unexported (used by GetConfiguration at api.go:448), so an external consumer needs a public constructor-time installation point (e.g., a Clock field on Config) before NewRaft starts goroutines at api.go:622-624."
+        }
+      ],
+      "boundary": "Same system boundary: protocol-relevant clocks/timers inside the module (raft loops, replication, snapshot loop, InmemTransport delivery timeouts); metrics/logging timestamps and caller-side deadlines are excluded unless they feed protocol behavior.",
+      "gap": "No TimeController/NewTimeController/Advance exist; every protocol-relevant timer site (raft.go, replication.go, snapshot.go, util.go randomTimeout, InmemTransport delivery timeouts) must be routed through an injected clock, and installation must be possible before autonomous goroutines start.",
+      "reason": "Protocol time can be fully virtualized by injecting a no-op-by-default clock through the existing Config/NewRaft constructor and replacing duration-based timer sites; this preserves ordering, transition conditions, and production defaults and does not change protocol, persistence, state-transition, or ordering semantics, so the capability is PATCHABLE (with disclosed core hooks).",
+      "limitations": [
+        "Satisfying the complete contract requires core hooks in raft.go (runFollower/runCandidate/leaderLoop timers and time.Since/time.Now checks), replication.go (commit/heartbeat/backoff timers), snapshot.go, util.go (randomTimeout), and inmem_transport.go (delivery timeouts); each replacement is no-op-by-default and preserves ordering, transition conditions, and production behavior (allowed per spec, disclosed as core hooks, not INVASIVE).",
+        "One Advance step must be mapped to a target-defined unit (e.g., a fixed tick duration) since the protocol is duration-based; Advance(n) must fire due timers in order without skipping intermediate events and must skip paused/stopped/crashed nodes.",
+        "Excluded clock uses: metrics timestamps (metrics.MeasureSince), Log.AppendedAt (informational, log.go:96-107), emitLogStoreMetrics (log.go:177-192, metrics only), lastContact reporting, and caller-provided timeouts (Apply timeout etc.).",
+        "The unexported skipStartup (config.go:243-244) does not close the public construction race; a public Config Clock field consumed by NewRaft before api.go:622-624 is required.",
+        "Advance returns after due events are submitted through the normal timeout path, not after their processing or resulting state transitions (per contract)."
+      ],
+      "entrypoints": [],
+      "usage_examples": [],
+      "existing_test_interface_complete": false,
+      "test_support_reason": "All protocol timing is hardwired to the wall clock (time.After/time.Now/time.Since) with no clock abstraction, no Tick, and no public pre-start hook; the test consumer cannot freeze or step protocol time today.",
+      "suggested_changes": [
+        "Add TimeController, NewTimeController(...), and Advance(steps uint64) error plus a Clock abstraction (Now/After) defaulting to real time, installed through a new public Config field so control is in place before NewRaft launches goroutines (api.go:622-624).",
+        "Route all protocol-relevant timer sites through the injected clock (raft.go:163/211/217/220-223/310/353/426/677/728/749/947/1047, replication.go:169/213/402/419/495, snapshot.go:75, util.go:34-40, inmem_transport.go:185/196/279/323) as disclosed no-op-by-default core hooks.",
+        "Implement Advance(n) as n unit steps that advance a shared virtual clock, wake due timers in order (re-arming earlier-step timers before later steps), and skip paused/stopped/crashed nodes; Pending/Inject/Drop/Clear/observation/external input never advance time."
+      ],
+      "execution_paths": [
+        "node_follower_loop: heartbeatTimer via randomTimeout (raft.go:163, 217) and time.After(0) (raft.go:211), time.Since(lastContact) election trigger (raft.go:220-223)",
+        "node_candidate_loop: electionTimer via randomTimeout (raft.go:310, 353, 426)",
+        "node_leader_loop: lease time.After(LeaderLeaseTimeout) (raft.go:677, 947), checkLeaderLease time.Now (raft.go:1047), leadership-transfer timers (raft.go:728, 749)",
+        "node_replication_goroutines: commit timeout and heartbeat interval randomTimeout (replication.go:169, 402, 495), backoff time.After (replication.go:213, 419)",
+        "node_snapshot_loop: randomTimeout(SnapshotInterval) (snapshot.go:75)",
+        "inmem_transport_delivery: send/response timeouts time.After (inmem_transport.go:185, 196, 279, 323)"
+      ],
       "obligations": {}
     }
   }

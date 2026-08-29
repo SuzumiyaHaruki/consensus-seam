@@ -1,9 +1,0 @@
-capability_checks:
-  - name: generated message injection scenario
-    capability: message_injection
-    command: go test ./_consensus_seam_posthoc/acceptance -run '^TestGeneratedMessageInjection$' -count=1
-    failure_code: MESSAGE_INJECTION_FAILED
-
-verification_fixtures:
-  - source: post-hoc/generated_message_injection_test.go
-    destination: _consensus_seam_posthoc/acceptance/generated_message_injection_test.go

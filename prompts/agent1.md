@@ -6,6 +6,14 @@ source and do not modify it. The supplied capability specification is the
 authoritative behavioral and public-interface contract; do not replace it with
 target-specific conventions.
 
+First identify the declared protocol plane and its real controlled subject,
+which may be a node, reactor, service, actor, component, or process. Treat
+`scope_roots` as writable source scope and `evidence_roots` as read-only context;
+the capability scope still comes from `system_boundary`, and visibility never
+includes another protocol or subsystem. Source and Target may use different
+concrete types. Prefer the lowest shared typed boundary, and treat coordination
+across independent ownership or persistence subsystems as invasive.
+
 For each of the seven capabilities, return exactly one of `SUPPORTED`,
 `PATCHABLE`, `PARTIAL`, `INVASIVE`, `UNKNOWN`, or `NOT_APPLICABLE`. Every
 `SUPPORTED`, `PATCHABLE`, or `PARTIAL` finding needs top-level code evidence that
@@ -52,7 +60,7 @@ binding, and normal ingress. Determine:
 - whether `MessageController`, `MessageHandle`, `MessageKind`, `PendingMessage`,
   `Pending`, `Drop`, `Clear`, `Inject`, constructor/wiring, and classified errors
   already satisfy the fixed contract;
-- which concrete exported target types fill the node-ID and message-carrier
+- which concrete exported target types fill the Source, Target, and message-carrier
   slots, including a typed variant design when no common message type exists;
 - how broadcast expands per target and how synchronous responses or futures
   remain live until a separately cached response is injected;
@@ -74,7 +82,7 @@ For time control, find every protocol-relevant clock, timer, or logical tick
 path. The required surface is a system-level `TimeController` with constructor
 and `Advance(steps uint64) error`; native Tick and injectable clocks are
 implementation primitives. In controlled mode no protocol time progresses
-without `Advance`, and one step advances all running nodes without skipping
+without `Advance`, and one step advances all running controlled subjects without skipping
 intermediate due events. Absence of Tick or clock edits across several files is
 not by itself invasive. Exclude caller deadlines, metrics, logging, and purely
 informational timestamps unless they feed back into protocol behavior.
@@ -103,13 +111,14 @@ requires core semantic changes, propose the fixed method returning
 `ErrLifecycleUnsupported` and disclose that operation rather than fabricating it.
 After Crash returns, no abandoned thread, goroutine, task, actor, callback, or
 runtime may process protocol work or mutate state or storage. For Restart, trace
-how every active message, time, randomness, and lifecycle controller replaces
-the old runtime binding without losing pending or deterministic control state.
+how every active controller controls the fresh subject, why no stale hook can
+act, and how pending or deterministic control state remains usable. A shared
+dependency need not be replaced when it carries no stale runtime binding.
 
 For observation, prefer existing safe typed status APIs. Document scope, symbol,
 type, contents, snapshot safety, consistency, completion, and usage. Only propose
 `Observe() <concrete target state>` when a narrow accessor is needed. Do not
-invent a universal state schema or promise a simultaneous cross-node snapshot.
+invent a universal state schema or promise a simultaneous cross-subject snapshot.
 
 External input is discovery-only. List ordinary application commands,
 transactions, reads, and membership-change requests with concrete input,

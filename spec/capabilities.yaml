@@ -1,5 +1,27 @@
 version: 1
 
+scope_rules:
+  protocol_plane: >
+    The declared protocol plane, not the repository or shared infrastructure,
+    defines capability scope. Never expand it merely to make a capability work.
+  folder_roles: >
+    scope_roots are visible and writable; evidence_roots are read-only context.
+    Visibility does not place every subsystem or protocol inside the boundary.
+  control_subject: >
+    A controlled subject may be a node, reactor, service, actor, component, or
+    process. Discover the target's real lifecycle and ownership unit.
+  identity_types: >
+    Source and Target use appropriate concrete target types and may differ.
+  shared_boundary: >
+    Prefer the lowest shared typed boundary that preserves logical content,
+    source, target, ownership, completion, and normal ingress.
+  subsystem_crossing: >
+    File count alone is not invasive, but coordinating independent ownership,
+    lifecycle, persistence, or application subsystems is.
+  controller_adapters: >
+    One authoritative controller may use multiple target-specific adapters;
+    adapters must not create competing state or caches.
+
 capabilities:
   message_capture:
     description: >
@@ -16,8 +38,9 @@ capabilities:
         after Drop, Clear, or successful Inject.
       pending_message: >
         PendingMessage contains, in this order, Handle MessageHandle, Source using
-        the target's concrete node-ID type, Target using that type, Kind
-        MessageKind, and Message using a target-native typed carrier. Extra
+        an appropriate concrete target identity type, Target using its appropriate
+        concrete type, Kind MessageKind, and Message using a target-native typed carrier.
+        Source and Target types may differ. Extra
         exported fields are allowed only when typed, meaningful, and documented;
         do not add Metadata any.
       target_specific_types: >
@@ -97,7 +120,7 @@ capabilities:
       fixed_surface: >
         Provide TimeController, NewTimeController(...), and
         Advance(steps uint64) error. Constructor parameters use concrete target
-        types and wire all controlled nodes or components.
+        types and wire all controlled subjects or components.
       installation_boundary: >
         Complete control must be installed before the target can start protocol
         goroutines, timers, callbacks, or other autonomous work. A post-start
@@ -108,7 +131,7 @@ capabilities:
         Pending, Inject, Drop, Clear, observation, and external input never advance
         time implicitly.
       step_semantics: >
-        One step advances every running node by one target-defined unit.
+        One step advances every running controlled subject by one target-defined unit.
         Advance(n) is equivalent to n calls of Advance(1); do not skip intermediate
         timers. Each step has the same boundary as a separate call, including
         timer re-arming caused by earlier steps. Submit each due event through
@@ -123,8 +146,8 @@ capabilities:
         after their processing, resulting messages, state transition, or commit.
         Real Sleep without preventing autonomous time progress is incomplete.
       v0_scope: >
-        The first version does not provide per-node time drift or separate node
-        advancement. Paused, stopped, and crashed nodes do not receive steps.
+        The first version does not provide per-subject time drift or separate
+        advancement. Paused, stopped, and crashed subjects do not receive steps.
 
   randomness_control:
     description: >
@@ -141,14 +164,14 @@ capabilities:
         post-start hook with an unavoidable uncontrolled draw is incomplete for
         an external consumer.
       scope: >
-        Give each controlled node or component its own controller. Control hidden
+        Give each controlled subject or component its own controller. Control hidden
         non-cryptographic choices that affect protocol state or test timing.
         Exclude cryptography, peripheral identifiers, test-data generation, and
         choices already fully visible through another controlled interface and
         relevant only to peripheral scheduling. Use NOT_APPLICABLE when none exist.
       choice_ownership: >
         Every recorded choice is unambiguously attributable to its controlled
-        node or component. A controller dedicated to one owner may omit an Owner
+        subject or component. A controller dedicated to one owner may omit an Owner
         field; an aggregated controller must expose a concrete target-native owner.
       reproducibility: >
         The same seed and random-call order produce the same sequence. Repeated
@@ -175,14 +198,14 @@ capabilities:
       persistent_volatile_semantics_defined: Record only persistence semantics defined by the target, or use NOT_APPLICABLE.
     testing_contract:
       fixed_surface: >
-        Provide LifecycleController, NewLifecycleController(...), and Pause(node),
-        Resume(node), Stop(node), Crash(node), Restart(node), each returning error.
-        Use the target's concrete node-ID type. Provide ErrLifecycleUnsupported,
+        Provide LifecycleController, NewLifecycleController(...), and Pause(target),
+        Resume(target), Stop(target), Crash(target), Restart(target), each returning
+        error. Use the target's concrete controlled-subject identity type. Provide ErrLifecycleUnsupported,
         classifiable with errors.Is, for an operation that cannot be implemented
         without core semantic changes.
       pause_resume: >
         Pause retains the same runtime and volatile state but prevents message
-        handling, node time progress, and protocol output. Resume continues that
+        handling, subject time progress, and protocol output. Resume continues that
         instance. Network isolation alone is not Pause.
       stop: >
         Stop uses normal shutdown and permits target-defined cleanup and persistence.
@@ -196,18 +219,18 @@ capabilities:
         context may process protocol work, emit output, or mutate volatile state,
         an application state machine, or durable storage.
       restart: >
-        Record whether the node was stopped or crashed. Restart with the same
+        Record whether the controlled subject was stopped or crashed. Restart with the same
         identity and configuration through normal recovery: post-stop state after
         Stop, and pre-crash durable state with a fresh runtime after Crash. The seam
         does not implement protocol catch-up.
       controller_interaction: >
         Messages already pending in MessageController survive lifecycle changes.
-        Inject to an unavailable node fails and preserves the entry. Internal
+        Inject to an unavailable target fails and preserves the entry. Internal
         unprocessed queues are volatile on Crash. Paused, stopped, and crashed
-        nodes do not receive TimeController steps. Restart replaces the old runtime
-        binding in every active message, time, randomness, and lifecycle controller;
-        stale hooks and timers are discarded while pending-message and deterministic
-        control ownership remain usable.
+        subjects do not receive TimeController steps. After Restart every active
+        controller must control the fresh subject and no stale hook may act; shared
+        dependencies may remain when they carry no stale runtime binding. Pending
+        messages and deterministic control state remain usable.
       change_scope: >
         Attempt all five operations. Label each implementation facade_only when it
         only wraps existing public behavior, core_hook when a narrow no-op-by-default
@@ -235,8 +258,8 @@ capabilities:
         returns a deep snapshot without mutable aliases or indefinite waiting.
         Prefer typed data over diagnostic strings.
       consistency: >
-        A per-node snapshot is sufficient. Do not promise a simultaneous global freeze;
-        disclose temporal inconsistency across nodes or separately read getters.
+        A per-subject snapshot is sufficient. Do not promise a simultaneous global
+        freeze; disclose temporal inconsistency across subjects or separately read getters.
 
   external_input:
     description: >
