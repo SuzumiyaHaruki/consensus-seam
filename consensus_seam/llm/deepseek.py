@@ -81,7 +81,10 @@ class DeepSeekClient:
                 with urlopen(request, timeout=self.timeout_seconds) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 if not isinstance(payload, dict):
-                    raise AgentRuntimeError("DeepSeek API returned a non-object response")
+                    raise AgentRuntimeError(
+                        "DeepSeek API returned a non-object response",
+                        http_attempts=attempt,
+                    )
                 payload["_consensus_seam_http_attempts"] = attempt
                 return payload
             except HTTPError as exc:
@@ -90,13 +93,17 @@ class DeepSeekClient:
                 retriable = exc.code == 429 or 500 <= exc.code < 600
                 if not retriable or attempt == self.max_attempts:
                     raise AgentRuntimeError(
-                        f"DeepSeek API HTTP {exc.code}: {detail}"
+                        f"DeepSeek API HTTP {exc.code}: {detail}",
+                        http_attempts=attempt,
                     ) from exc
                 headers = exc.headers or {}
                 self._sleep(self._retry_delay(attempt, headers.get("Retry-After")))
             except (URLError, TimeoutError, json.JSONDecodeError) as exc:
                 if attempt == self.max_attempts:
-                    raise AgentRuntimeError(f"DeepSeek API request failed: {exc}") from exc
+                    raise AgentRuntimeError(
+                        f"DeepSeek API request failed: {exc}",
+                        http_attempts=attempt,
+                    ) from exc
                 self._sleep(self._retry_delay(attempt))
 
         raise AgentRuntimeError("DeepSeek API retry loop ended unexpectedly")

@@ -52,8 +52,6 @@ class BlindFakeRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
-                        "message_id_scope": "test_session",
-                        "controller_operations": "serialized",
                         "entrypoint": {"symbol": "HiddenValue"},
                     }
                 }

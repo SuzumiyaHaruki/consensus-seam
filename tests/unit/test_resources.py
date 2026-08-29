@@ -25,6 +25,10 @@ def test_source_resource_root_contains_target_independent_go_contract() -> None:
         "smallest focused Go tests",
         "message_cache_injection_coherence",
         "core_semantics_required",
+        "unavoidable uncontrolled window",
+        "concrete target-native owner",
+        "abandoned execution context",
+        "every active message, time, randomness, and lifecycle controller",
     ):
         assert required in contract
 

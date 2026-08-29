@@ -38,6 +38,11 @@ to one route. Record applicable missing or invasive routes in `execution_paths`
 rather than hiding them. Apply the same route partition across related
 capabilities when appropriate.
 
+Start each execution path at a surface the declared test consumer can construct
+or call. Individual message kinds, timer call sites, random draws, and internal
+handlers are mechanisms within a path when they share one public controller,
+ownership model, and completion boundary; list them as evidence, not paths.
+
 For message capture and injection, use identical path names and inspect each
 route from native output through capture, controller ownership, Source/Target
 binding, and normal ingress. Determine:
@@ -73,6 +78,9 @@ without `Advance`, and one step advances all running nodes without skipping
 intermediate due events. Absence of Tick or clock edits across several files is
 not by itself invasive. Exclude caller deadlines, metrics, logging, and purely
 informational timestamps unless they feed back into protocol behavior.
+Verify that an external consumer can install control before autonomous protocol
+work starts; an unexported same-package startup switch does not close a public
+construction race.
 
 For randomness, find hidden non-cryptographic choices that affect protocol state
 or test timing. The required per-node/component surface is `RandomController`,
@@ -80,7 +88,9 @@ its seeded constructor, typed `RandomChoice`, and deep-copy `Choices` history.
 Same seed and draw order must reproduce varying semantic choices. Exclude
 cryptography, setup IDs, test data, and peripheral scheduling already fully
 observable through another controlled interface. Use `NOT_APPLICABLE` when no
-in-scope choice exists.
+in-scope choice exists. Control must precede the first draw, and every recorded
+choice must identify its owner either through a one-owner controller or a
+concrete target-native owner field.
 
 For lifecycle, assess every named obligation and all five fixed operations:
 Pause, Resume, Stop, Crash, and Restart. Distinguish same-instance pause, normal
@@ -91,6 +101,10 @@ persistence or catch-up semantics. Classify each possible implementation as
 A narrow no-op-by-default core hook may still be PATCHABLE. When an operation
 requires core semantic changes, propose the fixed method returning
 `ErrLifecycleUnsupported` and disclose that operation rather than fabricating it.
+After Crash returns, no abandoned thread, goroutine, task, actor, callback, or
+runtime may process protocol work or mutate state or storage. For Restart, trace
+how every active message, time, randomness, and lifecycle controller replaces
+the old runtime binding without losing pending or deterministic control state.
 
 For observation, prefer existing safe typed status APIs. Document scope, symbol,
 type, contents, snapshot safety, consistency, completion, and usage. Only propose
@@ -101,8 +115,8 @@ External input is discovery-only. List ordinary application commands,
 transactions, reads, and membership-change requests with concrete input,
 preconditions, completion/result semantics, and a minimal example. Exclude peer
 protocol messages, timers, lifecycle, observation, committed-result application,
-bootstrap, restore, diagnostics, and administration. Do not propose a universal
-Submit API.
+bootstrap, restore, barriers, status/configuration queries, leadership checks,
+diagnostics, and administration. Do not propose a universal Submit API.
 
 For directly usable interfaces, include a short syntactically valid Go example
 when source evidence establishes setup. Use real visible symbols, no ellipsis or

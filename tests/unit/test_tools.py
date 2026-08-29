@@ -58,6 +58,37 @@ def test_role_scoped_tool_permissions_and_path_containment(tmp_path: Path) -> No
     assert written["ok"] is True
     assert (patched / "testcontrol" / "pending.go").is_file()
 
+    unfiltered = json.loads(
+        transformer.execute(
+            "run_readonly_check",
+            '{"scope":"worktree","check":"go_test","package":"./..."}',
+        )
+    )
+    assert unfiltered["ok"] is False
+    mixed_flags = json.loads(
+        transformer.execute(
+            "run_readonly_check",
+            '{"scope":"worktree","check":"go_test","package":".",'
+            '"run":"TestController -v"}',
+        )
+    )
+    assert mixed_flags["ok"] is False
+    for broad in (".", "Test", "^Test.*$"):
+        broad_result = json.loads(
+            transformer.execute(
+                "run_readonly_check",
+                json.dumps(
+                    {
+                        "scope": "worktree",
+                        "check": "go_test",
+                        "package": ".",
+                        "run": broad,
+                    }
+                ),
+            )
+        )
+        assert broad_result["ok"] is False
+
     reviewer = reviewer_tools(source, patched, backend)
     assert "write_file" not in names(reviewer)
     read = json.loads(

@@ -80,6 +80,37 @@ class ReadonlyCheckInput(ToolInput):
     run: str | None = Field(default=None, max_length=500)
     symbol: str | None = Field(default=None, max_length=500)
 
+    @model_validator(mode="after")
+    def require_focused_test(self) -> "ReadonlyCheckInput":
+        if self.check == "go_test":
+            if not self.run:
+                raise ValueError(
+                    "go_test requires a focused run pattern; use "
+                    "go_test_compile for package-wide compilation"
+                )
+            if any(char.isspace() for char in self.run):
+                raise ValueError(
+                    "go_test run is one regex, not a CLI argument string; "
+                    "flags such as -v or -count are not supported"
+                )
+            alternatives = self.run.split("|")
+            if len(alternatives) > 12:
+                raise ValueError("go_test run may name at most 12 focused tests")
+            for alternative in alternatives:
+                name = alternative.removeprefix("^").removesuffix("$")
+                if (
+                    not name.startswith("Test")
+                    or len(name) <= len("Test")
+                    or not name.isidentifier()
+                ):
+                    raise ValueError(
+                        "go_test run must be an exact TestName or an alternation "
+                        "of exact TestName values"
+                    )
+        elif self.run is not None:
+            raise ValueError("run is only valid with go_test")
+        return self
+
 
 class ApplyPatchInput(ToolInput):
     patch: str = Field(min_length=1, max_length=MAX_WRITE_BYTES)
@@ -252,7 +283,8 @@ class LocalToolFactory:
                 LocalTool(
                     "run_readonly_check",
                     self._scope_help(
-                        "Run only an allowlisted go_test, compile, or go_doc check."
+                        "Run an allowlisted focused go_test (exact TestName required), "
+                        "package compile, or go_doc check."
                     ),
                     ReadonlyCheckInput,
                     self._run_readonly_check,
@@ -492,7 +524,11 @@ class LocalToolFactory:
             if args.check == "go_test_compile":
                 command.append("-run=^$")
             elif args.run is not None:
-                command.append(f"-run={args.run}")
+                names = [
+                    item.removeprefix("^").removesuffix("$")
+                    for item in args.run.split("|")
+                ]
+                command.append("-run=^(?:" + "|".join(map(re.escape, names)) + ")$")
             command.append(args.package)
         completed = subprocess.run(
             command,

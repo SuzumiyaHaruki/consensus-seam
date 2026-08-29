@@ -19,20 +19,25 @@ transport, cache, ingress, ownership, and completion remain one route. Different
 public runtime ownership or completion models remain separate. Return
 `REVISE_AGENT1` for a wrong partition or feasibility classification and
 `REVISE_AGENT2` when a missing route can still be completed by low-intrusion work.
+Reject execution paths that are only internal message kinds, timer sites, random
+draws, or handlers rather than distinct public construction/control routes.
 
 For each covered message route verify:
 
 - every in-boundary cross-node request, response, and one-way message enters the
   same controller-owned cache before delivery, with no bypass or competing
   protocol consumer;
-- fixed names, constructor/wiring, five required PendingMessage fields, target-
-  specific typed carriers, and classified `errors.Is` errors match the contract;
+- fixed names, constructor/wiring, string-backed MessageKind, five required
+  PendingMessage fields, target-specific typed carriers, and classified
+  `errors.Is` errors match the contract;
 - a handle is opaque and stable while pending and becomes invalid without
   retargeting after Drop, Clear, or successful Inject;
 - broadcast creates one entry per target, request and response are separately
   cached, and response continuations, channels, or futures are not orphaned;
 - capture and every Pending result are independent deep copies, including nested
   references and streams, while Inject uses the private controller copy;
+- copy or stream-buffer failure never forwards a partially consumed or aliased
+  original and never orphans the exchange completion mechanism;
 - Pending order is stable, operations are thread-safe, and no entry is silently
   evicted or lost;
 - Inject resolves the real captured target, reaches the correct normal ingress,
@@ -54,12 +59,16 @@ manual-only progress, all-running-node step behavior, intermediate due events,
 normal timeout ingress, and unchanged production behavior. Reject real Sleep or
 an asynchronous path that may silently drop, coalesce, or indefinitely defer a
 requested step. Clock injection spanning several files is not automatically
-invasive.
+invasive. Reject a public construction path that can start autonomous protocol
+work before the controller is installed, and verify that `Advance(n)` preserves
+the per-step boundary of n separate calls, including reactive timer re-arming.
 
 For randomness, verify per-node/component ownership, fixed controller surface,
 legal target values, varying but reproducible choices for the same seed and draw
 order, and deep-copy history of final semantic values. Exclude cryptographic and
-peripheral randomness rather than forcing a controller.
+peripheral randomness rather than forcing a controller. Reject an unavoidable
+pre-install draw or an aggregated history whose entries cannot be attributed to
+their concrete target owner.
 
 For lifecycle, verify all five fixed methods and construction. Pause must retain
 one inactive runtime; Stop must follow normal shutdown; Crash must discard the
@@ -70,6 +79,11 @@ hook is allowed; a semantic change must instead return
 `ErrLifecycleUnsupported`. Reject isolation or whole-memory preservation as
 Crash, invented persistence, changed persistence-before-send ordering, loss of
 pending controller messages, or seam-implemented catch-up.
+After Crash returns, verify that no abandoned execution context can process work,
+emit output, or mutate protocol state, an application state machine, or storage.
+After Restart, verify that every active message, time, randomness, and lifecycle
+controller replaces its stale runtime binding while pending and deterministic
+control state remains usable.
 
 For observation, verify typed, thread-safe, side-effect-free deep snapshots and
 honest per-node consistency. Prefer existing safe APIs and reject an unnecessary

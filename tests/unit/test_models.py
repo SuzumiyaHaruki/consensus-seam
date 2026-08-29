@@ -138,6 +138,14 @@ def test_lifecycle_supported_requires_all_four_runtime_boundaries() -> None:
     report = CapabilityReport.model_validate(payload)
     assert report.capabilities["lifecycle_control"].status.value == "SUPPORTED"
 
+    obligations["state_ownership_defined"] = {
+        "status": "MISSING",
+        "evidence": [],
+        "reason": "state ownership is not defined",
+    }
+    with pytest.raises(ValidationError, match="state ownership and persistence"):
+        CapabilityReport.model_validate(payload)
+
 
 def test_lifecycle_supported_rejects_a_missing_runtime_boundary() -> None:
     payload = capability_report()
@@ -165,19 +173,47 @@ def test_external_input_supported_requires_protocol_ingress_exclusion() -> None:
         CapabilityReport.model_validate(payload)
 
 
+def test_non_supported_capability_cannot_claim_complete_existing_interface() -> None:
+    payload = capability_report()
+    observation = payload["capabilities"]["observation"]
+    observation["status"] = "PARTIAL"
+    with pytest.raises(ValidationError, match="PARTIAL cannot have a complete"):
+        CapabilityReport.model_validate(payload)
+
+
+def test_patchable_injection_requires_a_patchable_or_supported_capture() -> None:
+    payload = capability_report()
+    capture = payload["capabilities"]["message_capture"]
+    capture["status"] = "INVASIVE"
+    capture["existing_test_interface_complete"] = False
+    capture["test_support_reason"] = "capture cannot be implemented safely"
+    capture["reason"] = "capture changes protocol semantics"
+    with pytest.raises(ValidationError, match="PATCHABLE message_injection"):
+        CapabilityReport.model_validate(payload)
+
+
+def test_implemented_interface_requires_a_callable_entrypoint() -> None:
+    with pytest.raises(ValidationError, match="consumer-callable entrypoint"):
+        InterfaceReport.model_validate(
+            {"message_injection": {"implemented": True}}
+        )
+
+
 def test_message_interface_reads_legacy_id_field_without_exposing_it_to_agents() -> None:
     report = InterfaceReport.model_validate(
         {
-            "message_capture": {
-                "implemented": True,
-                "message_id_scope": "test_session",
-            }
+                "message_capture": {
+                    "implemented": True,
+                    "message_id_scope": "test_session",
+                    "entrypoint": {"symbol": "Pending"},
+                }
         }
     )
     assert report.message_capture is not None
     properties = InterfaceReport.model_json_schema()["$defs"]["InterfaceCapability"][
         "properties"
     ]
+    assert "entrypoint" not in properties
     assert "message_id_scope" not in properties
     assert "controller_operations" not in properties
 
@@ -194,8 +230,7 @@ def test_reviewer_cannot_skip_exact_target_check_for_injection() -> None:
         {
             "message_injection": {
                 "implemented": True,
-                "message_id_scope": "test_session",
-                "controller_operations": "serialized",
+                "entrypoint": {"symbol": "Inject"},
             }
         }
     )
@@ -212,8 +247,14 @@ def test_reviewer_cannot_skip_exact_target_check_for_injection() -> None:
 def test_reviewer_cannot_skip_message_cache_coherence_check() -> None:
     interface = InterfaceReport.model_validate(
         {
-            "message_capture": {"implemented": True},
-            "message_injection": {"implemented": True},
+            "message_capture": {
+                "implemented": True,
+                "entrypoint": {"symbol": "Pending"},
+            },
+            "message_injection": {
+                "implemented": True,
+                "entrypoint": {"symbol": "Inject"},
+            },
         }
     )
     payload = review_report()
@@ -231,8 +272,7 @@ def test_reviewer_must_pass_testing_contract_conformance() -> None:
         {
             "message_injection": {
                 "implemented": True,
-                "message_id_scope": "test_session",
-                "controller_operations": "serialized",
+                "entrypoint": {"symbol": "Inject"},
             }
         }
     )

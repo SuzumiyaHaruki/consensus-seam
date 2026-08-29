@@ -8,13 +8,21 @@ from typing import Any
 import pytest
 
 from consensus_seam.cli import main
-from consensus_seam.config import load_posthoc_checks, load_project
+from consensus_seam.config import LoadedProject, load_posthoc_checks, load_project
 from consensus_seam.llm.client import FakeLLMClient
 from consensus_seam.llm.runtime import ToolCallingAgentRuntime
-from consensus_seam.models import WorkflowOutcome
-from consensus_seam.models import AgentModelConfig
+from consensus_seam.models import (
+    AgentModelConfig,
+    CapabilityReport,
+    InterfaceReport,
+    WorkflowOutcome,
+)
 from consensus_seam.llm.base import AgentRuntimeError, ToolExecutor
-from consensus_seam.workflow import ConsensusWorkflow, ExperimentPreconditionError
+from consensus_seam.workflow import (
+    ConsensusWorkflow,
+    ExperimentPreconditionError,
+    RepairInputError,
+)
 from tests.helpers import capability_report, review_report, write_project_manifest
 
 
@@ -37,6 +45,23 @@ def initialize_git_repository(repo: Path) -> None:
         "-m",
         "initial",
     )
+
+
+def initialized_project(
+    tmp_path: Path,
+    *,
+    command: str = "git diff --check",
+    extra: tuple[str, ...] = (),
+) -> tuple[Path, LoadedProject]:
+    """创建这些状态机测试共用的最小 clean Git 目标。"""
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_git_repository(repo)
+    manifest = write_project_manifest(
+        tmp_path, repo, command=command, extra=extra
+    )
+    return repo, load_project(manifest)
 
 
 class EditingFakeClient:
@@ -77,8 +102,6 @@ class EditingFakeClient:
                 {
                     "message_injection": {
                         "implemented": True,
-                        "message_id_scope": "test_session",
-                        "controller_operations": "serialized",
                         "entrypoint": {
                             "file": "injection_seam.go",
                             "symbol": "injectForTest",
@@ -125,7 +148,6 @@ class PostHocSourceRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
-                        "message_id_scope": "test_session",
                         "entrypoint": {
                             "file": "generated.go",
                             "symbol": "GeneratedValue",
@@ -182,7 +204,6 @@ class PostHocRepairRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
-                        "message_id_scope": "test_session",
                         "entrypoint": {
                             "file": "generated.go",
                             "symbol": "GeneratedValue",
@@ -250,6 +271,7 @@ class SplitCapabilityRuntime:
                 {
                     capability: {
                         "implemented": True,
+                        "entrypoint": {"symbol": f"Generated{capability}"},
                         "implementation_approach": ["target-native seam"],
                     }
                     for capability in selected
@@ -299,7 +321,15 @@ class SelectiveReviewerRevisionRuntime(SplitCapabilityRuntime):
 class ReviewerRevisionRuntime:
     """Reviewer 阻塞问题应在下一 fresh worktree 中修订既有候选。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        review_route: str = "REVISE_AGENT2",
+        *,
+        reanalysis_patchable: bool = True,
+    ) -> None:
+        self.review_route = review_route
+        self.reanalysis_patchable = reanalysis_patchable
+        self.analyzer_round = 0
         self.transform_round = 0
         self.review_round = 0
         self.saw_prior_candidate = False
@@ -316,6 +346,9 @@ class ReviewerRevisionRuntime:
         invocation_id: str | None = None,
     ) -> str:
         if agent == "analyzer":
+            self.analyzer_round += 1
+            if self.analyzer_round > 1 and not self.reanalysis_patchable:
+                return json.dumps(capability_report(patchable=None))
             return json.dumps(capability_report())
         if agent == "transformer":
             self.transform_round += 1
@@ -324,7 +357,7 @@ class ReviewerRevisionRuntime:
             if self.transform_round == 1:
                 content = "package mini\n\nfunc InjectVersion() int { return 1 }\n"
             else:
-                assert payload["feedback"]["failure"] == "REVIEW_REVISE_AGENT2"
+                assert payload["feedback"]["failure"] == f"REVIEW_{self.review_route}"
                 read = json.loads(
                     tools.execute(
                         "read_file",
@@ -353,7 +386,6 @@ class ReviewerRevisionRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
-                        "message_id_scope": "test_session",
                         "entrypoint": {
                             "file": "injection_seam.go",
                             "symbol": "InjectVersion",
@@ -366,7 +398,7 @@ class ReviewerRevisionRuntime:
         self.review_round += 1
         review = review_report()
         if self.review_round == 1:
-            review["overall"] = "REVISE_AGENT2"
+            review["overall"] = self.review_route
             for check in review["checks"]:
                 if check["name"] == "testing_contract_conformance":
                     check["result"] = "FAIL"
@@ -425,8 +457,6 @@ class GuardrailFakeRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
-                        "message_id_scope": "test_session",
-                        "controller_operations": "serialized",
                         "entrypoint": {"symbol": "injectForTest"},
                     }
                 }
@@ -445,6 +475,7 @@ class GuardrailFakeRuntime:
                     },
                     "message_injection": {
                         "implemented": True,
+                        "entrypoint": {"symbol": "injectForTest"},
                         "implementation_approach": [
                             "joint message-control candidate discarded with capture"
                         ],
@@ -467,8 +498,6 @@ class GuardrailFakeRuntime:
             {
                 "message_injection": {
                     "implemented": True,
-                    "message_id_scope": "test_session",
-                    "controller_operations": "serialized",
                     "entrypoint": {
                         "file": "injection_seam.go",
                         "symbol": "injectForTest",
@@ -496,6 +525,11 @@ class AnalyzerChatClient:
                 }
             ],
         }
+
+
+class InterruptingRuntime:
+    def run(self, *args: Any, **kwargs: Any) -> str:
+        raise KeyboardInterrupt
 
 
 class ScopedTransformRuntime:
@@ -548,8 +582,6 @@ class ScopedTransformRuntime:
                 {
                     "message_injection": {
                         "implemented": True,
-                        "message_id_scope": "test_session",
-                        "controller_operations": "serialized",
                         "entrypoint": {"symbol": "injectForTest"},
                     }
                 }
@@ -605,18 +637,13 @@ def test_patch_stops_when_analysis_finds_no_patchable_capability(tmp_path: Path)
 def test_transform_scope_does_not_hide_unselected_patchable_findings(
     tmp_path: Path,
 ) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(
+    _, project = initialized_project(
         tmp_path,
-        repo,
-        command="git diff --check",
         extra=("transform_capabilities:", "  - message_injection"),
     )
     runtime = ScopedTransformRuntime()
     workflow = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs")
-    result = workflow.patch(load_project(manifest))
+    result = workflow.patch(project)
     assert result.outcome is WorkflowOutcome.PASS
     assert runtime.transform_payload is not None
     assert runtime.transform_payload["patchable_capabilities"] == [
@@ -636,15 +663,10 @@ def test_transform_scope_does_not_hide_unselected_patchable_findings(
 def test_patch_groups_capture_and_injection_into_one_transform_call(
     tmp_path: Path,
 ) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
+    _, project = initialized_project(tmp_path)
     runtime = SplitCapabilityRuntime()
 
-    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(
-        load_project(manifest)
-    )
+    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(project)
 
     assert result.outcome is WorkflowOutcome.PASS
     assert runtime.transform_calls == [["message_capture", "message_injection"]]
@@ -655,18 +677,66 @@ def test_patch_groups_capture_and_injection_into_one_transform_call(
     assert interface["message_injection"]["implemented"] is True
 
 
+def test_transform_units_put_lifecycle_after_other_controllers() -> None:
+    units = ConsensusWorkflow._ordered_transform_units(
+        {
+            "message_capture",
+            "message_injection",
+            "randomness_control",
+            "time_control",
+            "observation",
+            "lifecycle_control",
+        }
+    )
+    assert [name for name, _ in units] == [
+        "message_control",
+        "randomness_control",
+        "time_control",
+        "observation",
+        "lifecycle_control",
+    ]
+
+
+def test_repair_of_one_message_side_keeps_message_control_grouped() -> None:
+    payload = capability_report()
+    payload["capabilities"]["message_capture"].update(
+        {
+            "status": "PATCHABLE",
+            "gap": "capture cache is missing",
+            "existing_test_interface_complete": False,
+            "test_support_reason": "capture needs the shared controller",
+            "suggested_changes": ["add the shared message controller"],
+        }
+    )
+    report = CapabilityReport.model_validate(payload)
+    interface = InterfaceReport.model_validate(
+        {
+            "message_capture": {
+                "implemented": True,
+                "entrypoint": {"symbol": "Pending"},
+            },
+            "message_injection": {
+                "implemented": True,
+                "entrypoint": {"symbol": "Inject"},
+            },
+        }
+    )
+
+    selected = ConsensusWorkflow._repair_transform_capabilities(
+        {"message_injection"},
+        report,
+        interface,
+    )
+    assert selected == {"message_capture", "message_injection"}
+
+
 def test_reviewer_revision_only_reruns_implicated_capability_group(
     tmp_path: Path,
 ) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
+    _, project = initialized_project(tmp_path)
     runtime = SelectiveReviewerRevisionRuntime()
 
-    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(
-        load_project(manifest)
-    )
+    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(project)
 
     assert result.outcome is WorkflowOutcome.PASS
     assert runtime.transform_calls == [
@@ -680,38 +750,79 @@ def test_reviewer_revision_only_reruns_implicated_capability_group(
     assert interface["randomness_control"]["implemented"] is True
 
 
-def test_reviewer_revision_continues_from_prior_candidate_in_fresh_worktree(
+@pytest.mark.parametrize(
+    ("review_route", "reanalysis_patchable", "expected", "revised_worktree"),
+    [
+        pytest.param(
+            "REVISE_AGENT2",
+            True,
+            WorkflowOutcome.PASS,
+            "patched-worktree-a1-p2",
+            id="agent2-revises-prior-candidate",
+        ),
+        pytest.param(
+            "REVISE_AGENT1",
+            True,
+            WorkflowOutcome.PASS,
+            "patched-worktree-a2-p1",
+            id="agent1-reanalysis-preserves-candidate",
+        ),
+        pytest.param(
+            "REVISE_AGENT1",
+            False,
+            WorkflowOutcome.NO_PATCH_NEEDED,
+            None,
+            id="reanalysis-discards-nonpatchable-candidate",
+        ),
+    ],
+)
+def test_reviewer_revision_state_transitions(
     tmp_path: Path,
+    review_route: str,
+    reanalysis_patchable: bool,
+    expected: WorkflowOutcome,
+    revised_worktree: str | None,
 ) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
-    runtime = ReviewerRevisionRuntime()
-
-    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(
-        load_project(manifest)
+    _, project = initialized_project(tmp_path)
+    runtime = ReviewerRevisionRuntime(
+        review_route=review_route,
+        reanalysis_patchable=reanalysis_patchable,
     )
 
-    assert result.outcome is WorkflowOutcome.PASS
-    assert runtime.transform_round == 2
-    assert runtime.review_round == 2
-    assert runtime.saw_prior_candidate is True
-    first = result.run_directory / "patched-worktree/injection_seam.go"
-    revised = result.run_directory / "patched-worktree-a1-p2/injection_seam.go"
-    assert "return 1" in first.read_text(encoding="utf-8")
-    assert "return 2" in revised.read_text(encoding="utf-8")
-    usage = (result.run_directory / "USAGE.md").read_text(encoding="utf-8")
-    assert "总体结论：`PASS`" in usage
+    result = ConsensusWorkflow(runtime, runs_root=tmp_path / "runs").patch(project)
+
+    assert result.outcome is expected
+    assert runtime.analyzer_round == (2 if review_route == "REVISE_AGENT1" else 1)
+    if expected is WorkflowOutcome.PASS:
+        assert runtime.transform_round == 2
+        assert runtime.review_round == 2
+        assert runtime.saw_prior_candidate is True
+        first = result.run_directory / "patched-worktree/injection_seam.go"
+        assert revised_worktree is not None
+        revised = result.run_directory / revised_worktree / "injection_seam.go"
+        assert "return 1" in first.read_text(encoding="utf-8")
+        assert "return 2" in revised.read_text(encoding="utf-8")
+        return
+
+    assert runtime.transform_round == 1
+    assert runtime.review_round == 1
+    assert not (result.run_directory / "changes.patch").exists()
+    assert not (result.run_directory / "interface-report.json").exists()
+    assert not (result.run_directory / "review-report.json").exists()
+    workflow_result = json.loads(
+        (result.run_directory / "workflow-result.json").read_text(encoding="utf-8")
+    )
+    assert workflow_result["outcome"] == "NO_PATCH_NEEDED"
+    latest_apply = (
+        tmp_path / "runs/latest/mini-raft/APPLY.md"
+    ).read_text(encoding="utf-8")
+    assert "没有可应用的已通过候选" in latest_apply
 
 
 def test_patch_runs_isolated_three_agent_flow(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
+    repo, project = initialized_project(tmp_path)
     workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")
-    result = workflow.patch(load_project(manifest))
+    result = workflow.patch(project)
     assert result.outcome is WorkflowOutcome.PASS
     assert "injection_seam.go" in (result.run_directory / "changes.patch").read_text()
     usage = (result.run_directory / "USAGE.md").read_text(encoding="utf-8")
@@ -726,11 +837,7 @@ def test_posthoc_repair_reuses_candidate_and_routes_failure_to_agent2(
     monkeypatch: Any,
 ) -> None:
     monkeypatch.setenv("GOCACHE", str(tmp_path / "gocache"))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(tmp_path, repo, command="go test ./...")
-    project = load_project(manifest)
+    repo, project = initialized_project(tmp_path, command="go test ./...")
 
     source_result = ConsensusWorkflow(
         PostHocSourceRuntime(),
@@ -798,14 +905,62 @@ func TestGeneratedInterface(t *testing.T) {
     assert run_config["repair"]["source_run"] == str(source_result.run_directory)
 
 
+def test_repair_rejects_source_candidate_that_failed_review(tmp_path: Path) -> None:
+    repo, project = initialized_project(tmp_path)
+    source = tmp_path / "source-run"
+    source.mkdir()
+    (source / "capability-report.json").write_text(
+        CapabilityReport.model_validate(capability_report()).model_dump_json(),
+        encoding="utf-8",
+    )
+    interface = InterfaceReport.model_validate(
+        {
+            "message_injection": {
+                "implemented": True,
+                "entrypoint": {"symbol": "Inject"},
+            }
+        }
+    )
+    (source / "interface-report.json").write_text(
+        interface.model_dump_json(), encoding="utf-8"
+    )
+    rejected = review_report()
+    rejected["overall"] = "REVISE_AGENT2"
+    rejected["issues"] = [{"reason": "candidate is not ready"}]
+    (source / "review-report.json").write_text(
+        json.dumps(rejected), encoding="utf-8"
+    )
+    revision = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (source / "run-config.json").write_text(
+        json.dumps({"source_revisions": {"target": {"revision": revision}}}),
+        encoding="utf-8",
+    )
+    (source / "changes.patch").write_text("not-empty\n", encoding="utf-8")
+    checks_path = tmp_path / "checks.yaml"
+    checks_path.write_text(
+        """capability_checks:
+  - name: injection
+    capability: message_injection
+    command: go test ./...
+    failure_code: MESSAGE_INJECTION_FAILED
+""",
+        encoding="utf-8",
+    )
+    checks = load_posthoc_checks(checks_path, repository=repo)
+
+    workflow = ConsensusWorkflow(FakeLLMClient([]), runs_root=tmp_path / "runs")
+    with pytest.raises(RepairInputError, match="did not pass independent review"):
+        workflow._load_repair_source(project, source, checks)
+
+
 def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(
+    _, project = initialized_project(
         tmp_path,
-        repo,
-        command="git diff --check",
         extra=(
             "capability_checks:",
             "  - name: MC3 exact injection",
@@ -819,7 +974,7 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
         ),
     )
     workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")
-    result = workflow.run(load_project(manifest))
+    result = workflow.run(project)
     assert result.outcome is WorkflowOutcome.PASS
     assert (result.run_directory / "baseline-report.json").is_file()
     assert (result.run_directory / "verification-report.json").is_file()
@@ -834,12 +989,9 @@ def test_run_includes_baseline_and_deterministic_verification(tmp_path: Path) ->
 
 
 def test_run_refuses_success_without_capability_check(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
+    _, project = initialized_project(tmp_path)
     workflow = ConsensusWorkflow(EditingFakeClient(), runs_root=tmp_path / "runs")
-    result = workflow.run(load_project(manifest))
+    result = workflow.run(project)
     assert result.outcome is WorkflowOutcome.PARTIAL
     assert result.reason == "SEMANTIC_AMBIGUITY"
     verification = json.loads(
@@ -848,58 +1000,42 @@ def test_run_refuses_success_without_capability_check(tmp_path: Path) -> None:
     assert "MESSAGE_INJECTION_FAILED" in verification["details"][0]
 
 
-def test_existing_go_tests_are_protected_and_bad_worktree_is_discarded(
-    tmp_path: Path,
+@pytest.mark.parametrize("mode", ["protected_test", "rediscovered"])
+def test_invalid_candidate_is_discarded_before_fresh_retry(
+    tmp_path: Path, mode: str
 ) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    original_test = "package mini\n\nfunc TestExisting(t *testing.T) {}\n"
-    (repo / "node_test.go").write_text(original_test, encoding="utf-8")
-    git(repo, "add", "node_test.go")
-    git(
-        repo,
-        "-c",
-        "user.name=ConsensusSeam Test",
-        "-c",
-        "user.email=consensus-seam@example.invalid",
-        "commit",
-        "-m",
-        "add existing test",
-    )
-    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
-    workflow = ConsensusWorkflow(
-        GuardrailFakeRuntime("protected_test"), runs_root=tmp_path / "runs"
-    )
-    result = workflow.patch(load_project(manifest))
+    repo, project = initialized_project(tmp_path)
+    original_test = None
+    if mode == "protected_test":
+        original_test = "package mini\n\nfunc TestExisting(t *testing.T) {}\n"
+        (repo / "node_test.go").write_text(original_test, encoding="utf-8")
+        git(repo, "add", "node_test.go")
+        git(
+            repo,
+            "-c",
+            "user.name=ConsensusSeam Test",
+            "-c",
+            "user.email=consensus-seam@example.invalid",
+            "commit",
+            "-m",
+            "add existing test",
+        )
+    workflow = ConsensusWorkflow(GuardrailFakeRuntime(mode), runs_root=tmp_path / "runs")
+    result = workflow.patch(project)
     assert result.outcome is WorkflowOutcome.PASS
-    assert (result.run_directory / "logs/protected-files-a1-p1.json").is_file()
     patch = (result.run_directory / "changes.patch").read_text(encoding="utf-8")
     assert "injection_seam.go" in patch
-    assert "node_test.go" not in patch
-    assert (repo / "node_test.go").read_text(encoding="utf-8") == original_test
-
-
-def test_rediscovered_invasive_change_always_uses_fresh_worktree(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    initialize_git_repository(repo)
-    manifest = write_project_manifest(tmp_path, repo, command="git diff --check")
-    workflow = ConsensusWorkflow(
-        GuardrailFakeRuntime("rediscovered"), runs_root=tmp_path / "runs"
-    )
-    result = workflow.patch(load_project(manifest))
-    assert result.outcome is WorkflowOutcome.PASS
-    assert (result.run_directory / "logs/discarded-a1-p1.json").is_file()
-    patch = (result.run_directory / "changes.patch").read_text(encoding="utf-8")
-    assert "injection_seam.go" in patch
-    assert "capture_seam.go" not in patch
-    assert (result.run_directory / "patched-worktree/capture_seam.go").is_file()
-    assert not (
-        result.run_directory / "patched-worktree-a1-p2/capture_seam.go"
-    ).exists()
+    if mode == "protected_test":
+        assert (result.run_directory / "logs/protected-files-a1-p1.json").is_file()
+        assert "node_test.go" not in patch
+        assert (repo / "node_test.go").read_text(encoding="utf-8") == original_test
+    else:
+        assert (result.run_directory / "logs/discarded-a1-p1.json").is_file()
+        assert "capture_seam.go" not in patch
+        assert (result.run_directory / "patched-worktree/capture_seam.go").is_file()
+        assert not (
+            result.run_directory / "patched-worktree-a1-p2/capture_seam.go"
+        ).exists()
 
 
 def test_cli_analyze_command(tmp_path: Path, capsys: Any) -> None:
@@ -957,7 +1093,10 @@ def test_formal_experiment_requires_clean_revisions(
     assert not (tmp_path / "runs").exists()
 
 
-def test_exception_does_not_replace_latest_audit_export(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failure_kind", ["agent_error", "keyboard_interrupt"])
+def test_incomplete_run_does_not_replace_latest_audit_export(
+    tmp_path: Path, failure_kind: str
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     manifest = write_project_manifest(tmp_path, repo)
@@ -965,18 +1104,26 @@ def test_exception_does_not_replace_latest_audit_export(tmp_path: Path) -> None:
     latest.mkdir(parents=True)
     marker = latest / "marker.json"
     marker.write_text('{"source":"previous-complete-run"}\n', encoding="utf-8")
-    workflow = ConsensusWorkflow(FakeLLMClient([]), runs_root=tmp_path / "runs")
-    with pytest.raises(AgentRuntimeError, match="no response remaining"):
+    if failure_kind == "agent_error":
+        workflow = ConsensusWorkflow(FakeLLMClient([]), runs_root=tmp_path / "runs")
+        raised = pytest.raises(AgentRuntimeError, match="no response remaining")
+        error_type = "AgentRuntimeError"
+    else:
+        workflow = ConsensusWorkflow(InterruptingRuntime(), runs_root=tmp_path / "runs")
+        raised = pytest.raises(KeyboardInterrupt)
+        error_type = "KeyboardInterrupt"
+
+    with raised:
         workflow.analyze(load_project(manifest))
-    assert marker.read_text(encoding="utf-8") == (
-        '{"source":"previous-complete-run"}\n'
-    )
+
+    assert marker.read_text(encoding="utf-8") == '{"source":"previous-complete-run"}\n'
     failed_runs = [
         path
         for path in (tmp_path / "runs").iterdir()
         if path.is_dir() and path.name != "latest"
     ]
     assert len(failed_runs) == 1
-    assert (failed_runs[0] / "agent-run-stats.json").is_file()
     failure = json.loads((failed_runs[0] / "failure.json").read_text(encoding="utf-8"))
-    assert failure == {"error_type": "AgentRuntimeError", "outcome": "INCOMPLETE"}
+    assert failure == {"error_type": error_type, "outcome": "INCOMPLETE"}
+    if failure_kind == "agent_error":
+        assert (failed_runs[0] / "agent-run-stats.json").is_file()

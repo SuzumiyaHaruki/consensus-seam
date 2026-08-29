@@ -62,6 +62,7 @@ class LowIntrusionTransformer(StructuredAgent[InterfaceReport]):
             "modification_policy": project.modification_policy.model_dump(mode="json"),
             "feedback": feedback,
         }
+
         def validate_selected(result: InterfaceReport) -> None:
             # 把精确能力集合校验放进 StructuredAgent 的重试边界。修订轮中
             # worktree 和 feedback 会包含完整旧候选，模型可能只是在 JSON

@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from consensus_seam.llm.runtime import ToolCallingAgentRuntime
+from consensus_seam.llm.base import AgentRuntimeError
 from consensus_seam.models import AgentModelConfig
 
 
@@ -106,6 +109,11 @@ class BudgetConvergenceClient:
         return completion('{"answer":"converged"}')
 
 
+class FailingHTTPClient:
+    def create_chat_completion(self, **kwargs: Any) -> dict[str, Any]:
+        raise AgentRuntimeError("transport failed", http_attempts=3)
+
+
 def test_runtime_executes_tools_and_preserves_reasoning_content() -> None:
     client = ScriptedChatClient()
     runtime = ToolCallingAgentRuntime(client)
@@ -177,3 +185,19 @@ def test_runtime_forces_final_json_before_tool_step_limit() -> None:
     assert stats[0]["status"] == "COMPLETED"
     assert stats[0]["api_calls"] == 3
     assert stats[0]["tool_calls"] == 2
+
+
+def test_runtime_counts_failed_http_attempts() -> None:
+    runtime = ToolCallingAgentRuntime(FailingHTTPClient())
+    with pytest.raises(AgentRuntimeError):
+        runtime.run(
+            "Return JSON.",
+            "Analyze.",
+            {"type": "object"},
+            agent="analyzer",
+            model=AgentModelConfig(model="deepseek-v4-flash"),
+            invocation_id="analyzer-a1-attempt1",
+        )
+    stats = runtime.stats_snapshot()[0]
+    assert stats["api_calls"] == 3
+    assert stats["error_type"] == "AgentRuntimeError"

@@ -144,6 +144,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = getattr(workflow, args.command)(project)
         print(result.model_dump_json(indent=2))
         return 0 if result.outcome.value not in {"FAILED", "PARTIAL"} else 1
+    except KeyboardInterrupt:
+        print(
+            json.dumps(
+                {"error": "KeyboardInterrupt", "message": "experiment interrupted"}
+            ),
+            file=sys.stderr,
+        )
+        return 130
     except Exception as exc:  # CLI 边界只返回简短、机器可读的错误。
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}), file=sys.stderr)
         return 2

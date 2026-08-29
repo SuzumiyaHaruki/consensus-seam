@@ -1,41 +1,53 @@
 # Python 代码冗余审计
 
-审计日期：2026-08-27
+审计日期：2026-08-29
 
 ## 结论
 
-本轮没有发现无引用模块、重复模型或可以直接删除而不改变行为的生产代码。新增的生成后修复流程没有复制 Analyzer，也不会重新执行能力分析；运行时只调用 Transformer 和 Reviewer。
+本轮没有发现无引用的生产模块、完全重复的生产函数或第二套能力模型。已删除
+未被工作流调用的 `route_review`，并合并了一处分支重复校验。PDF 及其生成脚本
+已移到仓库外的 `/home/nitro/Desktop/ConsensusSeam展示材料/`。
 
-审计中已经清理以下重复实现：
+Agent 2 在不同能力实现单元中收到完整分析报告、能力规范和修改策略属于有意
+保留：这些内容为模型提供源码修改所需的完整上下文，不能因文本看起来重复就
+截断。结构化输出校验失败后的第二次尝试也继续携带完整原任务和上次输出。
 
-- 项目清单与生成后检查清单共用 capability check 校验；
-- 两类清单共用 evaluator-only fixture 的路径解析和安全检查；
-- `patch`、`run` 与 `repair` 共用候选格式化、构建、补丁统计和 Reviewer 调用；
-- 普通验证与后置验证共用 capability check 转换和 fixture 物化逻辑；
-- Verifier 将“无 fixture 的构建/原测试”和“有 fixture 的能力检查”拆开复用，避免后置测试被重复执行或误判成原测试回归。
-- 工作流与工具预算测试复用已有 Fake Runtime 和响应构造器，删除重复的 Agent 调用与 Chat Completion JSON 样板。
+## 已清理或收紧的内容
 
-## 刻意保留的相似代码
+- 作废候选统一删除顶层补丁、接口、Reviewer、统计和验证报告，只在日志中
+  保留作废原因；终态不再重新制造空补丁。
+- `runs/latest/<project>/` 排除所有生成 worktree；只有结果明确为 `PASS` 或
+  `REPAIRED` 且存在补丁时，`APPLY.md` 才给出应用命令。
+- 生成后 `repair` 只接受 Reviewer 已通过且工作流结果可用的候选；消息捕获
+  与注入共享 Controller 时继续作为一个实现单元修订。
+- 删除旧的单条 `suggested_direction` 输出字段；读取旧报告时只做一次迁移，
+  不向新 Agent schema 暴露旧字段。
+- Agent 工具不再反复运行无过滤的 Go 包测试。此前 HashiCorp 目标上出现过
+  四次 120 秒全测试超时，因此工具层只允许精确 `TestName`；完整回归仍由
+  Controller/Verifier 执行。
 
-### BaselineVerifier 与候选 Verifier
+## 刻意保留的相似结构
 
-二者都会执行构建和原测试，但输出模型和失败含义不同：原仓库失败统一记为 `BASELINE_FAILED`，候选失败需要区分 `BUILD_FAILED` 与 `REGRESSION_FAILED` 并参与 Agent 路由。当前保留两个短入口比引入带模式参数的通用函数更清楚。
-
-### 首次生成循环与 repair 循环
-
-两个循环都有 Transformer、Reviewer 和确定性验证，但状态语义不同。首次生成允许 Reviewer 将分类问题退回 Analyzer；`repair` 必须复用已有候选，且不得重新运行 Analyzer。二者只共享无状态步骤，不合并状态机，避免一个布尔参数改变研究流程。
-
-### materialized_verification_fixtures
-
-该函数只是已有调用方的兼容入口，实际复制和清理工作已经委托给通用 `materialized_fixtures`，不包含第二份实现。
+- `BaselineVerifier` 与候选 Verifier 的失败含义和输出不同，保留两个短入口。
+- 首次生成允许回到 Analyzer；`repair` 明确禁止重新分析。两套状态机只共享
+  无状态步骤，不用模式布尔值强行合并。
+- `materialized_verification_fixtures` 是旧调用方兼容入口，实际实现委托给
+  `materialized_fixtures`。
+- Analyzer、Transformer、Reviewer 的短构造函数形状相同，但分别绑定不同
+  输出模型、Prompt 和工具权限，不值得增加抽象层。
 
 ## 剩余维护风险
 
-`consensus_seam/workflow.py` 目前是最大的 Python 文件。它的主要体积来自显式状态转移和失败路由，不属于同代码块复制；消息捕获与注入共享一次 Transformer 调用，其余能力仍复用同一逐项循环，没有新增第二套编排。如果以后增加第五种工作流，应优先按“首次生成”和“生成后修复”拆分编排模块，而不是继续扩展该文件。
+`consensus_seam/workflow.py` 仍是最大文件，体积来自显式的生成、重分析、复审
+和可选 repair 状态转移。当前未发现可安全删除的重复状态分支；继续增加新的
+工作流种类时，应再考虑按首次生成与生成后修复拆分模块。测试代码主要覆盖
+终止、候选继承、审计导出和工具边界，没有增加目标协议专用测试矩阵。
 
-## 验证
+## 验证与规模
 
-- `pytest`：70 项通过；
+- `pytest`：80 项通过；
+- `python -m compileall -q consensus_seam tests`：通过；
+- `python -m consensus_seam --help`：通过；
 - `git diff --check`：通过；
-- `python3 -m compileall -q consensus_seam`：通过；
-- 当前生产 Python 文件共 5204 个物理行，其中 `workflow.py` 为 1129 行。
+- 生产 Python：5556 个物理行，其中 `workflow.py` 1275 行；
+- Controller 测试 Python：3159 个物理行。

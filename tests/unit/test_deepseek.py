@@ -5,8 +5,11 @@ from io import BytesIO
 from typing import Any
 from urllib.error import HTTPError
 
+import pytest
+
 import consensus_seam.llm.deepseek as deepseek_module
 from consensus_seam.llm.deepseek import DeepSeekClient
+from consensus_seam.llm.base import AgentRuntimeError
 from consensus_seam.models import AgentModelConfig
 
 
@@ -82,3 +85,32 @@ def test_deepseek_client_retries_429_with_bounded_backoff(monkeypatch: Any) -> N
     assert response["_consensus_seam_http_attempts"] == 2
     assert attempts == 2
     assert delays == [0.25]
+
+
+def test_deepseek_client_reports_attempts_when_every_retry_fails(
+    monkeypatch: Any,
+) -> None:
+    attempts = 0
+
+    def fake_urlopen(request: Any, timeout: float) -> FakeHTTPResponse:
+        nonlocal attempts
+        attempts += 1
+        raise HTTPError(
+            request.full_url,
+            500,
+            "server error",
+            {},
+            BytesIO(b'{"error":"unavailable"}'),
+        )
+
+    monkeypatch.setattr(deepseek_module, "urlopen", fake_urlopen)
+    client = DeepSeekClient("secret", max_attempts=3, sleep=lambda _: None)
+    with pytest.raises(AgentRuntimeError) as captured:
+        client.create_chat_completion(
+            model=AgentModelConfig(model="deepseek-v4-flash"),
+            messages=[{"role": "user", "content": "hello"}],
+            tools=None,
+            response_format=None,
+        )
+    assert attempts == 3
+    assert captured.value.http_attempts == 3

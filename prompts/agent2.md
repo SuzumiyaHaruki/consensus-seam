@@ -33,7 +33,10 @@ Every controller needs an externally callable constructor and complete wiring
 example. Constructor parameters are target-specific, but use the fixed names
 `NewMessageController`, `NewRandomController`, `NewTimeController`, and
 `NewLifecycleController`. Keep the controller inactive by default so ordinary
-production behavior is unchanged.
+production behavior is unchanged. Install time and randomness control before
+the target can start autonomous protocol work or make its first controlled
+choice. A same-package test switch or a best-effort post-start attachment does
+not satisfy an external public construction path.
 
 When message control is selected, implement one authoritative,
 thread-safe `MessageController` that:
@@ -42,7 +45,7 @@ thread-safe `MessageController` that:
   including distinct requests and responses, with no competing consumer;
 - exports `MessageHandle`, `MessageKind`, `PendingMessage`, `Pending`, `Drop`,
   `Clear`, `Inject`, the constructor, and the three classified errors required by
-  the specification;
+  the specification; `MessageKind` uses underlying type `string`;
 - expands broadcast per target and preserves stable controller acceptance order;
 - stores Source, Target, Kind, typed native content, private routing resources,
   and any response continuation needed for normal delivery;
@@ -57,6 +60,10 @@ thread-safe `MessageController` that:
 - separately captures any protocol response with a new handle and reversed
   routing, preserving synchronous callers, channels, and futures.
 
+A copy or stream-buffer failure must be observable. Never forward an original
+that may already be partially consumed or aliased, and never lose the original
+exchange completion mechanism on an error path.
+
 Do not add `Take`, exposed mutable cache state, message mutation, redirection,
 duplication, fabrication, selection policy, acknowledgements, commit waiting, or
 wait-for-quiescence behavior.
@@ -65,13 +72,16 @@ For time, implement the system facade `TimeController.Advance`. In controlled
 mode only `Advance` progresses protocol time, each step advances every running
 node one unit, and `Advance(n)` processes intermediate steps. Reuse native Tick
 or inject a shared virtual clock without changing timeout ordering or directly
-manufacturing protocol outcomes.
+manufacturing protocol outcomes. Each internal step must expose the same boundary
+as a separate `Advance(1)`, including timers re-armed in reaction to earlier
+steps.
 
 For randomness, route every selected in-scope choice through the owning
 node/component `RandomController`. Keep legal domains and the original algorithm;
 same seed and draw order reproduce the sequence, repeated choices still vary,
 and `Choices` returns deep-copied final semantic values before dependent test
-actions need them.
+actions need them. Use one controller per owner, or include the concrete target-
+native owner in every choice returned by an aggregated controller.
 
 For lifecycle, expose all five methods even if a target cannot safely implement
 all five. Attempt each operation and label its actual change scope in `notes` as
@@ -80,7 +90,11 @@ allowed when default-disabled and semantics-preserving. A method that would
 require core semantic changes returns `ErrLifecycleUnsupported`; do not fake it.
 Keep MessageController entries across lifecycle changes, exclude unavailable
 nodes from time advancement, distinguish Stop recovery from Crash recovery, and
-leave post-restart catch-up to the protocol and test.
+leave post-restart catch-up to the protocol and test. After Crash returns no old
+execution context may process work or mutate state, an application state machine,
+or storage. Restart must replace the old runtime in every active controller,
+discard stale timers and hooks, and keep pending-message and deterministic
+control ownership usable.
 
 For observation, reuse an existing safe typed API or add only a thread-safe,
 side-effect-free deep snapshot accessor. Do not add a universal state schema or
@@ -94,7 +108,12 @@ use a leading `// Requires:` for assumed typed variables and no ellipsis.
 
 Add only the smallest focused Go tests required for generated behavior. Do not
 rewrite existing target tests, duplicate coverage, or generate matrices. After
-two failed patches to one file, reread the exact range. Stop when the candidate
+two failed patches to one file, reread the exact range. During the tool loop,
+never run an unfiltered package test suite: use `go_test_compile` for compilation
+and `go_test` with one exact `TestName` or a short `TestName|TestName` alternation
+for generated behavior, without regex wildcards or embedded CLI flags.
+Package-wide regression is a later Controller/Verifier responsibility and must
+not be repeated per capability. Stop when the candidate
 compiles and the necessary focused checks pass. If implementation proves that a
 selected capability requires core semantic changes, return
 `INVASIVE_REDISCOVERED` rather than continuing indefinitely.

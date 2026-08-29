@@ -52,6 +52,10 @@ class ChatCompletionClient(Protocol):
 class AgentRuntimeError(RuntimeError):
     """模型 transport 或工具循环无法返回有效响应时抛出。"""
 
+    def __init__(self, message: str, *, http_attempts: int = 0) -> None:
+        super().__init__(message)
+        self.http_attempts = http_attempts
+
 
 # 保留异常别名只影响 import 兼容性，不恢复已删除的旧文本客户端行为。
 LLMClientError = AgentRuntimeError

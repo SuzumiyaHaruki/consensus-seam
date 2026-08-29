@@ -134,8 +134,15 @@ class ConsensusWorkflow:
         completed = False
         try:
             result = operation(artifacts)
+            artifacts.write_model("workflow-result.json", result)
             completed = True
             return result
+        except KeyboardInterrupt:
+            # 用户主动终止时同样保留明确的 INCOMPLETE 标记和文档警告，
+            # 但绝不发布 latest。KeyboardInterrupt 不属于 Exception，必须
+            # 单独处理。
+            artifacts.mark_incomplete("KeyboardInterrupt")
+            raise
         except Exception as exc:
             artifacts.mark_incomplete(type(exc).__name__)
             raise
@@ -205,6 +212,30 @@ class ConsensusWorkflow:
             run_config = json.loads(read_text("run-config.json"))
         except ValueError as exc:
             raise RepairInputError(f"invalid repair source artifacts: {exc}") from exc
+        if (run_directory / "failure.json").is_file():
+            raise RepairInputError("repair source run is incomplete")
+        result_path = run_directory / "workflow-result.json"
+        if result_path.is_file():
+            try:
+                source_result = WorkflowResult.model_validate_json(
+                    result_path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                raise RepairInputError(
+                    f"invalid repair source workflow-result.json: {exc}"
+                ) from exc
+            if source_result.outcome not in {
+                WorkflowOutcome.PASS,
+                WorkflowOutcome.REPAIRED,
+            }:
+                raise RepairInputError(
+                    "repair source workflow did not produce a passed candidate: "
+                    + source_result.outcome.value
+                )
+        if review_report.overall is not ReviewOverall.PASS:
+            raise RepairInputError(
+                "repair source candidate did not pass independent review"
+            )
         patch = read_text("changes.patch")
         if not patch.strip():
             raise RepairInputError("repair source changes.patch is empty")
@@ -285,7 +316,12 @@ class ConsensusWorkflow:
 
         check_configs = posthoc.manifest.capability_checks
         checks = self._capability_checks(check_configs)
-        repair_capabilities = {item.capability for item in check_configs}
+        checked_capabilities = {item.capability for item in check_configs}
+        repair_capabilities = self._repair_transform_capabilities(
+            checked_capabilities,
+            report,
+            current_interface,
+        )
 
         initial = GitWorktree.create(
             project.repository,
@@ -303,7 +339,7 @@ class ConsensusWorkflow:
             project,
             initial,
             checks=checks,
-            required_capabilities=repair_capabilities,
+            required_capabilities=checked_capabilities,
             fixtures=posthoc.verification_fixtures,
         )
         artifacts.write_model("verification-report.json", initial_verification)
@@ -426,7 +462,18 @@ class ConsensusWorkflow:
                 invocation_id=f"reviewer-repair-p{repair_round}",
             )
             if review.overall is ReviewOverall.REVISE_AGENT2:
-                feedback = review.model_dump(mode="json")
+                feedback = {
+                    "failure": "REVIEW_REVISE_AGENT2",
+                    "review": review.model_dump(mode="json"),
+                    "prior_interface_report": current_interface.model_dump(
+                        mode="json", exclude_none=True
+                    ),
+                    "instruction": (
+                        "The reviewed repair candidate is already applied in the "
+                        "fresh worktree. Resolve every blocking implementation issue "
+                        "without changing evaluator-provided tests."
+                    ),
+                }
                 continue
             if review.overall is not ReviewOverall.PASS:
                 self._write_unresolved(artifacts, report, project)
@@ -440,7 +487,7 @@ class ConsensusWorkflow:
                 project,
                 worktree,
                 checks=checks,
-                required_capabilities=repair_capabilities,
+                required_capabilities=checked_capabilities,
                 fixtures=posthoc.verification_fixtures,
             )
             artifacts.write_model("verification-report.json", verification)
@@ -530,6 +577,11 @@ class ConsensusWorkflow:
             )
 
         agent1_feedback: dict[str, Any] | None = None
+        reanalysis_review: ReviewReport | None = None
+        # 候选和接口报告必须跨 Agent 1 重分析轮次存活。每轮仍创建干净
+        # worktree，但会先重放这份 Git patch，避免从目标 HEAD 重新生成。
+        prior_candidate_patch: str | None = None
+        prior_interface_report: InterfaceReport | None = None
         limits = project.manifest.limits
         for analysis_round in range(1, limits.agent1_reanalysis_rounds + 1):
             if analysis_round > 1:
@@ -541,23 +593,69 @@ class ConsensusWorkflow:
                     invocation_id=f"analyzer-a{analysis_round}",
                 )
                 artifacts.write_model("capability-report.json", report)
-                artifacts.write_usage(report)
-                if not self._selected_patchable(project, report):
+                available = self._selected_patchable(project, report)
+                if not available:
+                    if prior_candidate_patch is not None:
+                        artifacts.discard_candidate(
+                            "REANALYSIS_FOUND_NO_PATCHABLE_CAPABILITY"
+                        )
+                        artifacts.write_usage(report)
                     self._write_unresolved(artifacts, report, project)
                     return WorkflowResult(
                         outcome=WorkflowOutcome.NO_PATCH_NEEDED,
                         run_directory=artifacts.run_directory,
                         reason="Reanalysis found no safely patchable capability",
                     )
+                if prior_interface_report is not None:
+                    incompatible = set(prior_interface_report.capabilities()) - available
+                    if incompatible:
+                        # 重新分析把一个已经写入候选的完整能力降为非
+                        # PATCHABLE。单份 Git patch 无法可靠拆分能力归属，此时
+                        # 才丢弃整个候选，避免保留已被判定不安全的代码。
+                        artifacts.write_json(
+                            f"logs/discarded-after-reanalysis-a{analysis_round}.json",
+                            {
+                                "reason": "CAPABILITY_NO_LONGER_PATCHABLE",
+                                "capabilities": sorted(incompatible),
+                            },
+                        )
+                        artifacts.discard_candidate(
+                            "CAPABILITY_NO_LONGER_PATCHABLE",
+                            capabilities=sorted(incompatible),
+                        )
+                        prior_candidate_patch = None
+                        prior_interface_report = None
+                # 重分析期间也保留上一版生成接口的阶段性说明；若运行被中止，
+                # mark_incomplete 会再加上显式警告。
+                artifacts.write_usage(report, prior_interface_report)
 
             requested_reanalysis = False
             agent2_feedback: dict[str, Any] | None = None
-            # build、Reviewer 或 Verifier 要求 Agent 2 修订时，下一轮仍从
-            # clean HEAD 创建 worktree，但先重放上一版候选。这样保留已审查
-            # 的接口设计，同时不继承原工作目录中的非 Git 残留状态。
-            prior_candidate_patch: str | None = None
-            prior_interface_report: InterfaceReport | None = None
-            selected_capabilities = self._selected_patchable(project, report)
+            available = self._selected_patchable(project, report)
+            selected_capabilities = available
+            if (
+                prior_candidate_patch is not None
+                and prior_interface_report is not None
+                and reanalysis_review is not None
+            ):
+                selected_capabilities = self._review_revision_capabilities(
+                    reanalysis_review,
+                    available=available,
+                )
+                agent2_feedback = {
+                    "failure": "REVIEW_REVISE_AGENT1",
+                    "review": reanalysis_review.model_dump(mode="json"),
+                    "prior_interface_report": prior_interface_report.model_dump(
+                        mode="json", exclude_none=True
+                    ),
+                    "instruction": (
+                        "The Analyzer has revised its findings. The reviewed "
+                        "candidate is already applied in this fresh worktree. "
+                        "Reconcile only the implicated capabilities with the new "
+                        "report, preserve valid interfaces, and remove or mark "
+                        "unsupported any implementation the new analysis rejects."
+                    ),
+                }
             for patch_round in range(1, limits.agent2_patch_rounds + 1):
                 # 每个 patch round 都从目标 HEAD 创建全新 worktree，失败候选
                 # 的残留文件不会进入下一轮。
@@ -604,7 +702,11 @@ class ConsensusWorkflow:
                     prior_candidate_patch = None
                     prior_interface_report = None
                     artifacts.write_model("capability-report.json", report)
-                    artifacts.write_usage(report, interface_report)
+                    artifacts.discard_candidate(
+                        "INVASIVE_REDISCOVERED",
+                        capabilities=sorted(rediscovered),
+                    )
+                    artifacts.write_usage(report)
                     artifacts.write_json(
                         f"logs/discarded-a{analysis_round}-p{patch_round}.json",
                         {
@@ -614,7 +716,6 @@ class ConsensusWorkflow:
                         },
                     )
                     if not self._selected_patchable(project, report):
-                        artifacts.write_text("changes.patch", "")
                         self._write_unresolved(artifacts, report, project)
                         return WorkflowResult(
                             outcome=WorkflowOutcome.PARTIAL,
@@ -646,6 +747,10 @@ class ConsensusWorkflow:
                     )
                     prior_candidate_patch = None
                     prior_interface_report = None
+                    artifacts.discard_candidate(
+                        "EXISTING_TEST_MODIFIED",
+                    )
+                    artifacts.write_usage(report)
                     agent2_feedback = {
                         "failure": "EXISTING_TEST_MODIFIED",
                         "files": protected_tests,
@@ -715,6 +820,8 @@ class ConsensusWorkflow:
                 if review.overall is ReviewOverall.REVISE_AGENT1:
                     # 语义边界/能力分类错误才回到 Analyzer。
                     agent1_feedback = review.model_dump(mode="json")
+                    reanalysis_review = review
+                    prior_interface_report = interface_report
                     requested_reanalysis = True
                     break
                 if review.overall is ReviewOverall.REVISE_AGENT2:
@@ -947,6 +1054,24 @@ class ConsensusWorkflow:
             selected |= available & message_control
         return selected
 
+    @staticmethod
+    def _repair_transform_capabilities(
+        checked: set[str],
+        report: CapabilityReport,
+        interface_report: InterfaceReport,
+    ) -> set[str]:
+        """repair 消息任一侧时，同步修订已实现且 PATCHABLE 的另一侧。"""
+
+        selected = set(checked)
+        message_control = {"message_capture", "message_injection"}
+        if selected & message_control:
+            selected |= (
+                set(interface_report.capabilities())
+                & report.patchable()
+                & message_control
+            )
+        return selected
+
     def _transform_selected_capabilities(
         self,
         project: LoadedProject,
@@ -967,13 +1092,7 @@ class ConsensusWorkflow:
         """
 
         combined: InterfaceReport | None = None
-        remaining = set(selected_capabilities)
-        units: list[tuple[str, set[str]]] = []
-        message_control = {"message_capture", "message_injection"}
-        if message_control <= remaining:
-            units.append(("message_control", message_control))
-            remaining -= message_control
-        units.extend((capability, {capability}) for capability in sorted(remaining))
+        units = self._ordered_transform_units(selected_capabilities)
 
         for unit_name, capabilities in units:
             partial = transformer.transform(
@@ -996,6 +1115,33 @@ class ConsensusWorkflow:
         if combined is None:
             raise ValueError("Transformer requires at least one selected capability")
         return combined
+
+    @staticmethod
+    def _ordered_transform_units(
+        selected_capabilities: set[str],
+    ) -> list[tuple[str, set[str]]]:
+        """按依赖顺序组织实现单元，生命周期最后完成跨 Controller 接线。"""
+
+        remaining = set(selected_capabilities)
+        units: list[tuple[str, set[str]]] = []
+        message_control = {"message_capture", "message_injection"}
+        if message_control <= remaining:
+            units.append(("message_control", message_control))
+            remaining -= message_control
+        priority = (
+            "message_capture",
+            "message_injection",
+            "randomness_control",
+            "time_control",
+            "observation",
+            "lifecycle_control",
+        )
+        for capability in priority:
+            if capability in remaining:
+                units.append((capability, {capability}))
+                remaining.remove(capability)
+        units.extend((capability, {capability}) for capability in sorted(remaining))
+        return units
 
     def _agents(
         self,

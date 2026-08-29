@@ -29,7 +29,7 @@ Agent 1 对每项能力保留原有六种分类：
 
 v0.1 明确只面向 Go 共识实现。人工只定义系统边界，不需要预先知道目标有哪些实现路径。Agent 1 从源码发现边界内所有实质不同的公开路径；Agent 2 必须覆盖所有能够通过缓存、薄包装、hook 或依赖注入低侵入完成的路径，不能只实现最方便或项目自用测试的一条。确实需要改变协议语义的路径才保留为未覆盖并说明原因。
 
-一条路径表示测试方通过一组一致的公开输入输出边界、缓存或目标所有权和控制方式驱动系统。不同公开节点 API、输入输出边界或同步/异步控制面通常是不同路径；消息类型、helper、文件和到达同一控制面的内部条件分支不是不同路径。
+一条路径表示测试方通过一组一致的公开输入输出边界、缓存或目标所有权和控制方式驱动系统。不同公开节点 API、输入输出边界或同步/异步控制面通常是不同路径；消息类型、timer 位置、随机调用点、helper、文件和到达同一控制面的内部条件分支不是不同路径。路径必须从测试方能够构造或调用的公开控制面开始。
 
 ## 三个 Agent 与控制器
 
@@ -56,7 +56,9 @@ Analyzer 必须区分底层原语与完整测试接口。消息控制要求边�
 时间控制通过系统级 `Advance` 手动推进所有运行节点；随机性通过 seed 重现
 可变化的选择序列并记录实际语义值。生命周期明确区分 Pause/Resume、正常
 Stop、突然 Crash 和 Restart；窄且默认关闭的核心 hook 可以低侵入实现，
-会改变协议或持久化语义的操作则公开返回 `ErrLifecycleUnsupported`。外部输入
+会改变协议或持久化语义的操作则公开返回 `ErrLifecycleUnsupported`。时间和
+随机控制必须在异步运行开始前安装；Restart 必须更新所有 Controller 的运行
+实例绑定；Crash 返回后旧执行上下文不能继续修改状态或存储。外部输入
 只做已有工作入口发现，状态观察优先复用安全的目标原生类型化接口。完整
 合同和逐项边界见 `docs/capabilities.md`。
 
@@ -142,9 +144,6 @@ consensus-seam/                         # 仓库根目录
 │   ├── design-analysis.md             # 研究目标、路径、分工和 repair 边界
 │   ├── required-materials.md          # 新目标与正式实验所需材料
 │   └── redundancy-audit.md            # Python 冗余审计与清理记录
-├── presentation/                      # 展示材料
-│   ├── ConsensusSeam_etcd实验展示.pdf # 当前架构与 etcd 实验展示
-│   └── generate_demo_pdf.py           # ReportLab 可重复生成脚本
 ├── tests/                             # Controller 测试，不是目标协议测试
 │   ├── unit/                          # 模型、配置、Prompt、路由、LLM、工具、报告
 │   ├── integration/                   # 工作流、worktree、Go 符号、fixture、修订闭环

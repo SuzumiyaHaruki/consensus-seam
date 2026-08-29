@@ -8,7 +8,8 @@ capabilities:
       behavior is unchanged when no controller is configured.
     testing_contract:
       fixed_surface: >
-        Provide MessageHandle, MessageKind, PendingMessage, MessageController,
+        Provide MessageHandle, MessageKind with underlying type string,
+        PendingMessage, MessageController,
         NewMessageController(...), Pending() []PendingMessage,
         Drop(handle MessageHandle) error, and Clear(). MessageHandle is a struct
         backed by an unexported uint64 identity, stable while pending, and invalid
@@ -54,6 +55,10 @@ capabilities:
         from source; do not assume a fixed architecture or path count. Every
         relevant public route that can be completed without changing protocol
         semantics must receive the same complete controller behavior.
+      copy_failure: >
+        A failed copy or stream-buffer operation must be observable and must not
+        continue with a partially consumed or aliased original. Preserve the
+        original exchange completion mechanism on every failure path.
 
   message_injection:
     description: >
@@ -93,6 +98,11 @@ capabilities:
         Provide TimeController, NewTimeController(...), and
         Advance(steps uint64) error. Constructor parameters use concrete target
         types and wire all controlled nodes or components.
+      installation_boundary: >
+        Complete control must be installed before the target can start protocol
+        goroutines, timers, callbacks, or other autonomous work. A post-start
+        hook with an unavoidable uncontrolled window is incomplete for an
+        external consumer, even when same-package tests can suppress startup.
       manual_progress: >
         In controlled mode protocol time does not progress without Advance.
         Pending, Inject, Drop, Clear, observation, and external input never advance
@@ -100,7 +110,9 @@ capabilities:
       step_semantics: >
         One step advances every running node by one target-defined unit.
         Advance(n) is equivalent to n calls of Advance(1); do not skip intermediate
-        timers. Submit each due event through the target's normal timeout path.
+        timers. Each step has the same boundary as a separate call, including
+        timer re-arming caused by earlier steps. Submit each due event through
+        the target's normal timeout path.
       implementation_forms: >
         A target may map each step to a native logical Tick or to one increment of
         a shared virtual clock. Missing Tick or edits across several files are not
@@ -124,12 +136,20 @@ capabilities:
         ...), and Choices() []RandomChoice. RandomChoice contains a stable semantic
         Name and a concrete target-typed Value; TargetRandomValue is a type slot,
         not a literal name.
+      installation_boundary: >
+        Install control before the target can make its first in-scope choice. A
+        post-start hook with an unavoidable uncontrolled draw is incomplete for
+        an external consumer.
       scope: >
         Give each controlled node or component its own controller. Control hidden
         non-cryptographic choices that affect protocol state or test timing.
         Exclude cryptography, peripheral identifiers, test-data generation, and
         choices already fully visible through another controlled interface and
         relevant only to peripheral scheduling. Use NOT_APPLICABLE when none exist.
+      choice_ownership: >
+        Every recorded choice is unambiguously attributable to its controlled
+        node or component. A controller dedicated to one owner may omit an Owner
+        field; an aggregated controller must expose a concrete target-native owner.
       reproducibility: >
         The same seed and random-call order produce the same sequence. Repeated
         decisions or resets draw the next value rather than reusing one constant.
@@ -172,7 +192,9 @@ capabilities:
         Crash stops activity without an extra protocol-state flush, discards the
         runtime and volatile state, and retains only state already durable under
         target semantics. Pause, graceful stop, isolation, and whole-memory
-        preservation are not Crash.
+        preservation are not Crash. After Crash returns, no abandoned execution
+        context may process protocol work, emit output, or mutate volatile state,
+        an application state machine, or durable storage.
       restart: >
         Record whether the node was stopped or crashed. Restart with the same
         identity and configuration through normal recovery: post-stop state after
@@ -182,7 +204,10 @@ capabilities:
         Messages already pending in MessageController survive lifecycle changes.
         Inject to an unavailable node fails and preserves the entry. Internal
         unprocessed queues are volatile on Crash. Paused, stopped, and crashed
-        nodes do not receive TimeController steps.
+        nodes do not receive TimeController steps. Restart replaces the old runtime
+        binding in every active message, time, randomness, and lifecycle controller;
+        stale hooks and timers are discarded while pending-message and deterministic
+        control ownership remain usable.
       change_scope: >
         Attempt all five operations. Label each implementation facade_only when it
         only wraps existing public behavior, core_hook when a narrow no-op-by-default
@@ -226,8 +251,9 @@ capabilities:
         Include commands, replicated logs, transactions, ordinary reads, and
         requests to replicate membership changes. Exclude protocol messages,
         lifecycle, time, observation, applying committed results, bootstrap,
-        restore, diagnostics, and administration unless the target explicitly
-        defines them as normal workload.
+        restore, barriers, status or configuration queries, leadership checks,
+        diagnostics, and administration unless the target explicitly defines
+        them as normal workload.
       documentation: >
         For every public entrypoint list category, symbol, concrete input type,
         preconditions, acceptance or completion semantics, result mechanism, a

@@ -254,8 +254,14 @@ class CapabilitySpec(StrictModel):
     @model_validator(mode="after")
     def require_v0_capabilities(self) -> "CapabilitySpec":
         missing = CAPABILITY_NAMES - self.capabilities.keys()
-        if missing:
-            raise ValueError(f"capability spec is missing: {', '.join(sorted(missing))}")
+        extra = self.capabilities.keys() - CAPABILITY_NAMES
+        if missing or extra:
+            details = []
+            if missing:
+                details.append("missing: " + ", ".join(sorted(missing)))
+            if extra:
+                details.append("unexpected: " + ", ".join(sorted(extra)))
+            raise ValueError("invalid capability spec (" + "; ".join(details) + ")")
         return self
 
 
@@ -328,7 +334,6 @@ class CapabilityFinding(StrictModel):
     gap: str | None = None
     reason: str | None = None
     limitations: list[str] = Field(default_factory=list)
-    suggested_direction: str | None = None
     entrypoints: list[str] = Field(default_factory=list)
     usage_examples: list[str] = Field(
         default_factory=list,
@@ -368,6 +373,18 @@ class CapabilityFinding(StrictModel):
     )
     obligations: dict[str, "ObligationAssessment"] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_suggested_direction(cls, data: object) -> object:
+        """旧报告的单条方向迁移到当前 suggested_changes 列表。"""
+
+        if isinstance(data, dict) and "suggested_direction" in data:
+            data = dict(data)
+            direction = data.pop("suggested_direction", None)
+            if direction and not data.get("suggested_changes"):
+                data["suggested_changes"] = [direction]
+        return data
+
     @model_validator(mode="after")
     def require_supporting_explanation(self) -> "CapabilityFinding":
         # 正向声称必须有代码证据；UNKNOWN/INVASIVE 至少要说明为什么无法
@@ -391,10 +408,15 @@ class CapabilityFinding(StrictModel):
             if self.gap:
                 raise ValueError("SUPPORTED capability cannot declare a gap")
         if self.status is CapabilityStatus.PATCHABLE:
-            if self.existing_test_interface_complete:
-                raise ValueError("PATCHABLE cannot have a complete existing test interface")
             if not self.suggested_changes:
                 raise ValueError("PATCHABLE requires suggested_changes")
+        if (
+            self.status is not CapabilityStatus.SUPPORTED
+            and self.existing_test_interface_complete
+        ):
+            raise ValueError(
+                f"{self.status.value} cannot have a complete existing test interface"
+            )
         return self
 
 
@@ -429,6 +451,16 @@ class CapabilityReport(StrictModel):
         ):
             raise ValueError(
                 "SUPPORTED message_injection requires SUPPORTED message_capture"
+            )
+        if (
+            self.capabilities["message_injection"].status
+            is CapabilityStatus.PATCHABLE
+            and self.capabilities["message_capture"].status
+            not in {CapabilityStatus.SUPPORTED, CapabilityStatus.PATCHABLE}
+        ):
+            raise ValueError(
+                "PATCHABLE message_injection requires SUPPORTED or PATCHABLE "
+                "message_capture"
             )
         self._validate_lifecycle_obligations()
         self._validate_external_input_obligations()
@@ -478,6 +510,18 @@ class CapabilityReport(StrictModel):
         ):
             raise ValueError(
                 "SUPPORTED lifecycle_control requires pause, stop, crash, and restart boundaries"
+            )
+        if finding.status is CapabilityStatus.SUPPORTED and any(
+            states[name]
+            not in {ObligationStatus.SATISFIED, ObligationStatus.NOT_APPLICABLE}
+            for name in {
+                "state_ownership_defined",
+                "persistent_volatile_semantics_defined",
+            }
+        ):
+            raise ValueError(
+                "SUPPORTED lifecycle_control requires defined or not-applicable "
+                "state ownership and persistence semantics"
             )
 
     def _validate_external_input_obligations(self) -> None:
@@ -537,7 +581,6 @@ class InterfaceCapability(StrictModel):
     rediscovered_status: Literal["INVASIVE_REDISCOVERED"] | None = None
     capture_boundary: CodeLocation | None = None
     pending_store: CodeLocation | None = None
-    entrypoint: CodeLocation | None = None
     public_entrypoints: list[CodeLocation] = Field(
         default_factory=list,
         description=(
@@ -591,13 +634,14 @@ class InterfaceCapability(StrictModel):
 
     @model_validator(mode="before")
     @classmethod
-    def discard_legacy_message_fields(cls, data: object) -> object:
-        """读取旧实验报告，但不再把旧 ID/串行字段暴露给 Agent。"""
+    def migrate_legacy_interface_fields(cls, data: object) -> object:
+        """读取旧报告，但不再把旧字段暴露给新 Agent schema。"""
 
-        if isinstance(data, dict) and (
-            "message_id_scope" in data or "controller_operations" in data
-        ):
+        if isinstance(data, dict):
             data = dict(data)
+            entrypoint = data.pop("entrypoint", None)
+            if entrypoint is not None and not data.get("public_entrypoints"):
+                data["public_entrypoints"] = [entrypoint]
             data.pop("message_id_scope", None)
             data.pop("controller_operations", None)
         return data
@@ -608,6 +652,10 @@ class InterfaceCapability(StrictModel):
             raise ValueError("an implemented capability cannot be rediscovered as invasive")
         if not self.implemented and self.rediscovered_status is None:
             raise ValueError("an unimplemented PATCHABLE capability needs rediscovered_status")
+        if self.implemented and not self.public_entrypoints:
+            raise ValueError(
+                "an implemented capability requires a consumer-callable entrypoint"
+            )
         return self
 
 

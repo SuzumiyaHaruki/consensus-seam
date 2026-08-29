@@ -12,16 +12,34 @@ def test_publish_latest_tracks_audit_files_but_excludes_worktree(tmp_path: Path)
     first.write_json("run-config.json", {"project": "mini-raft"})
     first.write_json("capability-report.json", {"target": "first"})
     first.write_text("changes.patch", "first patch\n")
+    first.write_json(
+        "workflow-result.json",
+        {
+            "outcome": "PASS",
+            "run_directory": str(first.run_directory),
+            "reason": None,
+        },
+    )
     first.write_json("logs/build.json", {"passed": True})
     worktree = first.run_directory / "patched-worktree"
     worktree.mkdir()
     (worktree / "generated.go").write_text("package generated\n", encoding="utf-8")
+    repair_candidate = first.run_directory / "repair-candidate"
+    repair_candidate.mkdir()
+    (repair_candidate / "generated.go").write_text(
+        "package generated\n", encoding="utf-8"
+    )
+    repaired = first.run_directory / "repaired-worktree-p1"
+    repaired.mkdir()
+    (repaired / "generated.go").write_text("package generated\n", encoding="utf-8")
 
     latest = first.publish_latest()
     assert (latest / "capability-report.json").is_file()
     assert (latest / "logs/build.json").is_file()
     assert (latest / "APPLY.md").is_file()
     assert not (latest / "patched-worktree").exists()
+    assert not (latest / "repair-candidate").exists()
+    assert not (latest / "repaired-worktree-p1").exists()
     assert latest == runs / "latest" / "mini-raft"
 
     second = ArtifactStore.create(runs)
@@ -30,7 +48,7 @@ def test_publish_latest_tracks_audit_files_but_excludes_worktree(tmp_path: Path)
     second.publish_latest()
     assert '"second"' in (latest / "capability-report.json").read_text()
     assert not (latest / "changes.patch").exists()
-    assert "应用最近一次已验证补丁" in (latest / "APPLY.md").read_text(
+    assert "没有可应用的已通过候选" in (latest / "APPLY.md").read_text(
         encoding="utf-8"
     )
 
@@ -79,7 +97,6 @@ def test_usage_report_covers_existing_and_generated_interfaces(tmp_path: Path) -
         {
             "message_injection": {
                 "implemented": True,
-                "message_id_scope": "test_session",
                 "entrypoint": {
                     "file": "injection_seam.go",
                     "symbol": "InjectForTest",

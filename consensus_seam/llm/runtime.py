@@ -227,7 +227,8 @@ class ToolCallingAgentRuntime:
                 return content
 
             raise AgentRuntimeError(f"Agent tool loop exceeded {self.max_steps} steps")
-        except Exception as exc:
+        except BaseException as exc:
+            api_calls += int(getattr(exc, "http_attempts", 0) or 0)
             error_type = type(exc).__name__
             raise
         finally:

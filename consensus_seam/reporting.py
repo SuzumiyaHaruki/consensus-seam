@@ -61,9 +61,6 @@ def _generated_locations(capability: object | None) -> list[str]:
         return []
     values: list[str] = []
     locations = list(getattr(capability, "public_entrypoints", ()))
-    if not locations:
-        legacy = getattr(capability, "entrypoint", None)
-        locations = [] if legacy is None else [legacy]
     for location in locations:
         if location is None:
             continue
@@ -114,6 +111,30 @@ class ArtifactStore:
         path = self._path(name)
         path.write_text(value, encoding="utf-8")
         return path
+
+    def discard_candidate(
+        self,
+        reason: str,
+        *,
+        capabilities: list[str] | None = None,
+    ) -> Path:
+        """清除已作废的顶层候选，只保留 logs 中的阶段性审计记录。"""
+
+        for name in (
+            "changes.patch",
+            "interface-report.json",
+            "review-report.json",
+            "patch-metrics.json",
+            "verification-report.json",
+        ):
+            self._path(name).unlink(missing_ok=True)
+        return self.write_json(
+            "logs/discarded-candidate.json",
+            {
+                "reason": reason,
+                "capabilities": sorted(capabilities or []),
+            },
+        )
 
     def mark_incomplete(self, error_type: str) -> Path:
         """标记异常中断的 run，避免阶段性报告被误认为最终接口说明。"""
@@ -396,8 +417,11 @@ class ArtifactStore:
                 locations = [
                     ("捕获位置", _format_location(generated.capture_boundary)),
                     ("Pending Store", _format_location(generated.pending_store)),
-                    ("调用入口", _format_location(generated.entrypoint)),
                 ]
+                locations.extend(
+                    ("公开入口", _format_location(entrypoint))
+                    for entrypoint in generated.public_entrypoints
+                )
                 present = [(label, value) for label, value in locations if value]
                 if present:
                     lines.extend(["### 本次生成接口", ""])
@@ -471,7 +495,7 @@ class ArtifactStore:
         return self.write_text("AUDIT.md", "\n".join(lines).rstrip() + "\n")
 
     def publish_latest(self) -> Path:
-        """原子替换 Git 跟踪的项目级 latest 审计导出。
+        """以可恢复的两阶段替换更新项目级 latest 审计导出。
 
         patched-worktree 可能包含完整目标仓库和未审核代码，既体积大又不适合
         上传；latest 只复制报告、最终 patch、统计和日志。每个项目拥有独立
@@ -483,6 +507,12 @@ class ArtifactStore:
         if not run_config_path.is_file():
             raise ValueError("cannot publish latest without run-config.json")
         run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+        result_path = self.run_directory / "workflow-result.json"
+        workflow_result = (
+            json.loads(result_path.read_text(encoding="utf-8"))
+            if result_path.is_file()
+            else None
+        )
         project_name = run_config.get("project")
         if (
             not isinstance(project_name, str)
@@ -498,7 +528,12 @@ class ArtifactStore:
         try:
             for source in self.run_directory.rglob("*"):
                 relative = source.relative_to(self.run_directory)
-                if any(part.startswith("patched-worktree") for part in relative.parts):
+                if any(
+                    part == "repair-candidate"
+                    or part.startswith("patched-worktree")
+                    or part.startswith("repaired-worktree")
+                    for part in relative.parts
+                ):
                     continue
                 if not source.is_file():
                     continue
@@ -511,14 +546,26 @@ class ArtifactStore:
                 "source_run": self.run_directory.name,
                 "published_at": datetime.now(timezone.utc).isoformat(),
                 "included": "报告、补丁、统计和日志",
-                "excluded": ["patched-worktree*"],
+                "excluded": [
+                    "patched-worktree*",
+                    "repair-candidate",
+                    "repaired-worktree*",
+                ],
             }
             manifest["experiment"] = run_config.get("experiment")
+            manifest["outcome"] = (
+                workflow_result.get("outcome")
+                if isinstance(workflow_result, dict)
+                else None
+            )
             (staging / "audit-manifest.json").write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            (staging / "APPLY.md").write_text(
+            outcome = manifest["outcome"]
+            has_patch = (staging / "changes.patch").is_file()
+            applicable = outcome in {"PASS", "REPAIRED"} and has_patch
+            apply_text = (
                 f"""# 应用最近一次已验证补丁
 
 修改目标仓库前，先阅读 `USAGE.md` 和 `AUDIT.md`，再审查
@@ -536,13 +583,37 @@ go test ./...
 ConsensusSeam 不会自动应用或提交补丁。
 
 如果最近一次运行是 analyze-only，目录中可能没有 `changes.patch`；此时本文件只说明通用应用流程。
-""",
+"""
+                if applicable
+                else f"""# 最近一次运行没有可应用的已通过候选
+
+运行结果：`{outcome or 'UNKNOWN'}`。
+
+本目录仅供审计，不应执行 `git apply`。请检查 `workflow-result.json`、
+`AUDIT.md`、`USAGE.md` 和阶段日志。
+"""
+            )
+            (staging / "APPLY.md").write_text(
+                apply_text,
                 encoding="utf-8",
             )
             latest_root.mkdir(parents=True, exist_ok=True)
+            backup = latest_root / f".{project_name}.backup"
+            if backup.exists():
+                if latest.exists():
+                    shutil.rmtree(backup)
+                else:
+                    os.replace(backup, latest)
             if latest.exists():
-                shutil.rmtree(latest)
-            os.replace(staging, latest)
+                os.replace(latest, backup)
+            try:
+                os.replace(staging, latest)
+            except Exception:
+                if backup.exists() and not latest.exists():
+                    os.replace(backup, latest)
+                raise
+            else:
+                shutil.rmtree(backup, ignore_errors=True)
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
             raise

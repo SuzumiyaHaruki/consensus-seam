@@ -99,12 +99,16 @@ def test_transformer_retries_overreported_capabilities_as_json_correction(
     client = FakeLLMClient(
         [
             json.dumps(
-                {
-                    "message_capture": {
-                        "implemented": True,
-                        "capture_boundary": {"symbol": "ProtocolOutput"},
-                    },
-                    "message_injection": {"implemented": True},
+                    {
+                        "message_capture": {
+                            "implemented": True,
+                            "capture_boundary": {"symbol": "ProtocolOutput"},
+                            "entrypoint": {"symbol": "Pending"},
+                        },
+                        "message_injection": {
+                            "implemented": True,
+                            "entrypoint": {"symbol": "InjectCached"},
+                        },
                 }
             ),
             json.dumps(
