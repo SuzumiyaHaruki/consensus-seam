@@ -1,8 +1,6 @@
 {
   "excluded": [
-    "patched-worktree*",
-    "repair-candidate",
-    "repaired-worktree*"
+    "patched-worktree*"
   ],
   "experiment": {
     "kind": "blind_capability",
@@ -12,6 +10,6 @@
   "included": "\u62a5\u544a\u3001\u8865\u4e01\u3001\u7edf\u8ba1\u548c\u65e5\u5fd7",
   "outcome": "PASS",
   "project": "hashicorp-raft",
-  "published_at": "2026-08-29T04:45:11.465455+00:00",
-  "source_run": "20260829T023652.248514Z"
+  "published_at": "2026-08-29T10:19:21.650719+00:00",
+  "source_run": "20260829T075418.394863Z"
 }

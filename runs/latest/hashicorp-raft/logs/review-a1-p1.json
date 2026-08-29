@@ -6,25 +6,25 @@
       "result": "PASS",
       "evidence": [
         {
-          "file": "util.go",
-          "symbol": "randomTimeout",
-          "line": 34,
-          "reason": "Original production draw/timer arming remains unchanged in the default path."
-        },
-        {
-          "file": "random_controller.go",
-          "symbol": "Raft.randomTimeoutFor",
-          "line": 103,
-          "reason": "When r.random is nil, extra := time.Duration(rand.Int63()) % minVal and the timer is armed via r.clock.After; with realClock this is equivalent to time.After."
+          "file": "api.go",
+          "symbol": "Raft.Apply",
+          "line": 827,
+          "reason": "Workload entrypoint unchanged."
         },
         {
           "file": "api.go",
-          "symbol": "NewRaft",
-          "line": 603,
-          "reason": "r.clock defaults to realClock when Config.Clock is nil, preserving wall-clock behavior."
+          "symbol": "Raft.Shutdown",
+          "line": 1035,
+          "reason": "Normal stop entrypoint unchanged."
+        },
+        {
+          "file": "transport.go",
+          "symbol": "Transport",
+          "line": 31,
+          "reason": "Transport interface unchanged; CapturingTransport is an additive decorator."
         }
       ],
-      "reason": "Production defaults are preserved. util.go is byte-for-byte unchanged (randomTimeout still uses the global math/rand source), the no-controller branch of Raft.randomTimeoutFor is identical to the original draw, Config.Clock defaults to nil and NewRaft installs realClock (time.Now/time.After), and Config.Random defaults to nil. The pause gate fields are inert while unused (paused=false yields an immediate return from waitWhilePaused), so the target's public behavior is unchanged."
+      "reason": "No existing exported target API is renamed, removed, or re-signatured. The patch adds new files (message/time/random/lifecycle controllers) and two new Config fields, and leaves Raft.Apply, Raft.AddVoter, Raft.Shutdown, Transport, InmemTransport, and the future/observer surfaces intact."
     },
     {
       "name": "existing_tests_unchanged",
@@ -34,165 +34,131 @@
           "file": "util.go",
           "symbol": "randomTimeout",
           "line": 34,
-          "reason": "Unchanged production helper means existing timing-sensitive tests keep their original behavior."
+          "reason": "Free function signature preserved and behavior identical for the default path."
         },
         {
-          "file": "testing.go",
-          "symbol": "inmemConfig",
-          "line": 24,
-          "reason": "Existing test scaffolding is preserved and reused by the new tests."
+          "file": "util_test.go",
+          "symbol": "TestRandomTimeout",
+          "line": 32,
+          "reason": "Existing test still compiles against the unchanged free function."
         }
       ],
-      "reason": "No existing _test.go files were modified (patch_metrics lists only new test files), and the core changes are default-preserving/additive. Existing test helpers (inmemConfig, newTestLogger, MockFSM, MockFSM.Logs) remain available and the new tests compile against them."
+      "reason": "The patch does not modify any existing test file (patch_metrics existing_test_files_modified is empty). The free function randomTimeout keeps its original signature and behavior for util_test.go, and followerReplication.setLastContact has no existing callers with the old no-argument form."
     },
     {
       "name": "message_cache_injection_coherence",
-      "result": "FAIL",
+      "result": "PASS",
       "evidence": [
         {
           "file": "message_controller.go",
-          "symbol": "MessageController.Pending",
-          "line": 179,
-          "reason": "Pending() calls copyPayload(e.payload) only; the separately buffered InstallSnapshot stream (pendingMessage.stream) is not copied into the returned PendingMessage."
+          "symbol": "MessageController.capture",
+          "line": 184,
+          "reason": "Deep copy, stream buffering, response-channel swap, and pending-entry creation."
         },
         {
           "file": "message_controller.go",
-          "symbol": "pendingMessage",
-          "line": 126,
-          "reason": "pendingMessage carries stream []byte privately, but PendingMessage/MessagePayload expose no stream field."
+          "symbol": "MessageController.Pending",
+          "line": 270,
+          "reason": "Fresh deep snapshots in acceptance order."
         },
         {
           "file": "message_controller.go",
           "symbol": "MessageController.Inject",
-          "line": 234,
-          "reason": "The request entry is unlocked before target resolution and delivery, and removal occurs only after acceptance; a concurrent Inject of the same handle can deliver twice."
+          "line": 341,
+          "reason": "Delivers private copy into normal ingress; removes only on confirmed acceptance; classified errors preserve the entry."
         },
         {
-          "file": "controlled_transport.go",
-          "symbol": "ControlledTransport.InstallSnapshot",
-          "line": 111,
-          "reason": "The stream is fully read into a private []byte at capture, confirming the stream is part of the captured message but is not surfaced in the public snapshot."
+          "file": "message_controller.go",
+          "symbol": "CapturingTransport.serve",
+          "line": 442,
+          "reason": "Sole consumer of the wrapped transport channel; no bypass while capture is enabled."
         }
       ],
-      "reason": "Two contract gaps remain in the shared capture/inject path. (1) The InstallSnapshot stream is buffered privately in pendingMessage.stream but never exposed by Pending(); Pending() returns only MessagePayload, so a controller-to-Pending deep snapshot omits the stream and the tester cannot inspect it (copy_safety requires deep snapshots including streams). (2) Inject() resolves and delivers outside the controller lock without first marking the entry as in-progress or removing it; two concurrent Inject calls on the same handle can both observe the entry in byHandle and both deliver before either removes it, producing duplicate delivery and violating thread-safety/no-duplication."
+      "reason": "CapturingTransport.serve is the sole consumer of the wrapped transport's Consumer channel; capture deep-copies the command, buffers one-shot snapshot streams, and swaps rpc.RespChan so requests are retained before delivery. Pending() returns fresh deep copies, Inject delivers the controller-private copy through the normal target ingress, and Drop/Clear/Inject invalidate handles and preserve entries on every classified failure. Request and response are cached as separate entries with reversed routing and new handles."
     },
     {
       "name": "original_send_suppressed",
       "result": "PASS",
       "evidence": [
         {
-          "file": "controlled_transport.go",
-          "symbol": "ControlledTransport.AppendEntries",
-          "line": 66,
-          "reason": "Controlled branch calls t.controller.capture(...) and t.waitRPC(...); it never calls t.base.AppendEntries."
+          "file": "message_controller.go",
+          "symbol": "CapturingTransport.handleRPC",
+          "line": 457,
+          "reason": "Controlled path invokes capture and does not forward the original RPC."
         },
         {
-          "file": "controlled_transport.go",
-          "symbol": "ControlledTransport.RequestVote",
-          "line": 78,
-          "reason": "Same capture-before-delivery structure as AppendEntries."
-        },
-        {
-          "file": "controlled_transport.go",
-          "symbol": "ControlledTransport.AppendEntriesPipeline",
-          "line": 183,
-          "reason": "Controlled branch returns a controlledPipeline that captures each AppendEntries instead of opening the real pipeline."
+          "file": "message_controller.go",
+          "symbol": "MessageController.Inject",
+          "line": 373,
+          "reason": "Delivers the controller-owned RPC copy, not the original."
         }
       ],
-      "reason": "In controlled mode every outbound Transport method (AppendEntries, RequestVote, RequestPreVote, InstallSnapshot, TimeoutNow, AppendEntriesPipeline) captures the request and blocks on the controller continuation without invoking the underlying InmemTransport send path; the real makeRPC enqueue occurs only on Inject. Responses re-enter through the controller's respCh watcher rather than the real transport response channel."
+      "reason": "While capture is enabled, handleRPC calls capture and never forwards the original RPC; capture builds a controller-owned copy and swaps the response channel. Only Inject delivers a message into the target's consumer channel, so the original exchange is suppressed until explicit injection."
     },
     {
       "name": "protocol_logic_unchanged",
       "result": "PASS",
       "evidence": [
         {
-          "file": "api.go",
-          "symbol": "NewRaft",
-          "line": 603,
-          "reason": "Nil Config.Clock installs realClock before goroutines start."
+          "file": "time_controller.go",
+          "symbol": "Raft.timeAfter",
+          "line": 202,
+          "reason": "Falls back to time.After when no controller is installed."
         },
         {
-          "file": "raft.go",
-          "symbol": "Raft.runFollower",
-          "line": 163,
-          "reason": "heartbeatTimer via randomTimeoutFor and r.clock.After/r.clock.Now preserve upstream timing in default mode."
+          "file": "random_controller.go",
+          "symbol": "Raft.randomTimeout",
+          "line": 108,
+          "reason": "Falls back to randomExtra when no RandomController is installed."
         },
         {
-          "file": "replication.go",
-          "symbol": "followerReplication",
-          "line": 171,
-          "reason": "Commit/heartbeat/backoff timers use r.clock/s.clock, defaulting to real time."
+          "file": "lifecycle_controller.go",
+          "symbol": "Raft.lifecyclePauseGate",
+          "line": 308,
+          "reason": "Returns immediately when the node is not paused."
         }
       ],
-      "reason": "All core edits are default-disabled or semantically neutral in production mode. Timer arming, time checks, and lastContact writes route through r.clock/s.clock, which default to realClock; the no-controller random path is identical to the original; and the pause-gate select cases/poll are inert while never paused. No protocol, persistence, state-transition, or ordering change occurs in the default configuration."
+      "reason": "With nil Config.TimeController and Config.RandomController (the production defaults), r.timeAfter/r.timeNow delegate to time.After/time.Now, randomTimeout uses the original rand.Int63()%minVal staggering, InmemTransport.after delegates to time.After, and the pause gate is a no-op when not paused. No protocol transition, persistence, ordering, or message semantics change."
     },
     {
       "name": "testing_contract_conformance",
       "result": "FAIL",
       "evidence": [
         {
-          "file": "lifecycle_control.go",
+          "file": "lifecycle_controller.go",
           "symbol": "LifecycleController.Pause",
-          "line": 171,
-          "reason": "Pause only flips the main-loop pause gate; it does not gate replication/FSM/snapshot goroutines."
+          "line": 126,
+          "reason": "Sets the paused flag and returns without waiting for execution contexts to reach the gate."
+        },
+        {
+          "file": "lifecycle_controller.go",
+          "symbol": "Raft.lifecyclePauseGate",
+          "line": 308,
+          "reason": "Gate is only checked at the top of each loop iteration, leaving the select below it able to process an event after Pause returns."
         },
         {
           "file": "raft.go",
-          "symbol": "Raft.startStopReplication",
-          "line": 636,
-          "reason": "replicate goroutine is started with goFunc and keeps running while the main leaderLoop is paused."
-        },
-        {
-          "file": "raft.go",
-          "symbol": "leadershipTransfer",
-          "line": 813,
-          "reason": "Launched with plain go, so Crash/Shutdown does not join it; it can still call r.trans.TimeoutNow after Crash returns."
-        },
-        {
-          "file": "time_controller.go",
-          "symbol": "TimeController.Advance",
-          "line": 117,
-          "reason": "Shared-clock advance has no per-node lifecycle awareness and does not skip paused/stopped/crashed nodes."
+          "symbol": "Raft.runFollower",
+          "line": 166,
+          "reason": "Gate at 166 precedes the select at 171, so a select already entered can process an RPC after Pause."
         }
       ],
-      "reason": "The common contract is not fully satisfied. LifecycleController.Pause gates only runFollower/runCandidate/leaderLoop; per-peer replication/heartbeat goroutines, runFSM, and runSnapshots keep running, so a paused node can still emit protocol output and progress time. Crash is Raft.Shutdown(), which joins only routinesGroup goroutines, leaving untracked plain-go goroutines (leadershipTransfer, emitLogStoreMetrics, transfer-timeout closures) able to emit protocol output after Crash returns. TimeController.Advance advances a shared virtual clock without excluding paused/stopped/crashed nodes, so paused-node timers still fire. These are implementation/contract mismatches, not mere risks."
+      "reason": "The lifecycle Pause operation does not reach its promised boundary before returning. Pause only sets a flag and returns; a state loop or replication/FSM/snapshot goroutine that has already passed its pause gate (or is currently blocked in its select) can still handle one more protocol message, consume a timer, and emit output after Pause returns, weakening the fixed pause_resume guarantee that Pause prevents message handling, subject time progress, and protocol output."
     }
   ],
   "issues": [
     {
       "capability": "lifecycle_control",
-      "file": "lifecycle_control.go",
+      "file": "lifecycle_controller.go",
       "symbol": "LifecycleController.Pause",
-      "reason": "Pause only blocks the three main protocol loops. Replication goroutines (replicate/heartbeat in replication.go), runFSM, and runSnapshots are not gated, so a paused node can still send heartbeats/AppendEntries (protocol output) and advance node time. This violates the pause_resume contract ('prevents message handling, node time progress, and protocol output')."
-    },
-    {
-      "capability": "lifecycle_control",
-      "file": "raft.go",
-      "symbol": "Raft.leaderLoop",
-      "reason": "Crash is implemented as Raft.Shutdown(), which waits only for routinesGroup (goFunc) goroutines. leadershipTransfer (raft.go:813, plain go), emitLogStoreMetrics (raft.go:522, plain go), and the transfer-timeout closures are untracked, so after Crash returns an in-flight leadership transfer can still emit TimeoutNow protocol output. This violates the crash contract ('no abandoned execution context may process protocol work, emit output...')."
-    },
-    {
-      "capability": "time_control",
-      "file": "time_controller.go",
-      "symbol": "TimeController.Advance",
-      "reason": "Advance drives one shared virtual clock with no node-state awareness. Paused nodes' armed timers still fire into buffered channels (and replication goroutines continue to consume steps), violating v0_scope ('Paused, stopped, and crashed nodes do not receive steps')."
-    },
-    {
-      "capability": "message_capture",
-      "file": "message_controller.go",
-      "symbol": "MessageController.Pending",
-      "reason": "The InstallSnapshot stream is buffered privately (pendingMessage.stream) but Pending() returns only MessagePayload, omitting the stream. Pending therefore does not return a complete deep snapshot including streams as required by copy_safety."
-    },
-    {
-      "capability": "message_injection",
-      "file": "message_controller.go",
-      "symbol": "MessageController.Inject",
-      "reason": "Inject delivers outside the controller lock without marking the entry in-progress or removing it before delivery. Two concurrent Inject calls on the same handle can both resolve and deliver the message before either removes it, causing duplicate delivery and violating thread-safety and the no-duplication rule."
+      "reason": "Pause returns before all required execution contexts reach the paused boundary. It sets paused=true and returns immediately; the state loops (runFollower/runCandidate/leaderLoop), replicate/heartbeat/pipelineReplicate/pipelineDecode, runFSM, and runSnapshots only check lifecyclePauseGate at the top of their next iteration. A goroutine that has already passed the gate or is blocked in its select can handle one in-flight (or newly arriving) protocol message, consume a timer, and produce output after Pause returns. This is a reachable, concurrency-related weakening of the fixed guarantee that Pause prevents message handling, time progress, and protocol output, and is therefore a blocking issue rather than a disclosed residual risk."
     }
   ],
   "risks": [
-    "Transport-level RPC send/wait timeouts (ControlledTransport.waitRPC and MessageController.Inject send) remain wall-clock based; combining TimeController with long real-time gaps between Inject(request) and Inject(response) can produce spurious 'command timed out' results. This is disclosed as an RPC-delivery-deadline exclusion, not a protocol timer.",
-    "LifecycleController.Register captures a value copy of Config; Clock and Random controller references are preserved across Restart, but post-registration Config mutations are not propagated until re-registration.",
-    "TimeController.nodes is bookkeeping-only and is not automatically re-bound on LifecycleController.Restart; behavior is unaffected because Advance is clock-driven and the fresh runtime inherits Config.Clock/Config.Random."
+    "Stop and Crash converge to the same Shutdown path in this target because Raft persists term/vote/log eagerly and Shutdown performs no shutdown-time flush; the controller records phase=stopped vs phase=crashed so Restart preserves the required stop/crash distinction, but Crash does perform target-defined transport cleanup (WithClose) rather than a purely abrupt discard.",
+    "PendingMessage.Message is the minimal existing WithRPCHeader common interface rather than a richer typed variant carrier; consumers must type-assert to concrete command types (guided by MessageKind) to access message payloads.",
+    "A copy or stream-buffer failure in MessageController.capture is surfaced only by completing the original sender's exchange with an error (handleRPC discards the returned error), so the failure is observable to the remote sender but not through a dedicated controller error/state.",
+    "Inject to a paused target succeeds (its buffered consumer channel accepts) and removes the entry rather than returning ErrTargetUnavailable; the message is queued and processed only after Resume, which is a cross-capability ambiguity but does not lose the message.",
+    "Advance(n) loops n units without yielding to node goroutines; a timer re-armed in reaction to a delivered step is exposed to a later boundary exactly like back-to-back Advance(1) calls, but the interleaving of node processing between steps is scheduler-dependent and not synchronized by the controller."
   ]
 }

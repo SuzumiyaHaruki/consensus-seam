@@ -1,7 +1,7 @@
 {
-  "command": "gofmt -w api.go config.go controlled_transport.go lifecycle_control.go lifecycle_control_test.go message_controller.go message_controller_test.go raft.go random_controller.go random_controller_test.go replication.go snapshot.go time_controller.go time_controller_test.go",
+  "command": "gofmt -w api.go config.go fsm.go inmem_transport.go lifecycle_controller.go lifecycle_controller_test.go message_controller.go message_controller_test.go raft.go random_controller.go random_controller_test.go replication.go snapshot.go time_controller.go time_controller_test.go util.go",
   "returncode": 0,
   "stdout": "",
   "stderr": "",
-  "duration_seconds": 0.05028631999994104
+  "duration_seconds": 0.013984105000417912
 }

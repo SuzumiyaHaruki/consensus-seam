@@ -3,5 +3,5 @@
   "returncode": 0,
   "stdout": "ok  \tgithub.com/hashicorp/raft\t(cached) [no tests to run]\n?   \tgithub.com/hashicorp/raft/bench\t[no test files]\n",
   "stderr": "",
-  "duration_seconds": 1.3266335650005203
+  "duration_seconds": 0.3486284770006023
 }
